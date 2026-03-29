@@ -173,6 +173,273 @@ Implementation order within Phase 4a:
 
 ---
 
+## Phase 4b: Prolly Tree Block Store — ONLY AFTER Phase 4a
+
+**DO NOT START THIS until Phase 4a is complete and all core tests pass.**
+
+Phase 4b replaces the flat `store.bin` checkpoint from Phase 4a with a content-addressed
+prolly tree block store. The in-memory `im::OrdMap` representation is UNCHANGED — Phase 4b
+adds an on-disk format alongside it, not instead of it.
+
+**Why Phase 4b exists**: Phase 4a's flat checkpoint serializes the entire store on every
+checkpoint: O(n) write, O(n) diff, O(n) transfer. At 100M datoms (~20GB), this is untenable.
+The prolly tree provides O(d) checkpoint, O(d) diff, and O(d) transfer where d is the number
+of changed datoms. This is the prerequisite for efficient federation (Phase 4c).
+
+**Spec reference**: spec/23-ferratomic.md section 23.9 (INV-FERR-045 through INV-FERR-050,
+ADR-FERR-008). Read the full section before starting implementation.
+
+### Prerequisites from Phase 4a
+
+Phase 4b depends on these Phase 4a artifacts being complete and tested:
+
+- `im::OrdMap` indexes (store.rs) — the in-memory representation that prolly tree checkpoints from
+- `ArcSwap` + snapshot isolation (db.rs, snapshot.rs) — lock-free reads continue unchanged
+- WAL (wal.rs) — the journal extends WAL concepts to the block store layer
+- Schema validation — the prolly tree stores datoms that have already passed schema validation
+- BLAKE3 hashing (datom.rs) — content-addressed entity IDs reused for chunk addressing
+
+### Implementation Order within Phase 4b
+
+1. **Chunk** (chunk.rs): `Chunk` struct, `ChunkStore` trait, `MemoryChunkStore` impl
+   - INV-FERR-045: Content addressing (addr = BLAKE3(data))
+   - INV-FERR-050: Substrate independence (trait abstraction)
+   - This is the foundation — everything else depends on it
+   - `#[derive(Debug, Clone, PartialEq, Eq)]`, `Arc<[u8]>` for zero-copy
+
+2. **Prolly tree construction** (prolly.rs): `build_prolly_tree`, `is_boundary`, `rolling_hash`
+   - INV-FERR-046: History independence (same KV set = same tree regardless of insertion order)
+   - Rolling hash boundary function on **keys only** (Dolt's improvement over Noms)
+   - CDF-bounded chunk sizes: min_size, max_size, pattern_width parameters
+   - Single-pass O(n) construction from sorted iterator
+
+3. **Prolly tree reads** (prolly.rs): `read_prolly_tree`, point lookup, range scan
+   - Navigate root -> internal nodes -> leaf via binary search
+   - O(log_k(n)) chunk reads per point lookup
+   - Deserialize leaf chunks to reconstruct key-value pairs
+
+4. **Diff** (diff.rs): `diff()`, `DiffIterator`, `DiffEntry`
+   - INV-FERR-047: O(d * log_k(n)) complexity
+   - Lazy iterator: yields DiffEntry without materializing full diff
+   - Recursive descent comparing content-addressed hashes, skipping identical subtrees
+   - O(1) fast path when root hashes are equal
+
+5. **Copy-on-write update** (prolly.rs): `update_prolly_tree`
+   - Modify leaf, recompute hashes up to root
+   - Only the modified path (1 + log_k(n) chunks) is new
+   - Siblings shared with previous version
+
+6. **Transfer** (transfer.rs): `ChunkTransfer` trait, `RecursiveTransfer`
+   - INV-FERR-048: Send only chunks receiver doesn't have
+   - Recursive descent with `has_chunk` pruning
+   - Idempotent, resumable, monotonic (never deletes from dst)
+
+7. **Table files** (block_store/table.rs): on-disk chunk collection with prefix-map index
+   - Immutable after creation (append-only at file level)
+   - Index: 8-byte address prefix map + lengths array + suffix array
+   - O(log n) lookup by chunk address
+
+8. **Journal** (block_store/journal.rs): append-only log of chunk writes + root updates
+   - Tagged records: ChunkWrite (0x01), RootUpdate (0x02), Checkpoint (0x03)
+   - CRC32 per record for integrity
+   - Recovery: replay from last Checkpoint record
+
+9. **Manifest** (block_store/manifest.rs): tracks table files + current root hash
+   - Compare-and-swap atomic update (write temp, rename)
+   - The ONLY mutable file in the block store
+
+10. **FileChunkStore** (block_store/file.rs): filesystem-backed chunk store
+    - Files named by hex(address), content = raw bytes
+    - Atomic write via temp + rename
+    - Content-addressing verification on read (detect corruption)
+
+11. **Checkpoint integration** (checkpoint.rs): im::OrdMap to prolly tree checkpoint
+    - INV-FERR-049: Snapshot = root hash
+    - First checkpoint: O(n) full build
+    - Subsequent checkpoints: O(d) incremental (dirty tracking or diff)
+    - Journal compaction: fold journal chunks into new table file
+
+12. **Recovery integration** (storage.rs): prolly tree to im::OrdMap on startup
+    - Read manifest -> resolve root hash -> walk tree -> build im::OrdMap
+    - Replay journal entries after last Checkpoint
+    - O(n) on startup (acceptable: happens once)
+
+13. **Garbage collection** (gc.rs): mark-and-sweep over reachable chunks
+    - Mark from retained root hashes, sweep unreachable table file chunks
+    - Explicit operation (not automatic) — consistent with C1
+    - Rewrite table files with < 50% reachable chunks
+
+### Key Types
+
+```rust
+// chunk.rs
+pub struct Chunk { addr: Hash, data: Arc<[u8]> }
+pub trait ChunkStore: Send + Sync { put_chunk, get_chunk, has_chunk, all_addrs }
+pub struct MemoryChunkStore { chunks: RwLock<BTreeMap<Hash, Arc<[u8]>>> }
+pub struct FileChunkStore { root_dir: PathBuf }
+
+// prolly.rs
+pub fn is_boundary(key: &[u8], pattern_width: u32) -> bool
+pub fn build_prolly_tree(kvs: &BTreeMap<Key, Value>, store: &dyn ChunkStore, pw: u32) -> Result<Hash>
+pub fn read_prolly_tree(root: &Hash, store: &dyn ChunkStore) -> Result<BTreeMap<Key, Value>>
+
+// diff.rs
+pub enum DiffEntry { LeftOnly { key, value }, RightOnly { key, value }, Modified { key, left_value, right_value } }
+pub fn diff(root1: &Hash, root2: &Hash, store: &dyn ChunkStore) -> Result<impl Iterator<Item = Result<DiffEntry>>>
+
+// transfer.rs
+pub struct TransferResult { chunks_transferred: u64, chunks_skipped: u64, bytes_transferred: u64, root: Hash }
+pub trait ChunkTransfer { fn transfer(src, dst, root) -> Result<TransferResult> }
+pub struct RecursiveTransfer;
+
+// block_store/
+pub struct Snapshot { root: Hash, tx: TxId }
+pub struct VersionHistory { versions: Vec<Snapshot> }
+```
+
+### Verification Plan
+
+#### Lean Theorems (ferratomic-verify/lean/)
+
+| File | Theorems | INV-FERR |
+|------|----------|----------|
+| `Ferratomic/ChunkStore.lean` | chunk_content_identity, chunk_store_idempotent | 045 |
+| `Ferratomic/ProllyTree.lean` | history_independence, prolly_merge_comm | 046 |
+| `Ferratomic/Snapshot.lean` | snapshot_roundtrip, snapshot_deterministic | 049 |
+
+#### Proptest Properties (ferratomic-verify/proptest/)
+
+| File | Properties | INV-FERR |
+|------|-----------|----------|
+| `chunk_store.rs` | content_addressing, deduplication, substrate_independence | 045, 050 |
+| `prolly_tree.rs` | history_independence, insert_delete_identity, construction_from_sorted | 046 |
+| `diff.rs` | diff_correctness, diff_empty_identical, diff_symmetry, diff_complexity_bound | 047 |
+| `transfer.rs` | transfer_correctness, transfer_minimality, transfer_idempotent, transfer_resumable | 048 |
+| `snapshot.rs` | snapshot_roundtrip, snapshot_identity, snapshot_distinct_for_different_data | 049 |
+
+#### Stateright Models (ferratomic-verify/stateright/)
+
+| Model | Properties | INV-FERR |
+|-------|-----------|----------|
+| `prolly_model.rs` | History independence under concurrent inserts, convergence after diff+transfer | 046, 048 |
+| `block_store_model.rs` | Journal recovery correctness, GC safety (no reachable chunk collected) | 045 |
+
+#### Integration Tests (ferratomic-verify/integration/)
+
+| File | Scenarios | INV-FERR |
+|------|----------|----------|
+| `prolly_lifecycle.rs` | build -> update -> diff -> transfer -> verify roundtrip | 045-049 |
+| `checkpoint.rs` | im::OrdMap -> prolly checkpoint -> recovery -> verify identical | 045, 046, 049 |
+| `block_store.rs` | journal write -> compaction -> table files -> manifest -> recovery | 045 |
+| `substrate_swap.rs` | MemoryChunkStore vs FileChunkStore produce identical results | 050 |
+| `federation_transfer.rs` | Two stores, shared history, apply changes to one, transfer delta | 048 |
+
+#### Kani Harnesses (ferratomic-verify/kani/)
+
+| Harness | Bounds | INV-FERR |
+|---------|--------|----------|
+| `chunk_harness.rs` | <= 4 chunks, <= 256 bytes each | 045 |
+| `prolly_harness.rs` | <= 8 key-value pairs, <= 4 bytes per key | 046 |
+| `diff_harness.rs` | Two trees with <= 4 keys each | 047 |
+
+### Critical Design Decisions
+
+1. **Rolling hash operates on keys only, not (key, value) pairs.** This is Dolt's improvement
+   over Noms. Consequence: updating a value never changes chunk boundaries, so the structural
+   impact of a point mutation is O(1) leaf chunks + O(log_k(n)) internal node updates. If we
+   hashed (key, value), changing a value could cascade boundary changes across the entire tree.
+
+2. **CDF-bounded chunk sizes.** Pure rolling hash gives a geometric distribution (high variance).
+   The CDF approach enforces min_size and max_size bounds while preserving history independence.
+   The `entries_since_last_boundary` counter is a function of the sorted key sequence, not
+   insertion order.
+
+3. **im::OrdMap remains the in-memory representation.** Phase 4b does NOT replace im::OrdMap
+   with the prolly tree for in-memory queries. The prolly tree is the on-disk checkpoint
+   format. This means:
+   - Read latency is unchanged (O(log n) in-memory, not O(log_k(n)) chunk reads)
+   - Memory usage is unchanged (full store in im::OrdMap)
+   - Only the checkpoint path changes (O(d) prolly vs O(n) flat)
+
+4. **The journal extends WAL concepts to chunk writes.** WAL (INV-FERR-008) guarantees
+   durability via write-ahead logging. The journal applies the same principle to chunk
+   writes: chunks are logged in the journal before being compacted into table files.
+   Recovery replays the journal to reconstruct any chunks not yet in table files.
+
+5. **Garbage collection is explicit, not automatic.** Consistent with C1 (append-only during
+   normal operation). The application decides which root hashes to retain. GC is a separate
+   lifecycle event that rewrites table files to reclaim space from unreachable chunks.
+
+6. **S3ChunkStore uses synchronous HTTP.** Consistent with ADR-FERR-002 (no async in
+   ferratomic). The caller wraps in `spawn_blocking` if needed. This keeps the ChunkStore
+   trait synchronous and the API surface clean.
+
+### Performance Targets
+
+| Metric | Target | Rationale |
+|--------|--------|-----------|
+| Checkpoint (100 changes, 100M store) | < 100ms | O(d * log_k(n)) = ~400 chunk writes at ~4KB each |
+| Checkpoint (full initial build, 100M store) | < 60s | O(n) single pass, ~5M chunks at ~4KB each |
+| Diff (100 changes, 100M store) | < 50ms | O(d * log_k(n)) = ~300 chunk reads |
+| Transfer (100 changes, 100M store) | < 200ms LAN | ~300 chunks x ~4KB = ~1.2MB |
+| GC (100M store, 10% unreachable) | < 5min | Rewrite affected table files |
+| Recovery (100M store) | < 30s | Read all chunks, rebuild im::OrdMap |
+| Chunk put (FileChunkStore) | < 1ms p99 | Single file write + rename |
+| Chunk get (FileChunkStore) | < 0.5ms p99 | Single file read |
+
+### File Layout
+
+```
+ferratomic-core/src/
+  chunk.rs          # Chunk, ChunkStore trait, MemoryChunkStore
+  prolly.rs         # Prolly tree construction, reads, updates, rolling hash
+  diff.rs           # DiffIterator, DiffEntry, diff()
+  transfer.rs       # ChunkTransfer trait, RecursiveTransfer
+  block_store/
+    mod.rs          # BlockStore (combines table files, journal, manifest)
+    table.rs        # Table file format: data + index sections
+    journal.rs      # Append-only log: ChunkWrite, RootUpdate, Checkpoint records
+    manifest.rs     # Manifest: table file list + current root hash
+    file.rs         # FileChunkStore implementation
+    gc.rs           # Garbage collection: mark-and-sweep
+  snapshot.rs       # Snapshot (root hash + TxId), VersionHistory
+```
+
+### Relationship to Phase 4c (Federation)
+
+Phase 4b is the prerequisite for efficient federation (Phase 4c). Specifically:
+
+- **Anti-entropy** (INV-FERR-022): Prolly tree diff IS Merkle anti-entropy. No separate
+  data structure needed. `diff(root_local, root_remote)` identifies missing datoms in
+  O(d * log_k(n)), and `transfer()` sends only missing chunks.
+
+- **Selective merge** (INV-FERR-039): With attribute-prefixed prolly tree keys, selective
+  merge can navigate directly to relevant subtrees instead of filtering after full transfer.
+
+- **Transport** (INV-FERR-038): The `ChunkStore` trait + `ChunkTransfer` trait provide
+  the data plane for federation transports. A `RemoteChunkStore` implementation wraps
+  the transport layer, making remote chunk access transparent.
+
+Phase 4c's federation implementation builds ON TOP of Phase 4b's block store. Without
+prolly trees, federation requires O(n) full-store transfers. With prolly trees, federation
+transfers are O(d) — proportional to changes, not store size. This is the difference
+between "federation that works" and "federation that scales."
+
+### Acceptance Criteria
+
+- ALL Phase 4b test suites pass (proptest, stateright, kani, integration)
+- ALL Phase 2 + Phase 4a tests still pass (no regressions)
+- `build_prolly_tree(kvs)` followed by `read_prolly_tree(root)` roundtrips perfectly for all inputs
+- `diff(root1, root2)` produces exactly the symmetric difference of the key-value sets
+- `transfer(src, dst, root)` followed by `read_prolly_tree(root, dst)` produces identical results
+- History independence: same KV set from different insertion orders = same root hash
+- Substrate independence: MemoryChunkStore and FileChunkStore produce identical root hashes and chunks
+- Checkpoint integration: im::OrdMap -> prolly -> recovery -> im::OrdMap roundtrip is lossless
+- Lean theorems type-check (ChunkStore.lean, ProllyTree.lean, Snapshot.lean)
+- Clippy clean, no `unwrap()`, `#![forbid(unsafe_code)]`
+
+---
+
 ## Phase 4c: Federation Implementation — ONLY AFTER Phase 4a
 
 **DO NOT START THIS until Phase 4a is complete and all core tests pass.**
