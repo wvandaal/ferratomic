@@ -1,0 +1,1 @@
+../../ddis-braid/docs/design/FERRATOMIC_ARCHITECTURE.md

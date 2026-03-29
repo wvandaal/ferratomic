@@ -1,0 +1,17 @@
+[package]
+name = "ferratomic-verify"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Formal verification suite: Lean 4 proofs, Stateright models, Kani harnesses, proptest"
+
+[dependencies]
+ferratom = { path = "../ferratom" }
+ferratomic-core = { path = "../ferratomic-core" }
+proptest = { workspace = true }
+# stateright = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { workspace = true }

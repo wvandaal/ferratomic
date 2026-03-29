@@ -1,0 +1,48 @@
+[workspace]
+members = [
+    "ferratom",
+    "ferratomic-core",
+    "ferratomic-datalog",
+    "ferratomic-verify",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/wvandaal/ferratomic"
+description = "Ferratomic: A formally verified, distributed embedded datom database engine"
+
+[workspace.dependencies]
+# Core
+im = "15"
+arc-swap = "1"
+blake3 = "1"
+ordered-float = "4"
+bincode = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+zstd = "0.13"
+
+# Async (asupersync when available, tokio as fallback)
+tokio = { version = "1", features = ["full"] }
+
+# Testing
+proptest = "1"
+criterion = { version = "0.5", features = ["html_reports"] }
+
+# Verification
+# stateright = "0.30"  # Uncomment when ready
+# kani-verifier = "0.50"  # Installed separately
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+
+[profile.bench]
+inherits = "release"
+debug = true

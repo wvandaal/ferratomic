@@ -1,0 +1,21 @@
+# Rust
+/target/
+**/*.rs.bk
+Cargo.lock
+
+# Lean
+/ferratomic-verify/lean/.lake/
+/ferratomic-verify/lean/build/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# ms (meta_skill) — synced via ms sync, not project git
+.ms/
+
+# OS
+.DS_Store
+Thumbs.db

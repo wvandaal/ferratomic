@@ -1,0 +1,18 @@
+[package]
+name = "ferratom"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Core types for Ferratomic: Datom, EntityId, Attribute, Value, TxId, Schema"
+
+# ZERO external dependencies — this is a leaf crate.
+# All types are pure algebraic definitions.
+# Algebraic role: FREE objects (no imposed structure).
+[dependencies]
+blake3 = { workspace = true }
+ordered-float = { workspace = true }
+serde = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }

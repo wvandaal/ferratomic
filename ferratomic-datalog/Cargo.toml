@@ -1,0 +1,16 @@
+[package]
+name = "ferratomic-datalog"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Datalog query engine for Ferratomic: parser, planner, evaluator, CALM classification"
+
+# Algebraic role: HOMOMORPHISMS (structure-preserving maps from Store to QueryResult)
+[dependencies]
+ferratom = { path = "../ferratom" }
+ferratomic-core = { path = "../ferratomic-core" }
+serde = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
