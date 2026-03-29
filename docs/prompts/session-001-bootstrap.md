@@ -72,6 +72,7 @@ This is the red phase of TDD — tests define the contract before implementation
 | `snapshot_model.rs` | Snapshot isolation, write linearizability, observer monotonicity | 006, 007, 011, 020 |
 | `recovery_model.rs` | Crash recovery correctness, WAL ordering | 008, 014 |
 | `federation_model.rs` | Gossip convergence, anti-entropy repair, partition tolerance | 022, 034-036 |
+| `federated_query_model.rs` | Fan-out correctness, selective merge CRDT preservation, transport transparency, latency tolerance, live migration | 037-042 |
 
 State type, action type, and property definitions are specified in
 `spec/23-ferratomic.md` §23.0.5 and §23.2.
@@ -91,6 +92,7 @@ State type, action type, and property definitions are specified in
 |------|-----------|----------|
 | `generators.rs` | arb_datom, arb_store, arb_snapshot strategies | (foundation) |
 | `algebraic.rs` | merge_comm, merge_assoc, merge_idemp, monotonic, index_consistency, content_identity, schema_validation, hlc_monotonic, hlc_causal, shard_union, no_shrink, checkpoint_roundtrip | 001-005, 009, 012, 013, 015-018 |
+| `federation.rs` | federated_query_correct, transport_transparency, selective_merge_preserves_local, selective_merge_only_filtered, selective_merge_idempotent, selective_merge_all_equals_full, merge_preserves_all_txids, partial_result_is_subset_of_full, migration_preserves_datom_set | 037-042 |
 | `conformance.rs` | Lean-Rust conformance via manifest | (bridge) |
 
 ### Integration tests (`ferratomic-verify/integration/`)
@@ -101,6 +103,7 @@ State type, action type, and property definitions are specified in
 | `recovery.rs` | crash→recover→verify, wal_ordering | 008, 014 |
 | `observer.rs` | subscribe→write→verify delivery, monotonic epochs | 011 |
 | `federation.rs` | multi-node merge→convergence, anti_entropy | 010, 022 |
+| `federated_query.rs` | federated_query→correctness, selective_merge→knowledge_transfer, transport_transparency, latency_tolerance, live_migration | 037-042 |
 
 **Acceptance**: All test files compile. All tests FAIL (no implementation yet).
 The failure messages document the expected behavior.
@@ -167,6 +170,34 @@ Implementation order within Phase 4a:
 10. **Schema validation** (integrated into Store::transact)
 
 **Acceptance**: ALL Phase 2 tests pass. ALL Lean proofs check. Clippy clean.
+
+---
+
+## Phase 4c: Federation Implementation — ONLY AFTER Phase 4a
+
+**DO NOT START THIS until Phase 4a is complete and all core tests pass.**
+
+Federation (spec §23.8, INV-FERR-037 through INV-FERR-044) builds on top of the
+core store, snapshot, merge, and query infrastructure from Phase 4a.
+
+Implementation order within Phase 4c:
+
+1. **Transport trait** (transport.rs): `Transport` trait definition, `LocalTransport` impl
+2. **Federation struct** (federation.rs): `Federation`, `StoreHandle`, `StoreId`, `FederationConfig`
+3. **Federated query** (federation.rs): `federated_query` with CALM-correct fan-out for monotonic queries, materialization for non-monotonic
+4. **DatomFilter** (filter.rs): `DatomFilter` enum with `All`, `AttributeNamespace`, `Entities`, `FromAgents`, `AfterEpoch`, `And`, `Or`, `Not`, `Custom`
+5. **Selective merge** (federation.rs): `selective_merge` with schema compatibility check (INV-FERR-043)
+6. **FederatedResult** (federation.rs): Per-store `StoreResponse` metadata, partial result handling (INV-FERR-041)
+7. **Live migration** (migration.rs): `Migration` state machine — WAL streaming, catchup, atomic swap, drain, decommission (INV-FERR-042)
+8. **Additional transports** (transport/): `UnixSocketTransport`, `TcpTransport` (QUIC and gRPC deferred to Stage 2)
+
+**Acceptance**:
+- ALL Phase 2 federation tests pass (proptest, stateright, integration)
+- Transport transparency verified: same query, same store, `LocalTransport` vs `LoopbackTransport` produce identical results
+- Selective merge preserves CRDT properties (monotonicity, idempotency, no invention)
+- Merge provenance preserved through all paths (INV-FERR-040)
+- Partial results correctly flagged when stores time out (INV-FERR-041)
+- Clippy clean, no `unwrap()`, `#![forbid(unsafe_code)]`
 
 ---
 

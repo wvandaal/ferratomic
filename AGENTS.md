@@ -61,6 +61,40 @@ Dependency direction: leaf → core → facade. No cycles.
 
 ---
 
+## Complexity Standards (Hard Limits, Not Guidelines)
+
+### File-level
+- **Max 500 LOC per file** (excluding tests). If approaching, split by responsibility.
+- **Max 1,500 LOC per file** including inline tests. Extract tests to `tests/` if over.
+- **One concept per module.** `store.rs` must not contain WAL logic. `db.rs` must not contain checkpoint logic.
+
+### Function-level
+- **Max 50 LOC per function.** Decompose if longer.
+- **Max cyclomatic complexity 10.** Enforced via `clippy::cognitive_complexity`.
+- **Max 5 parameters.** More → introduce a config/params struct.
+
+### Crate-level
+- **ferratom**: < 2,000 LOC (pure types, should be small)
+- **ferratomic-core**: < 10,000 LOC. If approaching, split into sub-crates.
+- **ferratomic-datalog**: < 5,000 LOC.
+- **ferratomic-verify**: No limit (tests and proofs can be verbose).
+
+### Splitting strategy
+- When a module grows > 500 LOC, split by responsibility into submodules:
+  `store/indexes.rs`, `store/merge.rs`, `store/apply.rs`.
+- Public API surface per crate: minimal. Re-export through `lib.rs`, keep internals private.
+- Never put two unrelated concepts in one file for convenience.
+
+### Enforced via CI
+```toml
+# clippy.toml
+cognitive-complexity-threshold = 10
+too-many-arguments-threshold = 5
+too-many-lines-threshold = 50
+```
+
+---
+
 ## Hard Constraints
 
 **C1: Append-only store.** Never delete or mutate datoms. Retractions are new datoms.

@@ -1,0 +1,6 @@
+# Ferratomic complexity standards — hard limits, not guidelines.
+# See AGENTS.md "Complexity Standards" for rationale.
+
+cognitive-complexity-threshold = 10
+too-many-arguments-threshold = 5
+too-many-lines-threshold = 50
