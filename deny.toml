@@ -1,0 +1,42 @@
+# cargo-deny configuration — dependency auditing.
+# Run: cargo deny check
+# CI: fails on any advisory, license violation, or banned crate.
+
+[advisories]
+db-path = "~/.cargo/advisory-db"
+db-urls = ["https://github.com/rustsec/advisory-db"]
+vulnerability = "deny"
+unmaintained = "warn"
+yanked = "deny"
+notice = "warn"
+
+[licenses]
+unlicensed = "deny"
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-DFS-2016",
+    "Zlib",
+    "CC0-1.0",
+]
+copyleft = "deny"
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"          # No `version = "*"`
+highlight = "all"
+
+# Crates we explicitly ban
+deny = [
+    # No OpenSSL — use rustls if TLS needed
+    { name = "openssl-sys" },
+    { name = "openssl" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

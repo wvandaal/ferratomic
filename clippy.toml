@@ -1,6 +1,16 @@
-# Ferratomic complexity standards — hard limits, not guidelines.
-# See AGENTS.md "Complexity Standards" for rationale.
+# Ferratomic complexity + quality enforcement.
+# See AGENTS.md for rationale. These are HARD LIMITS, not suggestions.
 
+# Complexity
 cognitive-complexity-threshold = 10
 too-many-arguments-threshold = 5
 too-many-lines-threshold = 50
+
+# Type discipline
+disallowed-types = [
+    # Force newtypes over raw primitives in public APIs
+    # (enforced by code review, not clippy — clippy can't distinguish API vs internal)
+]
+
+# Naming — enforced by clippy::module_name_repetitions etc.
+avoid-breaking-exported-api = true

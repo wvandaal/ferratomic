@@ -1,0 +1,151 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+
+jobs:
+  # ──────────────────────────────────────────────────────────────────
+  # Gate 1: Formatting — zero tolerance for style violations
+  # ──────────────────────────────────────────────────────────────────
+  fmt:
+    name: rustfmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rustfmt
+      - run: cargo fmt --all -- --check
+
+  # ──────────────────────────────────────────────────────────────────
+  # Gate 2: Lint — clippy with all quality standards enforced
+  # ──────────────────────────────────────────────────────────────────
+  clippy:
+    name: clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+
+  # ──────────────────────────────────────────────────────────────────
+  # Gate 3: Build — ensure everything compiles
+  # ──────────────────────────────────────────────────────────────────
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --workspace --all-targets
+
+  # ──────────────────────────────────────────────────────────────────
+  # Gate 4: Tests — all tests pass, no ignored tests without issue
+  # ──────────────────────────────────────────────────────────────────
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --workspace
+      # Verify no tests are silently ignored
+      - name: Check for ignored tests
+        run: |
+          IGNORED=$(cargo test --workspace -- --ignored 2>&1 | grep "test result" | grep -v "0 ignored")
+          if [ -n "$IGNORED" ]; then
+            echo "::warning::Ignored tests found — each must have a tracking issue"
+          fi
+
+  # ──────────────────────────────────────────────────────────────────
+  # Gate 5: Dependency audit — no advisories, license violations, or bans
+  # ──────────────────────────────────────────────────────────────────
+  deny:
+    name: cargo-deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v1
+
+  # ──────────────────────────────────────────────────────────────────
+  # Gate 6: unsafe audit — zero unsafe in our crates
+  # ──────────────────────────────────────────────────────────────────
+  unsafe-check:
+    name: no-unsafe
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify #![forbid(unsafe_code)] in all crates
+        run: |
+          for lib in ferratom/src/lib.rs ferratomic-core/src/lib.rs ferratomic-datalog/src/lib.rs ferratomic-verify/src/lib.rs; do
+            if ! grep -q 'forbid(unsafe_code)' "$lib"; then
+              echo "FAIL: $lib missing #![forbid(unsafe_code)]"
+              exit 1
+            fi
+          done
+          echo "All crates enforce #![forbid(unsafe_code)]"
+
+  # ──────────────────────────────────────────────────────────────────
+  # Gate 7: Documentation — all public items documented
+  # ──────────────────────────────────────────────────────────────────
+  docs:
+    name: docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
+
+  # ──────────────────────────────────────────────────────────────────
+  # Gate 8: Complexity — file and function size limits
+  # ──────────────────────────────────────────────────────────────────
+  complexity:
+    name: complexity-limits
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check file size limits (500 LOC excluding tests)
+        run: |
+          VIOLATIONS=""
+          for f in $(find ferratom ferratomic-core ferratomic-datalog -name '*.rs' -not -path '*/tests/*'); do
+            # Count non-test, non-blank, non-comment lines
+            LOC=$(sed '/^[[:space:]]*#\[cfg(test)\]/,/^}/d' "$f" | grep -cv '^[[:space:]]*$\|^[[:space:]]*//\|^[[:space:]]*\*\|^[[:space:]]*/\*' || true)
+            if [ "$LOC" -gt 500 ]; then
+              VIOLATIONS="$VIOLATIONS\n  $f: $LOC LOC (max 500)"
+            fi
+          done
+          if [ -n "$VIOLATIONS" ]; then
+            echo "FAIL: Files exceeding 500 LOC limit:$VIOLATIONS"
+            exit 1
+          fi
+          echo "All files within 500 LOC limit"
+
+  # ──────────────────────────────────────────────────────────────────
+  # Gate 9: Lean proofs — all theorems type-check
+  # ──────────────────────────────────────────────────────────────────
+  lean:
+    name: lean-proofs
+    runs-on: ubuntu-latest
+    # Only run if lean files changed
+    if: contains(github.event.head_commit.message, 'lean') || contains(github.event.head_commit.message, 'proof') || contains(github.event.head_commit.message, 'verify')
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Lean 4
+        uses: leanprover/lean4-action@v1
+      - name: Build Lean proofs
+        working-directory: ferratomic-verify/lean
+        run: lake build

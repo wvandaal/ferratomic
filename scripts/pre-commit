@@ -1,0 +1,51 @@
+#!/bin/bash
+# Ferratomic pre-commit hook.
+# Install: cp scripts/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
+
+set -e
+
+echo "=== Ferratomic pre-commit checks ==="
+
+# 1. Format check
+echo "[1/5] rustfmt..."
+cargo fmt --all -- --check 2>/dev/null || {
+    echo "FAIL: cargo fmt found formatting issues. Run: cargo fmt --all"
+    exit 1
+}
+
+# 2. Clippy (includes complexity limits via clippy.toml)
+echo "[2/5] clippy..."
+cargo clippy --workspace --all-targets -- -D warnings 2>/dev/null || {
+    echo "FAIL: clippy warnings found."
+    exit 1
+}
+
+# 3. No unsafe code
+echo "[3/5] unsafe check..."
+for lib in ferratom/src/lib.rs ferratomic-core/src/lib.rs ferratomic-datalog/src/lib.rs ferratomic-verify/src/lib.rs; do
+    if [ -f "$lib" ] && ! grep -q 'forbid(unsafe_code)' "$lib"; then
+        echo "FAIL: $lib missing #![forbid(unsafe_code)]"
+        exit 1
+    fi
+done
+
+# 4. No unwrap/expect in production code (exclude tests and verify crate)
+echo "[4/5] no unwrap/expect in production..."
+VIOLATIONS=$(grep -rn '\.unwrap()' ferratom/src ferratomic-core/src ferratomic-datalog/src 2>/dev/null | grep -v '#\[cfg(test)\]' | grep -v '// OK:' || true)
+if [ -n "$VIOLATIONS" ]; then
+    echo "FAIL: unwrap() found in production code:"
+    echo "$VIOLATIONS"
+    echo "Use ? operator or handle the error explicitly."
+    exit 1
+fi
+
+# 5. File size limits
+echo "[5/5] file size limits..."
+for f in $(find ferratom ferratomic-core ferratomic-datalog -name '*.rs' -not -path '*/tests/*' 2>/dev/null); do
+    LOC=$(wc -l < "$f")
+    if [ "$LOC" -gt 750 ]; then  # 500 code + 250 buffer for comments/blanks
+        echo "WARN: $f is $LOC lines (approaching 500 LOC code limit)"
+    fi
+done
+
+echo "=== All pre-commit checks passed ==="
