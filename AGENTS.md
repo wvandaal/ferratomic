@@ -95,6 +95,107 @@ too-many-lines-threshold = 50
 
 ---
 
+## Code Quality Standards
+
+### Type Discipline (Curry-Howard — types ARE propositions)
+
+- **Minimal cardinality types.** Every type admits exactly the valid states.
+  Invalid states are unrepresentable. `Port(u16)` not `u16`. `EntityId([u8; 32])`
+  not `Vec<u8>`. Every invalid state your type CAN represent is a proof obligation
+  shifted from compiler to runtime.
+- **Newtype wrappers for all domain concepts.** No raw primitives in APIs.
+  `EntityId`, not `[u8; 32]`. `Attribute`, not `String`. `Epoch`, not `u64`.
+- **Typestate for lifecycles.** `Transaction<Building>` → `Transaction<Committed>`.
+  `Database<Opening>` → `Database<Ready>`. Invalid state transitions are compile errors.
+- **Exhaustive pattern matching.** No `_ =>` wildcards on enums that may grow.
+  Every match arm names the variant. Adding a variant produces compile errors
+  at every match site — which is the point.
+- **Parse, don't validate.** Accept raw input at system boundaries, produce typed
+  values. Internal code never re-validates — the type IS the proof.
+
+### Error Discipline
+
+- **`Result<T, FerraError>` everywhere.** No panics, no `unwrap()`, no `expect()`
+  in production code. Test code may use `unwrap()` with descriptive messages.
+- **Error categories matter.** `FerraError::Io` is retryable. `FerraError::SchemaViolation`
+  is a caller bug. `FerraError::InvariantViolation` is OUR bug. Callers pattern-match
+  on category, not message strings.
+- **`?` propagation, not `.unwrap()`.** The only acceptable `unwrap()` in production
+  is on infallible operations (e.g., `regex::Regex::new` with a compile-time-known pattern).
+  Even then, prefer `const` initialization.
+
+### Documentation Standards
+
+- **Every public item has a doc comment.** Enforced by `#![deny(missing_docs)]`.
+- **Doc comments state the invariant, not the implementation.** "Returns the datom's
+  entity, which is a BLAKE3 hash of the content (INV-FERR-012)" — not "returns the
+  first field of the tuple."
+- **INV-FERR references in doc comments.** Every function that upholds or relies on
+  an invariant cites it: `/// INV-FERR-006: snapshot isolation guarantees this returns
+  /// a consistent view.`
+- **No aspirational docs.** Don't document what the function WILL do. Document what
+  it DOES. If it's not implemented, the doc says `TODO(Phase N)`.
+
+### Naming Conventions
+
+- **Types**: `PascalCase`. Names encode semantics: `DatomStore`, not `Store`. `ChunkAddress`, not `Hash`.
+- **Functions**: `snake_case`. Verb-first: `apply_datoms`, `merge_stores`, `load_checkpoint`.
+- **Constants**: `SCREAMING_SNAKE`. `GENESIS_HASH`, `MAX_CHUNK_SIZE`.
+- **Modules**: `snake_case`. One concept per module. Name = concept: `wal`, `checkpoint`, `snapshot`.
+- **No abbreviations** except universally understood ones (WAL, HLC, CRDT, IO).
+  `transaction`, not `txn`. `attribute`, not `attr`. Exception: local variables
+  in tight scopes where the full name adds noise.
+
+### Testing Standards
+
+- **Every public function has at least one test.** No exceptions.
+- **Property-based tests for algebraic laws.** proptest with 10,000+ cases for any
+  function involving CRDT operations, ordering, or identity.
+- **Named invariants in test names.** `test_inv_ferr_001_merge_commutativity`,
+  not `test_merge_works`.
+- **Test failure messages document expected behavior.** `assert_eq!(result, expected,
+  "INV-FERR-005: datom in primary must also be in entity index")`.
+- **No `#[ignore]` without a tracking issue.** Ignored tests are hidden failures.
+
+### Dependency Discipline
+
+- **Minimal dependencies.** Every dependency is a liability. Justify each one.
+- **ferratom has ZERO project-internal dependencies.** It depends only on blake3,
+  ordered-float, serde. Adding a dependency to ferratom requires an ADR.
+- **No transitive dependency on tokio from ferratom.** The leaf crate must be
+  runtime-agnostic. Only ferratomic-core may depend on async runtime.
+- **Pin major versions.** `im = "15"` not `im = "*"`. Reproducible builds.
+- **Audit new dependencies.** Check for `unsafe`, check maintenance status,
+  check license compatibility.
+
+### Git Standards
+
+- **Main branch only.** No long-lived feature branches. Short-lived branches
+  for PRs, merged within 1-2 days.
+- **Conventional commits.** `feat:`, `fix:`, `refactor:`, `test:`, `docs:`, `perf:`.
+- **Every commit compiles and passes tests.** No "WIP" commits on main.
+- **Atomic commits.** One logical change per commit. Don't mix refactoring with features.
+
+### Agentic Development Optimization
+
+- **AGENTS.md is the agent's onboarding document.** An agent should be productive
+  within 5 minutes of reading it. Keep it current.
+- **Session prompts (`docs/prompts/`) define execution scope.** One prompt per
+  major work phase. The prompt IS the task specification.
+- **Braid integration for task tracking.** Use `braid observe`, `braid task create`,
+  `braid harvest` to maintain canonical project state. Braid IS the source of truth.
+- **Skill loading protocol.** Load ONE methodology skill per cognitive phase:
+  - Discovery: `ms load spec-first-design -m --full`
+  - Implementation: `ms load rust-formal-engineering -m --full`
+  - Optimization: `ms load prompt-optimization -m --pack 2000`
+  - Never stack multiple full skills simultaneously (k* budget).
+- **Disjoint file sets for parallel agents.** Two agents NEVER edit the same file.
+  Agent coordination via braid tasks + dependency edges.
+- **Agents don't run cargo.** The orchestrator (human or primary agent) runs build/test
+  ONCE after all agents complete. Prevents build lock contention and disk exhaustion.
+
+---
+
 ## Hard Constraints
 
 **C1: Append-only store.** Never delete or mutate datoms. Retractions are new datoms.
