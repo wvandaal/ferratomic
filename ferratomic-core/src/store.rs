@@ -25,14 +25,10 @@
 //! clone of the primary.
 
 use std::collections::BTreeSet;
-use std::sync::Arc;
 
 use im::OrdSet;
 
-use ferratom::{
-    AgentId, Attribute, AttributeDef, Cardinality, Datom, FerraError, ResolutionMode, Schema,
-    ValueType,
-};
+use ferratom::{AgentId, Attribute, AttributeDef, Datom, FerraError, Schema};
 
 use crate::indexes::Indexes;
 use crate::writer::{Committed, Transaction};
@@ -241,70 +237,11 @@ impl Store {
     /// Every other attribute is defined by transacting datoms that reference
     /// these 19. This is the schema-as-data bootstrap (C3, C7).
     #[must_use]
-    #[allow(clippy::too_many_lines)] // 19 attribute definitions are inherently verbose
     pub fn genesis() -> Self {
-        let mut schema = Schema::empty();
-
-        let lww_kw = |doc: &str| AttributeDef {
-            value_type: ValueType::Keyword,
-            cardinality: Cardinality::One,
-            resolution_mode: ResolutionMode::Lww,
-            doc: Some(Arc::from(doc)),
-        };
-        let lww_str = |doc: &str| AttributeDef {
-            value_type: ValueType::String,
-            cardinality: Cardinality::One,
-            resolution_mode: ResolutionMode::Lww,
-            doc: Some(Arc::from(doc)),
-        };
-        let lww_bool = |doc: &str| AttributeDef {
-            value_type: ValueType::Boolean,
-            cardinality: Cardinality::One,
-            resolution_mode: ResolutionMode::Lww,
-            doc: Some(Arc::from(doc)),
-        };
-        let lww_ref = |doc: &str| AttributeDef {
-            value_type: ValueType::Ref,
-            cardinality: Cardinality::One,
-            resolution_mode: ResolutionMode::Lww,
-            doc: Some(Arc::from(doc)),
-        };
-        let lww_instant = |doc: &str| AttributeDef {
-            value_type: ValueType::Instant,
-            cardinality: Cardinality::One,
-            resolution_mode: ResolutionMode::Lww,
-            doc: Some(Arc::from(doc)),
-        };
-
-        // 1-9: db/* attributes (meta-schema)
-        schema.define(Attribute::from("db/ident"), lww_kw("Attribute identity keyword"));
-        schema.define(Attribute::from("db/valueType"), lww_kw("Declared value type"));
-        schema.define(Attribute::from("db/cardinality"), lww_kw("Cardinality: one or many"));
-        schema.define(Attribute::from("db/doc"), lww_str("Documentation string"));
-        schema.define(Attribute::from("db/unique"), lww_kw("Uniqueness constraint"));
-        schema.define(Attribute::from("db/isComponent"), lww_bool("Component ownership"));
-        schema.define(Attribute::from("db/resolutionMode"), lww_kw("CRDT conflict resolution mode"));
-        schema.define(Attribute::from("db/latticeOrder"), lww_ref("Reference to lattice definition"));
-        schema.define(Attribute::from("db/lwwClock"), lww_kw("LWW clock source"));
-
-        // 10-14: lattice/* attributes (lattice definitions)
-        schema.define(Attribute::from("lattice/ident"), lww_kw("Lattice name"));
-        schema.define(Attribute::from("lattice/elements"), lww_str("Ordered element list"));
-        schema.define(Attribute::from("lattice/comparator"), lww_str("Comparison function"));
-        schema.define(Attribute::from("lattice/bottom"), lww_kw("Least element"));
-        schema.define(Attribute::from("lattice/top"), lww_kw("Greatest element"));
-
-        // 15-19: tx/* attributes (transaction metadata)
-        schema.define(Attribute::from("tx/time"), lww_instant("Transaction wall-clock time"));
-        schema.define(Attribute::from("tx/agent"), lww_ref("Agent that created transaction"));
-        schema.define(Attribute::from("tx/provenance"), lww_str("Provenance description"));
-        schema.define(Attribute::from("tx/rationale"), lww_str("Why this transaction exists"));
-        schema.define(Attribute::from("tx/coherence-override"), lww_str("Manual coherence exemption"));
-
         Self {
             datoms: OrdSet::new(),
             indexes: Indexes::from_datoms(std::iter::empty()),
-            schema,
+            schema: crate::schema_evolution::genesis_schema(),
             epoch: 0,
             genesis_agent: AgentId::from_bytes([0u8; 16]),
         }
@@ -491,7 +428,7 @@ impl Store {
         ));
 
         // INV-FERR-009: scan for schema-defining datoms and evolve the schema.
-        self.evolve_schema(&all_datoms);
+        crate::schema_evolution::evolve_schema(&mut self.schema, &all_datoms);
 
         // INV-FERR-004: insert every datom into primary and all indexes.
         // INV-FERR-005: bijection maintained by touching all structures.
@@ -503,102 +440,8 @@ impl Store {
         Ok(TxReceipt { epoch: self.epoch })
     }
 
-    /// Scan datoms for schema-defining patterns and install new attributes.
-    ///
-    /// INV-FERR-009: schema evolution is a transaction. When a transaction
-    /// contains datoms of the form:
-    /// - `(E, db/ident, Keyword(attr_name), ...)`
-    /// - `(E, db/valueType, Keyword(type_kw), ...)`
-    /// - `(E, db/cardinality, Keyword(card_kw), ...)`
-    ///
-    /// ...all sharing the same entity E, a new attribute `attr_name` is
-    /// installed with the declared type and cardinality.
-    fn evolve_schema(&mut self, datoms: &[Datom]) {
-        use std::collections::HashMap;
-
-        // Group datoms by entity to find complete attribute definitions.
-        let mut by_entity: HashMap<ferratom::EntityId, Vec<&Datom>> = HashMap::new();
-        for datom in datoms {
-            by_entity.entry(datom.entity()).or_default().push(datom);
-        }
-
-        let db_ident = Attribute::from("db/ident");
-        let db_value_type = Attribute::from("db/valueType");
-        let db_cardinality = Attribute::from("db/cardinality");
-
-        for entity_datoms in by_entity.values() {
-            let mut ident: Option<&str> = None;
-            let mut value_type: Option<ValueType> = None;
-            let mut cardinality: Option<Cardinality> = None;
-
-            for datom in entity_datoms {
-                if datom.attribute() == &db_ident {
-                    if let ferratom::Value::Keyword(kw) = datom.value() {
-                        ident = Some(kw.as_ref());
-                    }
-                } else if datom.attribute() == &db_value_type {
-                    if let ferratom::Value::Keyword(kw) = datom.value() {
-                        value_type = parse_value_type(kw);
-                    }
-                } else if datom.attribute() == &db_cardinality {
-                    if let ferratom::Value::Keyword(kw) = datom.value() {
-                        cardinality = parse_cardinality(kw);
-                    }
-                }
-            }
-
-            // Install the attribute only when all three required fields are present.
-            if let (Some(name), Some(vt), Some(card)) = (ident, value_type, cardinality) {
-                self.schema.define(
-                    Attribute::from(name),
-                    AttributeDef {
-                        value_type: vt,
-                        cardinality: card,
-                        resolution_mode: ResolutionMode::Lww,
-                        doc: None,
-                    },
-                );
-            }
-        }
-    }
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/// Parse a `db.type/*` keyword into a `ValueType`.
-///
-/// Returns `None` for unrecognized type keywords. Unrecognized types
-/// cause the attribute definition to be silently skipped (the transaction
-/// datoms are still stored; only the schema entry is not created).
-fn parse_value_type(keyword: &str) -> Option<ValueType> {
-    match keyword {
-        "db.type/keyword" => Some(ValueType::Keyword),
-        "db.type/string" => Some(ValueType::String),
-        "db.type/long" => Some(ValueType::Long),
-        "db.type/double" => Some(ValueType::Double),
-        "db.type/boolean" => Some(ValueType::Boolean),
-        "db.type/instant" => Some(ValueType::Instant),
-        "db.type/uuid" => Some(ValueType::Uuid),
-        "db.type/bytes" => Some(ValueType::Bytes),
-        "db.type/ref" => Some(ValueType::Ref),
-        "db.type/bigint" => Some(ValueType::BigInt),
-        "db.type/bigdec" => Some(ValueType::BigDec),
-        _ => None,
-    }
-}
-
-/// Parse a `db.cardinality/*` keyword into a `Cardinality`.
-///
-/// Returns `None` for unrecognized cardinality keywords.
-fn parse_cardinality(keyword: &str) -> Option<Cardinality> {
-    match keyword {
-        "db.cardinality/one" => Some(Cardinality::One),
-        "db.cardinality/many" => Some(Cardinality::Many),
-        _ => None,
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -607,7 +450,8 @@ fn parse_cardinality(keyword: &str) -> Option<Cardinality> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ferratom::{EntityId, Op, TxId, Value};
+    use crate::schema_evolution::{parse_cardinality, parse_value_type};
+    use ferratom::{Cardinality, EntityId, Op, TxId, Value, ValueType};
     use std::sync::Arc;
 
     /// Helper: build a sample datom for testing.

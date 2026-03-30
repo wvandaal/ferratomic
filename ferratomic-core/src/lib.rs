@@ -22,6 +22,7 @@
 #![warn(clippy::pedantic)]
 
 pub mod indexes;
+pub mod schema_evolution;
 pub mod store;
 pub mod db;
 pub mod snapshot;
