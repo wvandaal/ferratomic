@@ -59,6 +59,11 @@ pub struct Database {
     /// Registered observers plus bounded history for catch-up.
     /// INV-FERR-011: delivery is at-least-once with bounded replay.
     observers: Mutex<ObserverBroadcast>,
+
+    /// INV-FERR-021: Concurrency limiter for write backpressure.
+    /// Pre-checks concurrent write attempts before `try_lock()` to
+    /// prevent thundering herd on the write Mutex.
+    write_limiter: crate::backpressure::WriteLimiter,
 }
 
 impl Database {
@@ -77,6 +82,7 @@ impl Database {
             write_lock: Mutex::new(()),
             wal: Mutex::new(None),
             observers: Mutex::new(ObserverBroadcast::new(DEFAULT_OBSERVER_BUFFER)),
+            write_limiter: crate::backpressure::WriteLimiter::new(&crate::backpressure::BackpressurePolicy::default()),
         }
     }
 
@@ -96,6 +102,7 @@ impl Database {
             write_lock: Mutex::new(()),
             wal: Mutex::new(Some(wal)),
             observers: Mutex::new(ObserverBroadcast::new(DEFAULT_OBSERVER_BUFFER)),
+            write_limiter: crate::backpressure::WriteLimiter::new(&crate::backpressure::BackpressurePolicy::default()),
         })
     }
 
@@ -126,6 +133,7 @@ impl Database {
             write_lock: Mutex::new(()),
             wal: Mutex::new(Some(wal)),
             observers: Mutex::new(ObserverBroadcast::new(DEFAULT_OBSERVER_BUFFER)),
+            write_limiter: crate::backpressure::WriteLimiter::new(&crate::backpressure::BackpressurePolicy::default()),
         })
     }
 
@@ -163,6 +171,7 @@ impl Database {
             write_lock: Mutex::new(()),
             wal: Mutex::new(Some(wal)),
             observers: Mutex::new(ObserverBroadcast::new(DEFAULT_OBSERVER_BUFFER)),
+            write_limiter: crate::backpressure::WriteLimiter::new(&crate::backpressure::BackpressurePolicy::default()),
         })
     }
 
@@ -177,6 +186,7 @@ impl Database {
             write_lock: Mutex::new(()),
             wal: Mutex::new(None),
             observers: Mutex::new(ObserverBroadcast::new(DEFAULT_OBSERVER_BUFFER)),
+            write_limiter: crate::backpressure::WriteLimiter::new(&crate::backpressure::BackpressurePolicy::default()),
         }
     }
 
@@ -195,6 +205,7 @@ impl Database {
             write_lock: Mutex::new(()),
             wal: Mutex::new(Some(wal)),
             observers: Mutex::new(ObserverBroadcast::new(DEFAULT_OBSERVER_BUFFER)),
+            write_limiter: crate::backpressure::WriteLimiter::new(&crate::backpressure::BackpressurePolicy::default()),
         })
     }
 
@@ -272,6 +283,12 @@ impl Database {
     /// Returns other `FerraError` variants if the transaction application
     /// itself fails (e.g., `EmptyTransaction`, `InvariantViolation`).
     pub fn transact(&self, transaction: Transaction<Committed>) -> Result<TxReceipt, FerraError> {
+        // INV-FERR-021: pre-check concurrency limit before trying the lock.
+        let _write_slot = self
+            .write_limiter
+            .try_acquire()
+            .ok_or(FerraError::Backpressure)?;
+
         // INV-FERR-007: serialize writes. try_lock returns immediately
         // rather than blocking, so callers can shed load under contention.
         let _guard = self

@@ -56,6 +56,10 @@ pub struct CrdtState {
     pub nodes: Vec<BTreeSet<Datom>>,
     /// In-flight merge snapshots `(from, to, payload)`.
     pub in_flight: Vec<MergeMessage>,
+    /// Per-node causal write history: which original writes each node has
+    /// received (directly or via merge). This tracks the UPDATE SET
+    /// independently of the node's state, enabling a non-vacuous SEC check.
+    pub received_writes: Vec<BTreeSet<Datom>>,
 }
 
 /// Actions available to the Stateright checker from spec §23.0.5.
@@ -153,6 +157,7 @@ impl Model for CrdtModel {
         vec![CrdtState {
             nodes: vec![BTreeSet::new(); self.node_count],
             in_flight: Vec::new(),
+            received_writes: vec![BTreeSet::new(); self.node_count],
         }]
     }
 
@@ -184,7 +189,8 @@ impl Model for CrdtModel {
                 if node >= next.nodes.len() || !self.is_in_domain(&datom) {
                     return None;
                 }
-                next.nodes[node].insert(datom);
+                next.nodes[node].insert(datom.clone());
+                next.received_writes[node].insert(datom);
             }
             CrdtAction::InitMerge(from, to) => {
                 let payload = self.can_queue_snapshot(&next, from, to)?;
@@ -197,6 +203,11 @@ impl Model for CrdtModel {
                 let (_, to, payload) = next.in_flight.remove(index);
                 if to >= next.nodes.len() {
                     return None;
+                }
+                // Track received writes: all datoms in the payload are
+                // now causally received by the target node.
+                for d in &payload {
+                    next.received_writes[to].insert(d.clone());
                 }
                 next.nodes[to] = Self::merge_sets(&next.nodes[to], &payload);
             }
@@ -226,32 +237,30 @@ impl Model for CrdtModel {
                     })
                 },
             ),
-            // INV-FERR-010 Safety (SEC): at quiescence, if all nodes have
-            // received the same update set (= identical datom sets after
-            // full dissemination), they must be equal. In a G-Set model
-            // this is: if no in-flight messages AND all nodes hold the
-            // global union of all datoms, then all nodes are identical.
+            // INV-FERR-010 Safety (SEC): at quiescence, if two nodes have
+            // received the same set of original writes (tracked independently
+            // in received_writes), their states must be identical.
+            // This is NON-VACUOUS: received_writes tracks causal history,
+            // not final state. A broken merge could produce different states
+            // from the same received writes, and this property would catch it.
             Property::always(
                 "inv_ferr_010_sec_convergence",
                 |_: &CrdtModel, state: &CrdtState| {
                     if !state.in_flight.is_empty() {
                         return true; // SEC only applies at quiescence
                     }
-                    // Compute the global union of all datoms in the system.
-                    let global: BTreeSet<_> = state
-                        .nodes
-                        .iter()
-                        .flat_map(|n| n.iter().cloned())
-                        .collect();
-                    // If every node has the full global set (equal update
-                    // sets), they must be identical (SEC). If not every
-                    // node has the full set, update sets differ and SEC
-                    // does not require equality.
-                    if state.nodes.iter().all(|n| *n == global) {
-                        CrdtModel::is_converged(state)
-                    } else {
-                        true // Different update sets — no SEC obligation
+                    // For every pair of nodes: if they have the same
+                    // received_writes set, their states must be equal.
+                    for i in 0..state.nodes.len() {
+                        for j in (i + 1)..state.nodes.len() {
+                            if state.received_writes[i] == state.received_writes[j]
+                                && state.nodes[i] != state.nodes[j]
+                            {
+                                return false; // SEC violation
+                            }
+                        }
                     }
+                    true
                 },
             ),
             // Liveness: a converged quiescent state is reachable.
@@ -303,6 +312,7 @@ mod tests {
         let mut state = CrdtState {
             nodes: vec![set_of(&[0]), set_of(&[1]), set_of(&[2])],
             in_flight: Vec::new(),
+            received_writes: vec![set_of(&[0]), set_of(&[1]), set_of(&[2])],
         };
 
         for from in 0..3 {
