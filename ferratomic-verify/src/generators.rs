@@ -40,20 +40,25 @@ pub fn arb_attribute() -> impl Strategy<Value = Attribute> {
         .prop_map(|s| Attribute::from(s.as_str()))
 }
 
-/// Arbitrary Value: all 9 variant types with uniform distribution.
+/// Arbitrary Value: all 11 variant types with uniform distribution.
+/// Wraps generated primitives into Arc/OrderedFloat for Value enum compatibility.
 pub fn arb_value() -> impl Strategy<Value = Value> {
+    use ordered_float::OrderedFloat;
+    use std::sync::Arc;
     prop_oneof![
         any::<i64>().prop_map(Value::Long),
         any::<bool>().prop_map(Value::Bool),
-        ".*".prop_map(Value::String),
+        ".*".prop_map(|s| Value::String(Arc::from(s.as_str()))),
         any::<f64>()
             .prop_filter("not NaN", |f| !f.is_nan())
-            .prop_map(Value::Double),
-        "[a-z][a-z0-9_/]{0,63}".prop_map(Value::Keyword),
+            .prop_map(|f| Value::Double(OrderedFloat(f))),
+        "[a-z][a-z0-9_/]{0,63}".prop_map(|s| Value::Keyword(Arc::from(s.as_str()))),
         any::<i64>().prop_map(Value::Instant),
         any::<[u8; 16]>().prop_map(Value::Uuid),
-        prop::collection::vec(any::<u8>(), 0..256).prop_map(Value::Bytes),
+        prop::collection::vec(any::<u8>(), 0..256).prop_map(|v| Value::Bytes(Arc::from(v))),
         arb_entity_id().prop_map(Value::Ref),
+        any::<i128>().prop_map(Value::BigInt),
+        any::<i128>().prop_map(Value::BigDec),
     ]
 }
 

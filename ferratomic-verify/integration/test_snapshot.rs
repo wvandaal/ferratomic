@@ -18,7 +18,7 @@ fn inv_ferr_006_snapshot_stability() {
     let tx1 = Transaction::new(agent.clone())
         .assert_datom(
             EntityId::from_content(b"e1"),
-            Attribute::from("user/name"),
+            Attribute::from("db/doc"),
             Value::String("Alice".into()),
         )
         .commit(store.schema())
@@ -33,7 +33,7 @@ fn inv_ferr_006_snapshot_stability() {
     let tx2 = Transaction::new(agent)
         .assert_datom(
             EntityId::from_content(b"e2"),
-            Attribute::from("user/name"),
+            Attribute::from("db/doc"),
             Value::String("Bob".into()),
         )
         .commit(store.schema())
@@ -64,7 +64,7 @@ fn inv_ferr_006_concurrent_read_write() {
     let tx = Transaction::new(agent)
         .assert_datom(
             EntityId::from_content(b"e1"),
-            Attribute::from("user/name"),
+            Attribute::from("db/doc"),
             Value::String("Alice".into()),
         )
         .commit(store.schema())
@@ -102,8 +102,8 @@ fn inv_ferr_007_epoch_ordering() {
         let tx = Transaction::new(agent.clone())
             .assert_datom(
                 EntityId::from_content(format!("e{}", i).as_bytes()),
-                Attribute::from("test/counter"),
-                Value::Long(i),
+                Attribute::from("tx/provenance"),
+                Value::String(format!("test-{i}").into()),
             )
             .commit(store.schema())
             .expect("valid tx");
@@ -137,8 +137,8 @@ fn inv_ferr_011_observer_epoch_monotonic() {
         let tx = Transaction::new(agent.clone())
             .assert_datom(
                 EntityId::from_content(format!("e{}", i).as_bytes()),
-                Attribute::from("test/counter"),
-                Value::Long(i),
+                Attribute::from("tx/provenance"),
+                Value::String(format!("test-{i}").into()),
             )
             .commit(store.schema())
             .expect("valid tx");

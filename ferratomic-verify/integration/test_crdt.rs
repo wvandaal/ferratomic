@@ -134,10 +134,12 @@ fn inv_ferr_004_transact_grows_store() {
     let mut store = Store::genesis();
     let pre_len = store.len();
 
+    // Use genesis-schema attribute (db/doc accepts String) instead of
+    // user/name which is not in genesis schema.
     let tx = ferratomic_core::writer::Transaction::new(AgentId::from_bytes([0u8; 16]))
         .assert_datom(
             EntityId::from_content(b"new-entity"),
-            Attribute::from("user/name"),
+            Attribute::from("db/doc"),
             Value::String("Test".into()),
         );
 

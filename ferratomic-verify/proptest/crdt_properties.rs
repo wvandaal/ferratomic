@@ -110,7 +110,7 @@ proptest! {
         initial in arb_store(50),
         tx in arb_transaction(),
     ) {
-        let pre_datoms: BTreeSet<_> = initial.datom_set().clone();
+        let pre_datoms = initial.datom_set().clone();
         let pre_len = initial.len();
 
         let mut store = initial;

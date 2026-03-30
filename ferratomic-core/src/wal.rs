@@ -156,6 +156,40 @@ impl Wal {
         Ok(())
     }
 
+    /// Append a pre-serialized payload to the WAL at the given epoch.
+    ///
+    /// INV-FERR-008: Like [`append`](Self::append), the frame is written but NOT
+    /// fsynced. Used by [`Database::transact`](crate::db::Database::transact) to
+    /// write post-stamp datoms (with real TxIds and tx metadata).
+    ///
+    /// # Errors
+    ///
+    /// Returns `FerraError::WalWrite` if the write fails.
+    pub fn append_raw(&mut self, epoch: u64, payload: &[u8]) -> Result<(), FerraError> {
+        let payload_len = payload.len();
+        let frame_size = HEADER_SIZE + payload_len + CRC_SIZE;
+        let mut frame = Vec::with_capacity(frame_size);
+
+        frame.extend_from_slice(&WAL_MAGIC);
+        frame.extend_from_slice(&WAL_VERSION.to_le_bytes());
+        frame.extend_from_slice(&epoch.to_le_bytes());
+        let len_u32 = u32::try_from(payload_len).map_err(|_| {
+            FerraError::WalWrite(format!(
+                "payload too large: {payload_len} bytes exceeds u32::MAX"
+            ))
+        })?;
+        frame.extend_from_slice(&len_u32.to_le_bytes());
+        frame.extend_from_slice(payload);
+        let crc = crc32_ieee(&frame);
+        frame.extend_from_slice(&crc.to_le_bytes());
+
+        self.file
+            .write_all(&frame)
+            .map_err(|e| FerraError::WalWrite(e.to_string()))?;
+
+        Ok(())
+    }
+
     /// Flush the WAL to durable storage.
     ///
     /// INV-FERR-008: After this returns `Ok`, all previously appended entries

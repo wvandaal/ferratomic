@@ -4,6 +4,7 @@
 //! ALL TESTS MUST FAIL (red phase). Types are not yet implemented.
 
 use ferratom::{AgentId, Attribute, Datom, EntityId, Op, TxId, Value};
+use ferratomic_core::db::Database;
 use ferratomic_core::store::Store;
 use ferratomic_core::wal::Wal;
 use ferratomic_core::writer::Transaction;
@@ -99,29 +100,29 @@ fn inv_ferr_008_wal_entry_precedes_snapshot() {
     let dir = TempDir::new().expect("failed to create temp dir");
     let wal_path = dir.path().join("test.wal");
 
-    let mut store =
-        Store::genesis_with_wal(&wal_path).expect("failed to create store with WAL");
+    let db =
+        Database::genesis_with_wal(&wal_path).expect("failed to create store with WAL");
 
     let agent = AgentId::from_bytes([1u8; 16]);
     for i in 0..5i64 {
         let tx = Transaction::new(agent.clone())
             .assert_datom(
                 EntityId::from_content(format!("e{}", i).as_bytes()),
-                Attribute::from("test/data"),
-                Value::Long(i),
+                Attribute::from("tx/provenance"),
+                Value::String(format!("test-{i}").into()),
             )
-            .commit(store.schema())
+            .commit(&db.schema())
             .expect("valid tx");
-        store.transact(tx).expect("transact failed");
+        db.transact(tx).expect("transact failed");
     }
 
     let snapshot_datoms: std::collections::BTreeSet<_> =
-        store.snapshot().datoms().cloned().collect();
+        db.snapshot().datoms().cloned().collect();
 
     // Recover from WAL alone (simulating crash + restart)
-    let recovered_store = Store::recover_from_wal(&wal_path).expect("recovery failed");
+    let recovered_db = Database::recover_from_wal(&wal_path).expect("recovery failed");
     let recovered_datoms: std::collections::BTreeSet<_> =
-        recovered_store.snapshot().datoms().cloned().collect();
+        recovered_db.snapshot().datoms().cloned().collect();
 
     assert_eq!(
         snapshot_datoms, recovered_datoms,

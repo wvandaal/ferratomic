@@ -86,13 +86,15 @@ proptest! {
         }
 
         let snap_datoms_after: BTreeSet<_> = snapshot.datoms().cloned().collect();
+        let before_len = snap_datoms.len();
+        let after_len = snap_datoms_after.len();
         prop_assert_eq!(
             snap_datoms,
             snap_datoms_after,
             "INV-FERR-006 violated: snapshot changed after later transactions. \
              before={}, after={}",
-            snap_datoms.len(),
-            snap_datoms_after.len()
+            before_len,
+            after_len
         );
     }
 
@@ -105,7 +107,7 @@ proptest! {
     ) {
         let mut store = Store::genesis();
         for tx in txns {
-            let tx_datoms: BTreeSet<_> = tx.datoms().cloned().collect();
+            let tx_datoms: BTreeSet<_> = tx.datoms().iter().cloned().collect();
             store.transact(tx)
                 .expect("INV-FERR-006: transact must succeed for committed tx");
 

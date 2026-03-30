@@ -193,34 +193,35 @@ impl Database {
             .try_lock()
             .map_err(|_| FerraError::Backpressure)?;
 
-        // INV-FERR-008: Write WAL BEFORE applying to store.
+        // Step 1: Apply transaction to a cloned store (stamps TxIds, creates
+        // tx metadata datoms). The clone is NOT yet published.
+        let current = self.current.load();
+        let mut new_store = Store::clone(&current);
+        let receipt = new_store.transact(transaction)?;
+
+        // Step 2: INV-FERR-008: Write WAL with STAMPED datoms BEFORE publishing.
         // durable(WAL(T)) BEFORE visible(SNAP(e)).
-        let next_epoch = {
-            let current = self.current.load();
-            current.epoch() + 1
-        };
+        // The WAL contains post-stamp datoms so recovery produces identical state.
         {
             let mut wal_guard = self
                 .wal
                 .lock()
                 .map_err(|_| FerraError::Backpressure)?;
             if let Some(ref mut wal) = *wal_guard {
-                wal.append(next_epoch, &transaction)?;
+                // Compute the delta: datoms in new_store not in current.
+                // These are the stamped transaction datoms + tx metadata.
+                // im::OrdSet::difference returns OrdSet, convert to Vec
+                let diff = new_store.datom_set().clone().difference(current.datom_set().clone());
+                let new_datoms: Vec<ferratom::Datom> = diff.into_iter().collect();
+                let payload = serde_json::to_vec(&new_datoms)
+                    .map_err(|e| FerraError::WalWrite(e.to_string()))?;
+                wal.append_raw(receipt.epoch(), &payload)?;
                 wal.fsync()?;
             }
         }
 
-        // Load the current store, clone it (O(1) via im::OrdSet structural
-        // sharing — ADR-FERR-001), apply the transaction to the clone,
-        // then atomically swap the pointer.
-        let current = self.current.load();
-        let mut new_store = Store::clone(&current);
-        let receipt = new_store.transact(transaction)?;
-
-        // Atomic swap: readers loading after this point see the new state.
-        // Readers who loaded before still hold their old Arc<Store> —
-        // INV-FERR-006 is preserved because im::OrdSet nodes are
-        // reference-counted and live as long as any snapshot holds them.
+        // Step 3: Atomic swap — readers loading after this point see the new state.
+        // INV-FERR-006 preserved: im::OrdSet nodes are reference-counted.
         self.current.store(Arc::new(new_store));
 
         Ok(receipt)

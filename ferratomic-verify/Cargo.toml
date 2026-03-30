@@ -7,15 +7,18 @@ license.workspace = true
 description = "Formal verification suite: Lean 4 proofs, Stateright models, Kani harnesses, proptest"
 
 [dependencies]
-ferratom = { path = "../ferratom" }
+ferratom = { path = "../ferratom", features = ["test-utils"] }
 ferratomic-core = { path = "../ferratomic-core" }
 proptest = { workspace = true }
 stateright = { workspace = true }
+ordered-float = { workspace = true }
+im = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"
 tokio = { workspace = true }
 rand = "0.8"
+serde_json = { workspace = true }
 
 # --- Property-based test suites (proptest/) ---
 

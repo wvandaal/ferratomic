@@ -42,9 +42,12 @@ proptest! {
         );
 
         for (orig, recov) in txns.iter().zip(recovered.iter()) {
+            let recovered_datoms: Vec<ferratom::Datom> =
+                serde_json::from_slice(&recov.payload)
+                    .expect("deserialize WAL payload");
             prop_assert_eq!(
                 orig.datoms(),
-                recov.datoms(),
+                recovered_datoms.as_slice(),
                 "INV-FERR-008 violated: WAL entry content differs after recovery"
             );
         }
