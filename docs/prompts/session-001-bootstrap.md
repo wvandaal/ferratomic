@@ -3,7 +3,8 @@
 > **Scope**: Phases 1-3. Lean proofs, test suite (red phase), type definitions.
 > **Mandate**: Cleanroom, lab-grade, zero-defect, NASA-grade Rust.
 > **Method**: Spec-first TDD, Curry-Howard-Lambek, `ms` "rust-formal-engineering".
-> **Prerequisite**: Spec complete (spec/23-ferratomic.md in braid — symlinked at docs/spec/).
+> **Prerequisite**: Spec complete (`spec/` in this repo is the canonical source).
+> **Current state**: Phase 1 (Lean proofs) is COMPLETE. Phase 2 (tests) is COMPLETE for MVP scope (INV-FERR-001..024). Next: **Phase 3 (type definitions)**.
 > **Critical rule**: NO IMPLEMENTATION until Phases 1-2 are complete and isomorphic with spec.
 
 ---
@@ -11,14 +12,14 @@
 ## Phase 0: Context Recovery (do this FIRST)
 
 1. Read `AGENTS.md` (this project's guidelines and hard constraints)
-2. Read `docs/spec/23-ferratomic.md` — the formal specification (36 INV, 7 ADR, 5 NEG)
+2. Read `spec/README.md` and relevant spec modules — the formal specification (50 INV, 8 ADR, 5 NEG)
 3. Read `docs/design/FERRATOMIC_ARCHITECTURE.md` — comprehensive architecture (17 sections)
 4. Read `ferratomic-verify/lean/Ferratomic/Store.lean` — existing Lean proofs (CRDT foundation)
 5. Run `ms load rust-formal-engineering -m --full`
 6. Run `ms load spec-first-design -m --full`
 
 **Checkpoint**: Before writing any code, verify:
-- You understand the 36 INV-FERR invariants and which phase each belongs to
+- You understand the INV-FERR invariants (50 total; MVP = 001..024) and which phase each belongs to
 - You understand the Lean-Rust bridge methodology (parallel models + conformance tests)
 - You understand the crate dependency DAG: ferratom → ferratomic-core → ferratomic-datalog
 - `CARGO_TARGET_DIR=/data/cargo-target` (NOT /tmp)
@@ -64,6 +65,10 @@ Run `lake build` — all theorems type-check.
 **Goal**: Every INV-FERR has at least one executable test. ALL tests MUST FAIL initially.
 This is the red phase of TDD — tests define the contract before implementation exists.
 
+**Test scope by phase**: Phase 2 covers INV-FERR-001..024 (MVP). Tests for INV-FERR-025..055
+(performance, federation, prolly tree, VKN) are written during their respective implementation
+phases (4b, 4c, 4d), NOT in Phase 2.
+
 ### Stateright models (`ferratomic-verify/stateright/`)
 
 | Model | Properties Checked | INV-FERR |
@@ -75,7 +80,7 @@ This is the red phase of TDD — tests define the contract before implementation
 | `federated_query_model.rs` | Fan-out correctness, selective merge CRDT preservation, transport transparency, latency tolerance, live migration | 037-042 |
 
 State type, action type, and property definitions are specified in
-`spec/23-ferratomic.md` §23.0.5 and §23.2.
+`spec/00-preamble.md` §23.0.5 and `spec/02-concurrency.md` §23.2.
 
 ### Kani harnesses (`ferratomic-verify/kani/`)
 
@@ -105,8 +110,10 @@ State type, action type, and property definitions are specified in
 | `federation.rs` | multi-node merge→convergence, anti_entropy | 010, 022 |
 | `federated_query.rs` | federated_query→correctness, selective_merge→knowledge_transfer, transport_transparency, latency_tolerance, live_migration | 037-042 |
 
-**Acceptance**: All test files compile. All tests FAIL (no implementation yet).
-The failure messages document the expected behavior.
+**Acceptance**: Test files are WRITTEN with correct structure and property definitions.
+Tests will NOT compile until Phase 3 provides type stubs. **Recommended**: Create minimal
+type stubs in ferratom (empty structs, trait skeletons) sufficient for test compilation.
+Stubs encode type NAMES and SHAPES from the spec without implementing behavior.
 
 ---
 
@@ -156,6 +163,11 @@ invariants at the type level so the compiler verifies them.
 
 **DO NOT START THIS until Phases 1-3 pass their isomorphism checks.**
 
+**Resolution model**: Phase 4a implements card-one (LWW by TxId) and card-many
+(all non-retracted asserts) ONLY. Lattice-based resolution is Phase 4b+. `AttributeDef`
+should include `resolution_mode` field from day one but only `Lww` and `MultiValue`
+variants need implementation.
+
 Implementation order within Phase 4a:
 
 1. **Store** (store.rs): im::OrdMap indexes, apply_datoms, merge
@@ -186,7 +198,7 @@ checkpoint: O(n) write, O(n) diff, O(n) transfer. At 100M datoms (~20GB), this i
 The prolly tree provides O(d) checkpoint, O(d) diff, and O(d) transfer where d is the number
 of changed datoms. This is the prerequisite for efficient federation (Phase 4c).
 
-**Spec reference**: spec/23-ferratomic.md section 23.9 (INV-FERR-045 through INV-FERR-050,
+**Spec reference**: `spec/06-prolly-tree.md` §23.9 (INV-FERR-045 through INV-FERR-050,
 ADR-FERR-008). Read the full section before starting implementation.
 
 ### Prerequisites from Phase 4a
@@ -443,6 +455,11 @@ between "federation that works" and "federation that scales."
 ## Phase 4c: Federation Implementation — ONLY AFTER Phase 4a
 
 **DO NOT START THIS until Phase 4a is complete and all core tests pass.**
+
+**Datalog dependency**: Federation (Phase 4c) does NOT require ferratomic-datalog.
+Federated queries use `Snapshot::entity()` and `Snapshot::attribute()` lookups.
+CALM classification assumes all queries are monotonic (true for point lookups and
+attribute scans). `ferratomic-datalog` (Phase 4d) adds full Datalog for complex queries.
 
 Federation (spec §23.8, INV-FERR-037 through INV-FERR-044) builds on top of the
 core store, snapshot, merge, and query infrastructure from Phase 4a.

@@ -1,7 +1,15 @@
 # Ferratomic Specification
 
+> **These files are the CANONICAL specification.** braid's `spec/ferratomic → ../../ferratomic/spec/`
+> symlinks point here. The old monolith `ddis-braid/spec/23-ferratomic.md` is retained for backward
+> compatibility only.
+
 Formal specification using DDIS methodology (INV/ADR/NEG).
 50 invariants, 8 ADRs, 5 negative cases.
+
+**Implementation note**: Spec Level 2 contracts use `BTreeSet`/`BTreeMap` as conceptual
+illustrations. The actual implementation uses `im::OrdSet`/`im::OrdMap` per ADR-FERR-001.
+The `IndexBackend` trait (INV-FERR-025) allows swapping backends.
 
 Every invariant follows the Level 0/1/2 format:
 - **Level 0**: Algebraic law (formal predicate)

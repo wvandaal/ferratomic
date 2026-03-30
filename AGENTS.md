@@ -22,7 +22,7 @@ The data structure IS the consistency mechanism.
 
 **Non-negotiable phase ordering:**
 ```
-Phase 0: Formal specification (spec/23-ferratomic.md in braid)  ← DONE
+Phase 0: Formal specification (spec/ — canonical, modular)     ← DONE
 Phase 1: Lean 4 theorem statements + proofs
 Phase 2: Test suite (Stateright, Kani, proptest) — ALL FAIL (red phase)
 Phase 3: Type definitions (ferratom crate — types ARE propositions)
@@ -33,17 +33,25 @@ Phase 5: Integration (braid-kernel migration)
 **Phase gate**: Phase N+1 CANNOT begin until Phase N passes isomorphism check.
 A gap between spec, algebra, and tests is a DEFECT, not technical debt.
 
+**Compilation expectation**: The workspace may not compile during Phases 1-2.
+This is expected. Phase 3 creates type stubs that make Phase 2 tests compilable.
+
+**Spec Level 2 contracts**: Level 2 Rust contracts are conceptual -- they illustrate
+algebraic properties using `BTreeSet`. Implementation uses `im::OrdSet`/`im::OrdMap`
+(ADR-FERR-001).
+
 ---
 
 ## Specification
 
-The canonical specification lives in braid's tree (colocated with the consumer):
-- **Formal spec**: `../ddis-braid/spec/23-ferratomic.md` (36 INV, 7 ADR, 5 NEG)
-- **Architecture**: `../ddis-braid/docs/design/FERRATOMIC_ARCHITECTURE.md`
+The canonical specification lives in `spec/` in THIS repository (ferratomic).
+braid symlinks TO here (`spec/ferratomic → ../../ferratomic/spec/`), not the other
+way around. The old monolith `ddis-braid/spec/23-ferratomic.md` is retained for
+backward compatibility only.
 
-Local documentation:
-- **docs/spec/**: Symlinks to braid spec for locality
-- **docs/design/**: Ferratomic-specific design decisions
+- **Formal spec**: `spec/` (50 INV, 8 ADR, 5 NEG) — modular files, see `spec/README.md`
+- **Architecture**: `docs/design/FERRATOMIC_ARCHITECTURE.md`
+- **Design decisions**: `docs/design/`
 
 ---
 
@@ -211,10 +219,15 @@ Core domain code depends on `asupersync` only (ADR-FERR-002).
 
 ## Build
 
+**CRITICAL**: Set `export CARGO_TARGET_DIR=/data/cargo-target` at session start.
+This is NOT auto-configured. Omitting it uses /tmp (RAM-backed, will fill up).
+Every cargo command must use this target dir.
+
 ```bash
-CARGO_TARGET_DIR=/data/cargo-target cargo check --workspace
-CARGO_TARGET_DIR=/data/cargo-target cargo clippy --workspace -- -D warnings
-CARGO_TARGET_DIR=/data/cargo-target cargo test --workspace
+export CARGO_TARGET_DIR=/data/cargo-target
+cargo check --workspace
+cargo clippy --workspace -- -D warnings
+cargo test --workspace
 ```
 
 Lean proofs:

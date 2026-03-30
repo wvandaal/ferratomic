@@ -2245,6 +2245,9 @@ Node A                                    Node B
 
 ## §23.10: Verifiable Knowledge Network (VKN)
 
+> **Stage**: Phase 4c+ (deferred). VKN invariants (INV-FERR-051..055) are specified and
+> Lean-proved but implementation is deferred until after Phase 4a MVP.
+
 The Verifiable Knowledge Network layer transforms ferratomic from a database into a
 cryptographically verifiable knowledge substrate. Every assertion carries provenance
 that can be independently verified without trusting the asserter, the transport, or

@@ -4,15 +4,24 @@
 **Why**: Foundation for braid and any system built on the datom model.
 **Core property**: Store = (P(D), ∪) — G-Set CRDT semilattice. Writes never conflict.
 
+**Canonical spec**: `spec/` is the canonical specification. braid symlinks TO here, not the other way around.
+
+**Current state**: The workspace does NOT compile. This is intentional (Phase 2 red-phase TDD).
+Tests reference types that don't exist yet. Phase 3 creates type stubs to make tests compile.
+
 ## Current Phase
 
-Phase 0 (specification) is COMPLETE. Next: **Phase 1 (Lean proofs)**.
+Phase 1 (Lean proofs) is COMPLETE. Phase 2 (tests) is COMPLETE for MVP scope (INV-FERR-001..024).
+Next: **Phase 3 (type definitions)**.
 
 ## Where to Start
 
 1. Read `AGENTS.md` — guidelines, constraints, quality standards
 2. Read `docs/prompts/session-001-bootstrap.md` — your execution guide
 3. Read `spec/README.md` — spec module index (load only what you need)
+
+Check project state: `br ready` (actionable tasks), `br list --status in_progress` (claimed work),
+`bv --robot-next` (top pick).
 
 ## Crate Map
 
@@ -25,9 +34,13 @@ ferratomic-verify/  → Proofs + tests (Lean 4, Stateright, Kani, proptest).
 
 ## Build
 
+**CRITICAL**: Set `export CARGO_TARGET_DIR=/data/cargo-target` at session start.
+This is NOT auto-configured. Omitting it uses /tmp (RAM-backed, will fill up).
+
 ```bash
-CARGO_TARGET_DIR=/data/cargo-target cargo check --workspace
-CARGO_TARGET_DIR=/data/cargo-target cargo test --workspace
+export CARGO_TARGET_DIR=/data/cargo-target
+cargo check --workspace
+cargo test --workspace
 cd ferratomic-verify/lean && lake build   # Lean proofs
 ```
 
