@@ -24,13 +24,21 @@ pub struct Datom {
 
 impl Datom {
     /// Builds a stable finite-domain datom for the Stateright model.
+    ///
+    /// Fields are derived independently so the model can explore:
+    /// - Same entity with different attributes (e=0,a=0 vs e=0,a=1)
+    /// - Assert and retract on the same entity (op decoupled from e)
+    /// - Multiple values per entity-attribute pair
+    ///
+    /// The seed encodes: bits[0] = op, bits[1] = attribute, bits[2..] = entity.
+    /// Value and tx are fixed (identity in a G-Set is the full 5-tuple).
     pub const fn from_seed(seed: u64) -> Self {
         Self {
-            e: seed,
-            a: seed % 3,
-            v: seed * 17 + 1,
-            tx: seed / 2,
-            op: seed % 2 == 0,
+            e: seed >> 2,           // entity: independent of op and attr
+            a: (seed >> 1) & 1,     // attribute: 2 values, independent of entity
+            v: 0,                   // fixed value — identity comes from (e, a, op)
+            tx: 0,                  // fixed tx — G-Set identity is content, not time
+            op: seed & 1 == 0,      // op: assert (even) / retract (odd)
         }
     }
 }
@@ -100,7 +108,10 @@ impl CrdtModel {
     }
 
     fn is_in_domain(&self, datom: &Datom) -> bool {
-        datom.e < self.max_datoms
+        // Domain check: entity must be within max_datoms/4 (since each
+        // entity generates 4 variants: 2 attributes × 2 ops).
+        let max_entity = self.max_datoms / 4 + 1;
+        datom.e < max_entity && datom.a <= 1
     }
 
     fn can_queue_snapshot(
