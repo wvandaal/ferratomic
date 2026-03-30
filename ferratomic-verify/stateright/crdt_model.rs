@@ -119,6 +119,7 @@ impl CrdtModel {
         Some(state.nodes[from].clone())
     }
 
+    #[cfg(test)]
     fn canonical_nodes(nodes: &[BTreeSet<Datom>]) -> Vec<Vec<Datom>> {
         nodes
             .iter()

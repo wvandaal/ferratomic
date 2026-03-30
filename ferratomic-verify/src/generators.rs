@@ -5,12 +5,11 @@
 //!
 //! ## Usage
 //!
-//! ```rust
+//! ```rust,ignore
 //! use ferratomic_verify::generators::*;
 //! use proptest::prelude::*;
 //!
 //! proptest! {
-//!     #[test]
 //!     fn my_property(datom in arb_datom()) {
 //!         // ...
 //!     }
