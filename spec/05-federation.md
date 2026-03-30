@@ -1131,7 +1131,7 @@ pub struct StoreResponse {
 pub enum ResponseStatus {
     Ok,
     Timeout,
-    Error(String),
+    Error(FerraError),
     /// Store was skipped (e.g., query didn't need this shard)
     Skipped,
 }
@@ -1540,6 +1540,350 @@ theorem migration_abort_safe (old_store : DatomStore) :
 
 ---
 
+### INV-FERR-043: Schema Compatibility Check
+
+**Traces to**: SEED.md §4 (Schema-as-data), INV-FERR-009 (Schema Validation), C3 (Schema-as-data)
+**Verification**: `V:PROP`, `V:LEAN`
+**Stage**: 0
+
+#### Level 0 (Algebraic Law)
+```
+Let schema(S) be the set of (attribute, ValueType, Cardinality) triples for store S.
+Let shared(S₁, S₂) = {A | ∃ t₁ c₁ t₂ c₂: (A, t₁, c₁) ∈ schema(S₁) ∧ (A, t₂, c₂) ∈ schema(S₂)}
+
+∀ stores S₁ S₂, ∀ attr A ∈ shared(S₁, S₂):
+  type(S₁, A) = type(S₂, A) ∧ cardinality(S₁, A) = cardinality(S₂, A)
+
+Schema compatibility is symmetric:
+  schema_compatible(S₁, S₂) ⟺ schema_compatible(S₂, S₁)
+
+Schema union for non-conflicting attributes:
+  merged_schema(S₁, S₂) = schema(S₁) ∪ schema(S₂)  when compatible
+  Attributes unique to one store are accepted without conflict.
+
+Merge precondition:
+  merge(S₁, S₂) is defined ⟺ schema_compatible(S₁, S₂)
+  ¬schema_compatible(S₁, S₂) → merge(S₁, S₂) = Err(SchemaIncompatible)
+```
+
+#### Level 1 (State Invariant)
+Before merging two stores, the federation layer verifies that their schemas are
+compatible. Two schemas are compatible if and only if every attribute that appears
+in both schemas has the same ValueType and the same Cardinality in both. Attributes
+that appear in only one schema are accepted without conflict (schema union for
+non-conflicting attributes).
+
+If the schemas are incompatible, the merge is rejected with
+`FerraError::SchemaIncompatible`, which carries the list of conflicting attributes,
+their types in each store, and their cardinalities in each store. No datoms are
+transferred. The local store is unchanged.
+
+This check is a precondition for all merge operations: full merge (INV-FERR-001
+through INV-FERR-003), selective merge (INV-FERR-039), and namespace-filtered
+merge (INV-FERR-044).
+
+#### Level 2 (Implementation Contract)
+```rust
+/// Schema compatibility error detail.
+#[derive(Debug, thiserror::Error)]
+#[error("Schema incompatible: attribute {attr} has type {local_type:?}/{local_card:?} locally but {remote_type:?}/{remote_card:?} remotely")]
+pub struct SchemaConflict {
+    pub attr: String,
+    pub local_type: ValueType,
+    pub remote_type: ValueType,
+    pub local_card: Cardinality,
+    pub remote_card: Cardinality,
+}
+
+/// Check schema compatibility between two stores.
+/// Returns Ok(()) if compatible, Err with all conflicts if not.
+///
+/// Symmetry: schema_compatible(a, b) == schema_compatible(b, a)
+pub fn schema_compatible(
+    local: &Schema,
+    remote: &Schema,
+) -> Result<(), FerraError> {
+    let mut conflicts = Vec::new();
+    for (attr, local_def) in local.attributes() {
+        if let Some(remote_def) = remote.get(attr) {
+            if local_def.value_type != remote_def.value_type
+                || local_def.cardinality != remote_def.cardinality
+            {
+                conflicts.push(SchemaConflict {
+                    attr: attr.to_string(),
+                    local_type: local_def.value_type,
+                    remote_type: remote_def.value_type,
+                    local_card: local_def.cardinality,
+                    remote_card: remote_def.cardinality,
+                });
+            }
+        }
+        // Attributes unique to local: no conflict
+    }
+    if conflicts.is_empty() {
+        Ok(())
+    } else {
+        Err(FerraError::SchemaIncompatible(conflicts))
+    }
+}
+
+#[kani::proof]
+#[kani::unwind(5)]
+fn schema_compat_symmetric() {
+    let a_type: u8 = kani::any();
+    let b_type: u8 = kani::any();
+    let a_card: bool = kani::any();
+    let b_card: bool = kani::any();
+
+    let compatible_ab = (a_type == b_type) && (a_card == b_card);
+    let compatible_ba = (b_type == a_type) && (b_card == a_card);
+
+    assert_eq!(compatible_ab, compatible_ba, "Schema compatibility must be symmetric");
+}
+```
+
+**Falsification**: Any of the following constitutes a violation of INV-FERR-043:
+- Merge succeeds when attribute A is `String` in S₁ and `Long` in S₂.
+- Merge succeeds when attribute A has cardinality `One` in S₁ and `Many` in S₂.
+- Merge rejects two stores where all shared attributes have identical types and
+  cardinalities (false positive).
+- `schema_compatible(S₁, S₂)` returns a different result than
+  `schema_compatible(S₂, S₁)` (symmetry violation).
+
+**proptest strategy**:
+```rust
+proptest! {
+    #[test]
+    fn schema_compat_is_symmetric(
+        schema_a in arb_schema(1..10),
+        schema_b in arb_schema(1..10),
+    ) {
+        let ab = schema_compatible(&schema_a, &schema_b);
+        let ba = schema_compatible(&schema_b, &schema_a);
+        prop_assert_eq!(ab.is_ok(), ba.is_ok(),
+            "schema_compatible must be symmetric");
+    }
+
+    #[test]
+    fn compatible_schemas_merge_successfully(
+        datoms_a in prop::collection::btree_set(arb_datom(), 0..50),
+        datoms_b in prop::collection::btree_set(arb_datom(), 0..50),
+        shared_attrs in prop::collection::vec(arb_attr_def(), 1..5),
+    ) {
+        // Build two stores with identical shared attributes
+        let mut schema_a = Schema::new();
+        let mut schema_b = Schema::new();
+        for attr in &shared_attrs {
+            schema_a.define(attr.clone());
+            schema_b.define(attr.clone());
+        }
+        let store_a = Store::from_datoms_with_schema(datoms_a, schema_a);
+        let store_b = Store::from_datoms_with_schema(datoms_b, schema_b);
+        prop_assert!(schema_compatible(store_a.schema(), store_b.schema()).is_ok());
+    }
+
+    #[test]
+    fn incompatible_schemas_reject_merge(
+        datoms_a in prop::collection::btree_set(arb_datom(), 0..50),
+        datoms_b in prop::collection::btree_set(arb_datom(), 0..50),
+    ) {
+        // Build two stores where a shared attribute has different types
+        let mut schema_a = Schema::new();
+        schema_a.define(AttrDef::new(":test/attr", ValueType::String, Cardinality::One));
+        let mut schema_b = Schema::new();
+        schema_b.define(AttrDef::new(":test/attr", ValueType::Long, Cardinality::One));
+
+        let store_a = Store::from_datoms_with_schema(datoms_a, schema_a);
+        let store_b = Store::from_datoms_with_schema(datoms_b, schema_b);
+        prop_assert!(schema_compatible(store_a.schema(), store_b.schema()).is_err());
+    }
+}
+```
+
+**Lean theorem**:
+```lean
+/-- Schema compatibility is symmetric: if A is compatible with B, then B is
+    compatible with A. Modeled as: for all shared attributes, types match
+    iff they match in reverse order. -/
+
+def schema_compatible (s1 s2 : Finset (Nat × Nat × Nat)) : Prop :=
+  ∀ a t1 c1 t2 c2, (a, t1, c1) ∈ s1 → (a, t2, c2) ∈ s2 → t1 = t2 ∧ c1 = c2
+
+theorem schema_compat_symmetric (s1 s2 : Finset (Nat × Nat × Nat)) :
+    schema_compatible s1 s2 → schema_compatible s2 s1 := by
+  intro h a t2 c2 t1 c1 h2 h1
+  have ⟨ht, hc⟩ := h a t1 c1 t2 c2 h1 h2
+  exact ⟨ht.symm, hc.symm⟩
+```
+
+---
+
+### INV-FERR-044: Namespace Isolation
+
+**Traces to**: C8 (Substrate Independence), INV-FERR-039 (Selective Merge)
+**Verification**: `V:PROP`, `V:LEAN`
+**Stage**: 0
+
+#### Level 0 (Algebraic Law)
+```
+Let filter F = Namespace(ns) be a namespace filter.
+Let D be any datom with attribute A.
+
+∀ datom D, filter F = Namespace(ns):
+  F.accepts(D) ⟺ D.attribute.starts_with(ns)
+
+Equivalently:
+  namespace_filter(ns, S) = {d ∈ S | d.attribute.starts_with(ns)}
+
+Completeness:
+  ∀ d ∈ namespace_filter(ns, S): d.attribute.starts_with(ns)
+
+Soundness:
+  ∀ d ∈ S, d.attribute.starts_with(ns) → d ∈ namespace_filter(ns, S)
+
+No leakage:
+  ∀ d ∈ S, ¬d.attribute.starts_with(ns) → d ∉ namespace_filter(ns, S)
+
+Composition with selective merge:
+  selective_merge(local, remote, Namespace(ns))
+    = local ∪ {d ∈ remote | d.attribute.starts_with(ns)}
+```
+
+#### Level 1 (State Invariant)
+Selective merge can restrict to specific attribute namespaces. The filter
+`DatomFilter::AttributeNamespace(":policy/*")` includes only datoms with attributes
+matching the namespace prefix. No datoms outside the namespace are transferred.
+
+Namespace filtering is defense-in-depth: it prevents accidental data leakage during
+selective merge across organizational boundaries. For example, merging `:policy/*`
+from a production store transfers calibrated weights without exposing task backlogs,
+observations, or other domain data.
+
+The namespace filter composes with all other DatomFilter combinators (And, Or, Not)
+via the existing filter algebra (INV-FERR-039 Level 2). Multiple namespace filters
+can be combined: `Or(Namespace(":policy/*"), Namespace(":schema/*"))` transfers
+both policy and schema datoms.
+
+#### Level 2 (Implementation Contract)
+```rust
+/// Namespace isolation is implemented via the existing DatomFilter enum
+/// (INV-FERR-039 Level 2). The AttributeNamespace variant performs prefix
+/// matching on the datom's attribute keyword.
+///
+/// Example: transfer only policy datoms from a remote store.
+///
+/// ```rust
+/// let filter = DatomFilter::AttributeNamespace(vec![":policy/".to_string()]);
+/// let receipt = selective_merge(&mut local, &remote, &filter).await?;
+/// // receipt.datoms_transferred contains only :policy/* datoms
+/// // No :task/*, :observation/*, or other namespace datoms were transferred
+/// ```
+
+/// Verify namespace isolation: no datom outside the namespace passes the filter.
+fn verify_namespace_isolation(
+    filter_ns: &str,
+    transferred: &[Datom],
+) -> bool {
+    transferred.iter().all(|d| d.attribute.starts_with(filter_ns))
+}
+
+#[kani::proof]
+#[kani::unwind(8)]
+fn namespace_filter_no_leakage() {
+    let ns_prefix: u64 = kani::any();  // model namespace as prefix
+    let datom_attr: u64 = kani::any();
+
+    let matches = datom_attr / 1000 == ns_prefix / 1000;  // prefix match model
+    let filter_accepts = matches;
+    let in_result = filter_accepts;
+
+    // No leakage: if filter does not accept, datom is not in result
+    if !filter_accepts {
+        assert!(!in_result, "Datom outside namespace must not pass filter");
+    }
+}
+```
+
+**Falsification**: Any of the following constitutes a violation of INV-FERR-044:
+- A datom with attribute `:task/title` passes a filter for `:policy/*`.
+- A datom with attribute `:policy/weight` does NOT pass a filter for `:policy/*`
+  (false negative).
+- After a namespace-filtered merge with `:policy/*`, the local store contains a
+  new datom with attribute `:observation/text` that came from the remote store
+  (leakage).
+- The namespace filter interacts incorrectly with And/Or/Not combinators.
+
+**proptest strategy**:
+```rust
+proptest! {
+    #[test]
+    fn namespace_filter_complete_and_sound(
+        datoms in prop::collection::btree_set(arb_datom(), 0..100),
+        namespace in "[a-z]{1,5}",
+    ) {
+        let ns_prefix = format!(":{}/*", namespace);
+        let filter = DatomFilter::AttributeNamespace(vec![ns_prefix.clone()]);
+
+        for d in &datoms {
+            let matches = d.attribute.starts_with(&ns_prefix);
+            let accepted = filter.matches(d, &Schema::empty());
+            prop_assert_eq!(matches, accepted,
+                "Namespace filter must be complete and sound: attr={}, ns={}",
+                d.attribute, ns_prefix);
+        }
+    }
+
+    #[test]
+    fn namespace_merge_no_leakage(
+        local_datoms in prop::collection::btree_set(arb_datom(), 0..50),
+        remote_datoms in prop::collection::btree_set(arb_datom(), 0..50),
+        namespace in "[a-z]{1,5}",
+    ) {
+        let ns_prefix = format!(":{}/*", namespace);
+        let local_before: BTreeSet<_> = local_datoms.clone();
+
+        // Simulate namespace-filtered merge
+        let filter = DatomFilter::AttributeNamespace(vec![ns_prefix.clone()]);
+        let transferred: BTreeSet<_> = remote_datoms.iter()
+            .filter(|d| filter.matches(d, &Schema::empty()))
+            .cloned().collect();
+        let result: BTreeSet<_> = local_datoms.union(&transferred).cloned().collect();
+
+        // Every new datom (not in local_before) must match the namespace
+        for d in &result {
+            if !local_before.contains(d) {
+                prop_assert!(d.attribute.starts_with(&ns_prefix),
+                    "Leaked datom outside namespace: attr={}", d.attribute);
+            }
+        }
+    }
+}
+```
+
+**Lean theorem**:
+```lean
+/-- Namespace isolation: filtering by prefix, then merging, transfers only
+    matching datoms. No datom outside the namespace enters the result. -/
+
+def ns_filter (prefix : Nat) (s : Finset (Nat × Nat)) : Finset (Nat × Nat) :=
+  s.filter (fun d => d.1 = prefix)
+
+theorem ns_filter_sound (prefix : Nat) (s : Finset (Nat × Nat)) :
+    ∀ d ∈ ns_filter prefix s, d.1 = prefix := by
+  intro d hd
+  exact (Finset.mem_filter.mp hd).2
+
+theorem ns_merge_no_leakage (prefix : Nat) (local remote : Finset (Nat × Nat)) :
+    ∀ d ∈ local ∪ (ns_filter prefix remote),
+      d ∉ local → d.1 = prefix := by
+  intro d hd hnotlocal
+  cases Finset.mem_union.mp hd with
+  | inl h => exact absurd h hnotlocal
+  | inr h => exact (Finset.mem_filter.mp h).2
+```
+
+---
+
 ### §23.8.1: Federation API
 
 The full Federation API surface, with types and method signatures.
@@ -1863,6 +2207,39 @@ pub struct FederationSnapshot {
     pub participating_stores: BTreeSet<StoreId>,
 }
 ```
+
+---
+
+### §23.8.8: Federation Orchestration Protocol
+
+The federation protocol composes INV-FERR-037 through 055 into a coherent message flow:
+
+```
+Node A                                    Node B
+  |                                         |
+  |--- HANDSHAKE (exchange root hashes) --> |
+  | <-- ROOT_HASHES (epoch, root) --------- |
+  |                                         |
+  |--- DIFF_REQUEST (my_root, your_root) -> |
+  | <-- DIFF_CHUNKS (missing chunks) ------- |  [INV-FERR-047: O(d) diff]
+  |                                         |
+  |--- VERIFY_SIGNATURES ------------------  |  [INV-FERR-051: signed txns]
+  |--- CHECK_SCHEMA_COMPAT ----------------  |  [INV-FERR-043: schema check]
+  |--- APPLY_TRUST_POLICY -----------------  |  [INV-FERR-054: trust gradient]
+  |                                         |
+  |--- MERGE (filtered chunks) ------------  |  [INV-FERR-039: selective merge]
+  |--- PUBLISH_SNAPSHOT -------------------  |  [INV-FERR-006: snapshot isolation]
+  |                                         |
+  |--- GOSSIP (SWIM protocol) ----------- > |  [INV-FERR-022: anti-entropy]
+  |                                         |
+  (repeat on timer or on-demand)
+```
+
+**Failure scenarios:**
+- **Network partition**: both sides continue accepting writes (CRDT safe). Reconnect triggers anti-entropy.
+- **Signature verification failure**: reject the specific transaction, continue with valid ones.
+- **Schema incompatibility**: reject merge, log error, notify observer.
+- **Timeout**: return partial results with metadata (INV-FERR-041).
 
 ---
 

@@ -5,6 +5,12 @@
 
 ## 23.0 Preamble
 
+### Stage Definitions
+
+- **Stage 0**: Core algebraic invariant. Required for MVP (Phase 4a).
+- **Stage 1**: Extended invariant. Required for production (Phase 4b+).
+- **Stage 2**: Future invariant. Designed now, implemented when needed.
+
 ### 23.0.1 Overview
 
 Ferratomic is the embedded datom database engine that reifies the algebraic store `(P(D), ∪)`

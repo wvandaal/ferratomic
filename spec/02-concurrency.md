@@ -461,6 +461,12 @@ maintain the total ordering:
     else
       (pt, 0, α)
 
+AgentId ordering: AgentId is a [u8; 16] byte array. Total order is lexicographic
+byte comparison. This is deterministic, portable, and collision-resistant when
+AgentId = BLAKE3(agent_name)[0..16]. Two agents with identical BLAKE3 prefixes
+(16-byte collision probability ≈ 2⁻¹²⁸) are operationally indistinguishable —
+a negligible risk equivalent to SHA-256 collision.
+
 The total order on HLC is:
   h₁ < h₂ ⟺ h₁.physical < h₂.physical
              ∨ (h₁.physical = h₂.physical ∧ h₁.logical < h₂.logical)
@@ -489,6 +495,12 @@ the system self-limits rather than overflowing.
 
 #### Level 2 (Implementation Contract)
 ```rust
+/// Agent identifier: 16-byte BLAKE3 hash prefix.
+/// Lexicographic byte order via derived Ord provides the total order
+/// used as tie-breaker in HLC comparison.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct AgentId([u8; 16]);  // Lexicographic byte order via derived Ord
+
 /// Hybrid Logical Clock.
 /// Invariant: every call to tick() returns a value strictly greater than
 /// any previous return value on this agent.
@@ -1315,8 +1327,11 @@ type system guarantees cannot be reached).
 
 #### Level 2 (Implementation Contract)
 ```rust
+// In every ferratomic crate's lib.rs:
 #![forbid(unsafe_code)]
-#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![deny(clippy::unwrap_used)]
+#![deny(clippy::expect_used)]
+#![deny(clippy::panic)]
 
 /// Transaction application errors.
 /// Every variant carries diagnostic context.

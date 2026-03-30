@@ -366,6 +366,15 @@ theorem merge_monotone_right (a b : DatomStore) : b ⊆ merge a b := by
 Let primary(S) = S.datoms (the canonical datom set).
 Let EAVT(S), AEVT(S), VAET(S), AVET(S) be the four secondary indexes.
 
+The store maintains 6 indexes, each a deterministic projection of the primary datom set:
+
+  EAVT(S)  = { d ∈ S | sorted by (entity, attribute, value, tx) }     — primary
+  Entity(S) = { (e, {d ∈ S | d.entity = e}) }                          — entity → datoms
+  Attr(S)   = { (a, {d ∈ S | d.attribute = a}) }                       — attribute → datoms
+  VAET(S)   = { (target, {d ∈ S | d.value = Ref(target)}) }            — reverse refs
+  AVET(S)   = { ((a,v), {d ∈ S | d.attribute = a ∧ d.value = v}) }     — attribute-value → datoms
+  LIVE(S)   = { ((e,a), resolve(a, {d ∈ S | d.entity = e ∧ d.attribute = a})) } — resolved current state
+
 ∀ d ∈ Datom:
   d ∈ primary(S) ⟺ d ∈ EAVT(S) ⟺ d ∈ AEVT(S) ⟺ d ∈ VAET(S) ⟺ d ∈ AVET(S)
 
