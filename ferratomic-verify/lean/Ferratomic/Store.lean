@@ -1,67 +1,171 @@
 /-
-  Ferratomic Store: Formal model of the datom store as a G-Set CRDT semilattice.
+  Ferratomic Store — G-Set CRDT semilattice: formal model and proofs.
 
-  This file defines the core algebraic structure and proves the CRDT properties
-  that are the foundation of Ferratomic's correctness guarantees.
+  Invariants proven:
+    INV-FERR-001  Merge commutativity
+    INV-FERR-002  Merge associativity
+    INV-FERR-003  Merge idempotency
+    INV-FERR-004  Monotonic growth
+    INV-FERR-010  Merge convergence (strong eventual consistency)
+    INV-FERR-012  Content-addressed identity
+    INV-FERR-018  Append-only
 
-  Corresponds to: spec/23-ferratomic.md §23.1 INV-FERR-001..004
-  Traces to: SEED.md §4 Axiom 2
-
-  Development order: These theorems are written BEFORE the Rust implementation.
-  The Rust code must satisfy these properties — the proofs define the contract.
+  Spec: spec/01-core-invariants.md §23.1
+  Foundation: spec/00-preamble.md §23.0.4
 -/
 
 import Mathlib.Data.Finset.Basic
 import Mathlib.Data.Finset.Lattice
 
--- Simplified datom for proof purposes.
--- The full Datom structure (with ByteArray entity, String attribute, etc.)
--- is modeled here as an opaque type with decidable equality.
-variable {Datom : Type} [DecidableEq Datom]
+/-! ### Foundation Model (§23.0.4) -/
 
-/-- A DatomStore is a finite set of datoms. -/
-def DatomStore (Datom : Type) [DecidableEq Datom] := Finset Datom
+/-- A datom is a five-tuple [entity, attribute, value, tx, op].
+    Entity and attribute are modeled as Nat for finiteness.
+    op = true means assert, op = false means retract. -/
+@[ext]
+structure Datom where
+  e  : Nat
+  a  : Nat
+  v  : Nat
+  tx : Nat
+  op : Bool
+  deriving DecidableEq, Repr
 
-namespace DatomStore
+/-- A datom store is a finite set of datoms. -/
+def DatomStore := Finset Datom
 
-/-- Merge is set union. This is the ONLY merge operation. -/
-def merge (a b : Finset Datom) : Finset Datom := a ∪ b
+/-- Merge is set union — the ONLY merge operation. -/
+def merge (a b : DatomStore) : DatomStore := a ∪ b
 
-/-- INV-FERR-001: Merge commutativity.
-    ∀ A B: merge(A, B) = merge(B, A) -/
-theorem merge_comm (a b : Finset Datom) : merge a b = merge b a :=
+/-- Transact: add a datom to the store. -/
+def apply_tx (s : DatomStore) (d : Datom) : DatomStore := s ∪ {d}
+
+/-! ## INV-FERR-001: Merge Commutativity
+
+  ∀ A, B ∈ DatomStore: merge(A, B) = merge(B, A)
+  Proof: set union is commutative. -/
+
+theorem merge_comm (a b : DatomStore) : merge a b = merge b a :=
   Finset.union_comm a b
 
-/-- INV-FERR-002: Merge associativity.
-    ∀ A B C: merge(merge(A, B), C) = merge(A, merge(B, C)) -/
-theorem merge_assoc (a b c : Finset Datom) :
+/-! ## INV-FERR-002: Merge Associativity
+
+  ∀ A, B, C ∈ DatomStore: merge(merge(A, B), C) = merge(A, merge(B, C))
+  Proof: set union is associative. -/
+
+theorem merge_assoc (a b c : DatomStore) :
     merge (merge a b) c = merge a (merge b c) :=
   Finset.union_assoc a b c
 
-/-- INV-FERR-003: Merge idempotency.
-    ∀ A: merge(A, A) = A -/
-theorem merge_idemp (a : Finset Datom) : merge a a = a :=
+/-! ## INV-FERR-003: Merge Idempotency
+
+  ∀ A ∈ DatomStore: merge(A, A) = A
+  Proof: set union is idempotent. -/
+
+theorem merge_idemp (a : DatomStore) : merge a a = a :=
   Finset.union_self a
 
-/-- INV-FERR-004: Monotonic growth (merge direction).
-    ∀ A B: A ⊆ merge(A, B) -/
-theorem merge_mono_left (a b : Finset Datom) : a ⊆ merge a b :=
+/-! ## INV-FERR-004: Monotonic Growth
+
+  ∀ S, d: S ⊆ apply(S, d) and |apply(S, d)| ≥ |S|
+  ∀ A, B: A ⊆ merge(A, B) and B ⊆ merge(A, B) -/
+
+/-- Left input is preserved in merge. -/
+theorem merge_mono_left (a b : DatomStore) : a ⊆ merge a b :=
   Finset.subset_union_left
 
-/-- INV-FERR-004: Monotonic growth (both inputs preserved).
-    ∀ A B: B ⊆ merge(A, B) -/
-theorem merge_mono_right (a b : Finset Datom) : b ⊆ merge a b :=
+/-- Right input is preserved in merge. -/
+theorem merge_mono_right (a b : DatomStore) : b ⊆ merge a b :=
   Finset.subset_union_right
 
-/-- INV-FERR-018: Append-only (transact never removes).
-    ∀ S new: S ⊆ S ∪ new -/
-theorem transact_mono (s new : Finset Datom) : s ⊆ s ∪ new :=
+/-- Transact preserves all existing datoms. -/
+theorem apply_superset (s : DatomStore) (d : Datom) : s ⊆ apply_tx s d :=
   Finset.subset_union_left
 
-/-- INV-FERR-010: Merge convergence.
-    If two stores have merged all of each other's data, they are equal. -/
-theorem merge_convergence (a b : Finset Datom) :
-    merge a b = merge b a :=
+/-- Transact does not decrease cardinality. -/
+theorem apply_monotone (s : DatomStore) (d : Datom) :
+    s.card ≤ (apply_tx s d).card :=
+  Finset.card_le_card (apply_superset s d)
+
+/-! ## INV-FERR-010: Merge Convergence (Strong Eventual Consistency)
+
+  If two replicas receive the same set of updates (in any order),
+  their states are identical. Follows from commutativity + associativity. -/
+
+/-- Merge order is irrelevant (direct corollary of commutativity). -/
+theorem merge_convergence (a b : DatomStore) : merge a b = merge b a :=
   merge_comm a b
 
-end DatomStore
+/-- Merging empty with updates yields the updates (genesis recovery). -/
+theorem convergence_from_empty (updates : DatomStore) :
+    merge ∅ updates = updates :=
+  Finset.empty_union updates
+
+/-- Two replicas starting from empty converge regardless of merge order. -/
+theorem convergence_symmetric (a b : DatomStore) :
+    merge (merge ∅ a) b = merge (merge ∅ b) a := by
+  simp only [merge, Finset.empty_union]
+  exact Finset.union_comm a b
+
+/-! ## INV-FERR-012: Content-Addressed Identity
+
+  d₁ = d₂ ↔ all five fields match. Identity IS content.
+  In Finset, identical datoms merge as one (deduplication by construction). -/
+
+/-- Datom identity is content identity: d₁ = d₂ iff all five fields match. -/
+theorem content_identity (d1 d2 : Datom) :
+    d1 = d2 ↔ (d1.e = d2.e ∧ d1.a = d2.a ∧ d1.v = d2.v ∧
+                d1.tx = d2.tx ∧ d1.op = d2.op) := by
+  constructor
+  · intro h; subst h; exact ⟨rfl, rfl, rfl, rfl, rfl⟩
+  · rintro ⟨he, ha, hv, htx, hop⟩; exact Datom.ext he ha hv htx hop
+
+/-- Adding a datom already present does not change the store. -/
+theorem merge_dedup (a : DatomStore) (d : Datom) (h : d ∈ a) :
+    merge a {d} = a := by
+  unfold merge; ext x
+  simp only [Finset.mem_union, Finset.mem_singleton]
+  constructor
+  · rintro (hx | rfl)
+    · exact hx
+    · exact h
+  · intro hx; exact Or.inl hx
+
+/-- Deduplication preserves cardinality. -/
+theorem dedup_by_content (s : DatomStore) (d : Datom) (h : d ∈ s) :
+    (s ∪ {d}).card = s.card := by
+  have heq : s ∪ {d} = s := by
+    ext x; simp only [Finset.mem_union, Finset.mem_singleton]
+    constructor
+    · rintro (hx | rfl)
+      · exact hx
+      · exact h
+    · intro hx; exact Or.inl hx
+  rw [heq]
+
+/-! ## INV-FERR-018: Append-Only
+
+  No operation removes datoms. The store is monotonically non-decreasing.
+  Retractions are new datoms with op=false — they add, not remove. -/
+
+/-- Transact never removes datoms. -/
+theorem transact_mono (s new_datoms : DatomStore) : s ⊆ s ∪ new_datoms :=
+  Finset.subset_union_left
+
+/-- Merge never removes from left operand. -/
+theorem append_only_merge_left (a b : DatomStore) : a ⊆ merge a b :=
+  merge_mono_left a b
+
+/-- Merge never removes from right operand. -/
+theorem append_only_merge_right (a b : DatomStore) : b ⊆ merge a b :=
+  merge_mono_right a b
+
+/-- Cardinality never decreases under apply. -/
+theorem append_only_card_apply (s : DatomStore) (d : Datom) :
+    s.card ≤ (apply_tx s d).card :=
+  Finset.card_le_card (apply_superset s d)
+
+/-- Cardinality never decreases under merge. -/
+theorem append_only_card_merge (a b : DatomStore) :
+    a.card ≤ (merge a b).card :=
+  Finset.card_le_card (merge_mono_left a b)
