@@ -99,9 +99,13 @@ pub fn cold_start(data_dir: &Path) -> Result<ColdStartResult, FerraError> {
     }
 
     // Level 1b: checkpoint only (no WAL file).
+    // INV-FERR-008: attach a WAL so post-recovery transactions are durable.
     if has_checkpoint && !has_wal {
         if let Ok(store) = crate::checkpoint::load_checkpoint(&checkpoint_path) {
-            let db = Database::from_store(store);
+            let db = match Database::from_store_with_wal(store.clone(), &wal_path) {
+                Ok(db) => db,
+                Err(_) => Database::from_store(store),
+            };
             return Ok(ColdStartResult {
                 database: db,
                 level: RecoveryLevel::CheckpointOnly,

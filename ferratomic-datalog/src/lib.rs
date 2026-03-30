@@ -7,7 +7,7 @@
 //! Facade crate. HOMOMORPHISMS — structure-preserving maps from Store to QueryResult.
 
 #![forbid(unsafe_code)]
-#![deny(clippy::all)]
+#![deny(clippy::all, missing_docs)]
 
 pub mod parser;
 pub mod planner;

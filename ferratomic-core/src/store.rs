@@ -15,14 +15,13 @@
 //! - **INV-FERR-007**: epochs are strictly monotonically increasing.
 //! - **INV-FERR-031**: genesis produces a deterministic store.
 //!
-//! ## Design (Phase 4a)
+//! ## Design
 //!
 //! The primary store uses `im::OrdSet<Datom>` (ADR-FERR-001). Snapshots
 //! are O(1) via structural sharing — `clone()` shares the tree spine.
-//! All four secondary indexes hold identical copies of the primary set —
-//! true per-index sort ordering via newtype key wrappers is deferred to
-//! Phase 4b. This satisfies INV-FERR-005 trivially: every index is a
-//! clone of the primary.
+//! Four secondary indexes (EAVT, AEVT, VAET, AVET) are maintained in
+//! bijection with the primary set via [`Indexes`](crate::indexes::Indexes).
+//! INV-FERR-005 is satisfied by updating all indexes on every insert.
 
 use std::collections::BTreeSet;
 
@@ -45,6 +44,11 @@ use crate::writer::{Committed, Transaction};
 pub struct TxReceipt {
     /// The epoch at which this transaction was committed.
     epoch: u64,
+    /// The datoms inserted by this transaction (stamped with real TxId,
+    /// including tx metadata datoms). Carried here so callers (db.rs)
+    /// can write them to WAL and deliver to observers without recomputing
+    /// via O(n) set difference.
+    datoms: Vec<Datom>,
 }
 
 impl TxReceipt {
@@ -55,6 +59,13 @@ impl TxReceipt {
     #[must_use]
     pub fn epoch(&self) -> u64 {
         self.epoch
+    }
+
+    /// The datoms inserted by this transaction, stamped with the real
+    /// TxId and including tx metadata datoms (:tx/time, :tx/agent).
+    #[must_use]
+    pub fn datoms(&self) -> &[Datom] {
+        &self.datoms
     }
 }
 
@@ -193,8 +204,8 @@ impl Store {
         // INV-FERR-043: shared attributes must have identical definitions.
         // INV-FERR-001: schema merge must be commutative. When both stores
         // define the same attribute with different definitions, we keep the
-        // one that sorts first (by Debug representation) for deterministic
-        // symmetry. A debug_assert flags the conflict for diagnosis.
+        // one that sorts first (by Ord) for deterministic symmetry.
+        // A debug_assert flags the conflict for diagnosis.
         let mut schema = Schema::empty();
         for (attr, def) in a.schema.iter().chain(b.schema.iter()) {
             match schema.get(attr) {
@@ -210,7 +221,7 @@ impl Store {
                             "INV-FERR-043: merge found conflicting schema for {attr:?}: \
                              {existing:?} vs {def:?}. Keeping first in sort order.",
                         );
-                        if format!("{def:?}") < format!("{existing:?}") {
+                        if def < existing {
                             schema.define(attr.clone(), def.clone());
                         }
                     }
@@ -287,8 +298,12 @@ impl Store {
     ///
     /// Used by convergence tests that build stores by individual insertion.
     pub fn insert(&mut self, datom: Datom) {
+        // INV-FERR-005: primary first, then indexes. If a panic occurs
+        // between the two operations, the datom is in primary but missing
+        // from indexes (recoverable by rebuild) rather than a phantom
+        // index entry (no primary counterpart).
+        self.datoms.insert(datom.clone());
         self.indexes.insert(&datom);
-        self.datoms.insert(datom);
     }
 
     /// Access the secondary indexes.
@@ -358,15 +373,13 @@ impl Store {
     /// carries no datoms (should not happen for validly committed
     /// transactions, but defended against per NEG-FERR-001).
     #[allow(clippy::needless_pass_by_value)] // Transaction consumed semantically — applied once
-    #[allow(clippy::too_many_lines)] // tx metadata datom creation adds necessary lines
     pub fn transact(&mut self, transaction: Transaction<Committed>) -> Result<TxReceipt, FerraError> {
-        let datoms: Vec<Datom> = transaction.datoms().to_vec();
-
+        let datoms = transaction.datoms().to_vec();
         if datoms.is_empty() {
             return Err(FerraError::EmptyTransaction);
         }
 
-        // INV-FERR-007: advance the epoch before inserting datoms.
+        // INV-FERR-007: advance epoch strictly.
         self.epoch = self.epoch.checked_add(1).ok_or_else(|| {
             FerraError::InvariantViolation {
                 invariant: "INV-FERR-007".to_string(),
@@ -374,72 +387,67 @@ impl Store {
             }
         })?;
 
-        // INV-FERR-015: Generate a real TxId from the new epoch and
-        // the transaction's agent identity. Replaces the placeholder
-        // TxId(0,0,0) that datoms carry from the Transaction builder.
-        let real_tx_id = ferratom::TxId::with_agent(
-            self.epoch,
-            0,
-            transaction.agent(),
-        );
+        // INV-FERR-015: stamp datoms with real TxId + append tx metadata.
+        let real_tx_id = ferratom::TxId::with_agent(self.epoch, 0, transaction.agent());
+        let mut all_datoms = stamp_datoms(datoms, real_tx_id);
+        all_datoms.extend(create_tx_metadata(self.epoch, transaction.agent(), real_tx_id));
 
-        // Re-stamp datoms with the real TxId.
-        let stamped: Vec<Datom> = datoms
-            .into_iter()
-            .map(|d| {
-                Datom::new(
-                    d.entity(),
-                    d.attribute().clone(),
-                    d.value().clone(),
-                    real_tx_id,
-                    d.op(),
-                )
-            })
-            .collect();
+        // INV-FERR-009: evolve schema from schema-defining datoms.
+        crate::schema_evolution::evolve_schema(&mut self.schema, &all_datoms)?;
 
-        // INV-FERR-004: Create tx metadata datoms to guarantee strict growth.
-        // Every transaction adds at least :tx/time and :tx/agent datoms,
-        // so |transact(S, T)| > |S| even if T contains only duplicates.
-        let tx_entity = ferratom::EntityId::from_content(
-            &format!("tx-{}-{}", self.epoch, transaction.agent().as_bytes()[0]).into_bytes(),
-        );
-        #[allow(clippy::cast_possible_truncation)] // i64 millis covers 292 million years
-        let now_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as i64;
+        // INV-FERR-004/005: insert into primary then indexes (bd-4pg).
+        let receipt_datoms = all_datoms.clone();
+        for datom in all_datoms {
+            self.datoms.insert(datom.clone());
+            self.indexes.insert(&datom);
+        }
 
-        let mut all_datoms = stamped;
-        all_datoms.push(Datom::new(
+        Ok(TxReceipt { epoch: self.epoch, datoms: receipt_datoms })
+    }
+
+}
+
+// ---------------------------------------------------------------------------
+// Transaction helpers (private)
+// ---------------------------------------------------------------------------
+
+/// INV-FERR-015: Re-stamp datoms with a real `TxId`, replacing the
+/// placeholder `TxId(0,0,0)` from the Transaction builder.
+fn stamp_datoms(datoms: Vec<Datom>, tx_id: ferratom::TxId) -> Vec<Datom> {
+    datoms
+        .into_iter()
+        .map(|d| Datom::new(d.entity(), d.attribute().clone(), d.value().clone(), tx_id, d.op()))
+        .collect()
+}
+
+/// INV-FERR-004: Create :tx/time and :tx/agent metadata datoms that
+/// guarantee strict growth (every transaction adds at least 2 datoms).
+fn create_tx_metadata(epoch: u64, agent: AgentId, tx_id: ferratom::TxId) -> Vec<Datom> {
+    let tx_entity = ferratom::EntityId::from_content(
+        &format!("tx-{epoch}-{}", agent.as_bytes()[0]).into_bytes(),
+    );
+    #[allow(clippy::cast_possible_truncation)]
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64;
+
+    vec![
+        Datom::new(
             tx_entity,
             Attribute::from("tx/time"),
             ferratom::Value::Instant(now_ms),
-            real_tx_id,
+            tx_id,
             ferratom::Op::Assert,
-        ));
-        all_datoms.push(Datom::new(
+        ),
+        Datom::new(
             tx_entity,
             Attribute::from("tx/agent"),
-            ferratom::Value::Ref(ferratom::EntityId::from_content(
-                transaction.agent().as_bytes(),
-            )),
-            real_tx_id,
+            ferratom::Value::Ref(ferratom::EntityId::from_content(agent.as_bytes())),
+            tx_id,
             ferratom::Op::Assert,
-        ));
-
-        // INV-FERR-009: scan for schema-defining datoms and evolve the schema.
-        crate::schema_evolution::evolve_schema(&mut self.schema, &all_datoms);
-
-        // INV-FERR-004: insert every datom into primary and all indexes.
-        // INV-FERR-005: bijection maintained by touching all structures.
-        for datom in all_datoms {
-            self.indexes.insert(&datom);
-            self.datoms.insert(datom);
-        }
-
-        Ok(TxReceipt { epoch: self.epoch })
-    }
-
+        ),
+    ]
 }
 
 // ---------------------------------------------------------------------------

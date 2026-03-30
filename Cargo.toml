@@ -27,7 +27,8 @@ serde_json = "1"
 zstd = "0.13"
 
 # Async: asupersync is the primary runtime (ADR-FERR-002)
-asupersync = { git = "https://github.com/Dicklesworthstone/asupersync.git", branch = "main" }
+# Pinned 2026-03-30 for reproducible builds.
+asupersync = { git = "https://github.com/Dicklesworthstone/asupersync.git", rev = "27da8095395a230044d7ce603665778ddf46fe00" }
 # Tokio: compat only — confined to asupersync-tokio-compat adapter modules
 tokio = { version = "1", features = ["full"] }
 

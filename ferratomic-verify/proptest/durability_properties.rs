@@ -31,7 +31,7 @@ fn arb_transactions(count: usize) -> impl Strategy<Value = Vec<Vec<(EntityId, At
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(1000))]
+    #![proptest_config(ProptestConfig::with_cases(10_000))]
 
     /// INV-FERR-013: checkpoint(store) → load → identical datom set.
     #[test]

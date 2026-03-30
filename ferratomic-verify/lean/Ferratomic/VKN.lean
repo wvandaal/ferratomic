@@ -210,25 +210,39 @@ structure VKC where
   context_root : CryptoHash
   calibration_root : CryptoHash
 
-/-- VKC verification checks all three components. -/
-noncomputable def verify_vkc (vkc : VKC) : Bool :=
-  verify_tx vkc.signed_tx
+/-- VKC verification checks all three components:
+    (1) signature authenticity, (2) context root match, (3) calibration root match.
+    The `expected_root` comes from the verifier's local store state. -/
+noncomputable def verify_vkc (vkc : VKC) (expected_root : CryptoHash) : Bool :=
+  verify_tx vkc.signed_tx &&
+  decide (vkc.context_root = expected_root) &&
+  decide (vkc.calibration_root = expected_root)
 
-/-- VKC soundness: verification implies authenticity. -/
-theorem vkc_authentic (vkc : VKC) (h : verify_vkc vkc = true) :
-    verify_tx vkc.signed_tx = true := h
+/-- VKC soundness: verification implies signature authenticity AND root agreement. -/
+theorem vkc_authentic (vkc : VKC) (root : CryptoHash)
+    (h : verify_vkc vkc root = true) :
+    verify_tx vkc.signed_tx = true ∧
+    vkc.context_root = root ∧
+    vkc.calibration_root = root := by
+  unfold verify_vkc at h
+  simp [Bool.and_eq_true, decide_eq_true_eq] at h
+  exact h
 
 /-- VKC independent verification: two VKCs can be verified in parallel
-    with no shared state (verification depends only on the VKC's own fields). -/
-theorem vkc_independent (vkc_a vkc_b : VKC) :
-    verify_vkc vkc_a = verify_tx vkc_a.signed_tx ∧
-    verify_vkc vkc_b = verify_tx vkc_b.signed_tx :=
-  ⟨rfl, rfl⟩
+    with no shared state beyond their respective expected roots. -/
+theorem vkc_independent (vkc_a vkc_b : VKC) (root_a root_b : CryptoHash)
+    (ha : verify_vkc vkc_a root_a = true)
+    (hb : verify_vkc vkc_b root_b = true) :
+    (verify_tx vkc_a.signed_tx = true ∧ vkc_a.context_root = root_a) ∧
+    (verify_tx vkc_b.signed_tx = true ∧ vkc_b.context_root = root_b) :=
+  let ⟨sa, ca, _⟩ := vkc_authentic vkc_a root_a ha
+  let ⟨sb, cb, _⟩ := vkc_authentic vkc_b root_b hb
+  ⟨⟨sa, ca⟩, ⟨sb, cb⟩⟩
 
-/-- Creating a VKC with a valid signature produces a verifiable VKC. -/
-theorem vkc_create_verify (sk : SigningKey) (msg ctx cal : CryptoHash) :
+/-- Creating a VKC with matching roots and a valid signature produces a verifiable VKC. -/
+theorem vkc_create_verify (sk : SigningKey) (msg root : CryptoHash) :
     verify_vkc { signed_tx := sign_tx sk msg
-               , context_root := ctx
-               , calibration_root := cal } = true := by
+               , context_root := root
+               , calibration_root := root } root = true := by
   unfold verify_vkc
-  exact signed_verify_roundtrip sk msg
+  simp [signed_verify_roundtrip, decide_eq_true_eq]

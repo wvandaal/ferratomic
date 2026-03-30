@@ -9,12 +9,15 @@
 //! All tests must FAIL initially. Implementation makes them pass.
 
 #![forbid(unsafe_code)]
+#![deny(missing_docs)]
 
 pub mod generators;
 
 #[path = "../stateright/mod.rs"]
 pub mod stateright_models;
 
+// Kani-only module: cfg(kani) is set by the Kani verifier, not rustc.
+#[allow(unexpected_cfgs)]
 #[cfg(kani)]
 #[path = "../kani/mod.rs"]
 pub mod kani;

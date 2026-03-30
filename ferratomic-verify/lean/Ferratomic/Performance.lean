@@ -20,9 +20,6 @@ import Mathlib.Data.Finset.Card
 /-- Genesis is the empty store. -/
 def genesis_model : DatomStore := ∅
 
-/-- Genesis is deterministic (constant function). -/
-theorem genesis_deterministic : genesis_model = genesis_model := rfl
-
 /-- Genesis is the bottom element: every store is a superset. -/
 theorem genesis_bottom (s : DatomStore) : genesis_model ⊆ s :=
   Finset.empty_subset s

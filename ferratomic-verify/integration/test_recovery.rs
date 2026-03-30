@@ -3,7 +3,7 @@
 //! INV-FERR-008.
 //! ALL TESTS MUST FAIL (red phase). Types are not yet implemented.
 
-use ferratom::{AgentId, Attribute, Datom, EntityId, Op, TxId, Value};
+use ferratom::{AgentId, Attribute, EntityId, Value};
 use ferratomic_core::db::Database;
 use ferratomic_core::store::Store;
 use ferratomic_core::wal::Wal;
@@ -42,6 +42,32 @@ fn inv_ferr_008_wal_write_and_recover() {
             1,
             "INV-FERR-008: expected 1 entry, got {}",
             entries.len()
+        );
+
+        // CR-027: Deserialize the recovered payload and verify datom content.
+        let datoms: Vec<ferratom::Datom> =
+            bincode::deserialize(&entries[0].payload)
+                .expect("INV-FERR-008: recovered payload must deserialize as Vec<Datom>");
+        assert_eq!(
+            datoms.len(),
+            1,
+            "INV-FERR-008: recovered entry must contain exactly 1 datom, got {}",
+            datoms.len()
+        );
+        assert_eq!(
+            datoms[0].entity(),
+            EntityId::from_content(b"e1"),
+            "INV-FERR-008: recovered datom entity must match original"
+        );
+        assert_eq!(
+            datoms[0].attribute().as_str(),
+            "user/name",
+            "INV-FERR-008: recovered datom attribute must match original"
+        );
+        assert_eq!(
+            *datoms[0].value(),
+            Value::String("Alice".into()),
+            "INV-FERR-008: recovered datom value must match original"
         );
     }
 }

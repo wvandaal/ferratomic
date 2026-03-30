@@ -40,11 +40,6 @@ theorem filter_biUnion_comm {ι : Type*} [DecidableEq ι] (stores : Finset ι)
   The function signature of apply_tx has no network/quorum parameter.
   This IS the proof: the type system encodes partition safety. -/
 
-/-- Writes are always safe: apply_tx is a total function on local state. -/
-theorem partition_safe_write (s : DatomStore) (d : Datom) :
-    ∃ s', s' = apply_tx s d :=
-  ⟨apply_tx s d, rfl⟩
-
 /-- After partition heals: merge restores full state from both sides. -/
 theorem partition_recovery (side_a side_b : DatomStore) :
     side_a ⊆ merge side_a side_b ∧ side_b ⊆ merge side_a side_b :=

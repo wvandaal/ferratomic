@@ -220,10 +220,10 @@ impl Transaction<Building> {
                     ));
                 }
                 Some(attr_def) => {
-                    if !value_matches_type(datom.value(), &attr_def.value_type) {
+                    if !value_matches_type(datom.value(), attr_def.value_type()) {
                         return Err(TxValidationError::SchemaViolation {
                             attribute: attr_name.as_str().to_owned(),
-                            expected: format!("{:?}", attr_def.value_type),
+                            expected: format!("{:?}", attr_def.value_type()),
                             got: format!("{:?}", datom.value()),
                         });
                     }
@@ -320,21 +320,11 @@ mod tests {
         let mut attrs = HashMap::new();
         attrs.insert(
             Attribute::from("user/name"),
-            AttributeDef {
-                value_type: ValueType::String,
-                cardinality: Cardinality::One,
-                resolution_mode: ResolutionMode::Lww,
-                doc: None,
-            },
+            AttributeDef::new(ValueType::String, Cardinality::One, ResolutionMode::Lww, None),
         );
         attrs.insert(
             Attribute::from("user/age"),
-            AttributeDef {
-                value_type: ValueType::Long,
-                cardinality: Cardinality::One,
-                resolution_mode: ResolutionMode::Lww,
-                doc: None,
-            },
+            AttributeDef::new(ValueType::Long, Cardinality::One, ResolutionMode::Lww, None),
         );
         Schema::from_attrs(attrs)
     }

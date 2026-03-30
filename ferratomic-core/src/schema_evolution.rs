@@ -12,7 +12,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use ferratom::{
-    Attribute, AttributeDef, Cardinality, Datom, EntityId, ResolutionMode, Schema, ValueType,
+    Attribute, AttributeDef, Cardinality, Datom, EntityId, FerraError, ResolutionMode, Schema,
+    ValueType,
 };
 
 /// Build the deterministic genesis meta-schema with 19 axiomatic attributes.
@@ -26,36 +27,21 @@ use ferratom::{
 pub fn genesis_schema() -> Schema {
     let mut schema = Schema::empty();
 
-    let lww_kw = |doc: &str| AttributeDef {
-        value_type: ValueType::Keyword,
-        cardinality: Cardinality::One,
-        resolution_mode: ResolutionMode::Lww,
-        doc: Some(Arc::from(doc)),
-    };
-    let lww_str = |doc: &str| AttributeDef {
-        value_type: ValueType::String,
-        cardinality: Cardinality::One,
-        resolution_mode: ResolutionMode::Lww,
-        doc: Some(Arc::from(doc)),
-    };
-    let lww_bool = |doc: &str| AttributeDef {
-        value_type: ValueType::Boolean,
-        cardinality: Cardinality::One,
-        resolution_mode: ResolutionMode::Lww,
-        doc: Some(Arc::from(doc)),
-    };
-    let lww_ref = |doc: &str| AttributeDef {
-        value_type: ValueType::Ref,
-        cardinality: Cardinality::One,
-        resolution_mode: ResolutionMode::Lww,
-        doc: Some(Arc::from(doc)),
-    };
-    let lww_instant = |doc: &str| AttributeDef {
-        value_type: ValueType::Instant,
-        cardinality: Cardinality::One,
-        resolution_mode: ResolutionMode::Lww,
-        doc: Some(Arc::from(doc)),
-    };
+    let lww_kw = |doc: &str| AttributeDef::new(
+        ValueType::Keyword, Cardinality::One, ResolutionMode::Lww, Some(Arc::from(doc)),
+    );
+    let lww_str = |doc: &str| AttributeDef::new(
+        ValueType::String, Cardinality::One, ResolutionMode::Lww, Some(Arc::from(doc)),
+    );
+    let lww_bool = |doc: &str| AttributeDef::new(
+        ValueType::Boolean, Cardinality::One, ResolutionMode::Lww, Some(Arc::from(doc)),
+    );
+    let lww_ref = |doc: &str| AttributeDef::new(
+        ValueType::Ref, Cardinality::One, ResolutionMode::Lww, Some(Arc::from(doc)),
+    );
+    let lww_instant = |doc: &str| AttributeDef::new(
+        ValueType::Instant, Cardinality::One, ResolutionMode::Lww, Some(Arc::from(doc)),
+    );
 
     // 1-9: db/* attributes (meta-schema)
     schema.define(Attribute::from("db/ident"), lww_kw("Attribute identity keyword"));
@@ -90,7 +76,13 @@ pub fn genesis_schema() -> Schema {
 /// INV-FERR-009: schema evolution is a transaction. When a transaction
 /// contains datoms with `db/ident`, `db/valueType`, and `db/cardinality`
 /// all sharing the same entity, a new attribute is installed.
-pub fn evolve_schema(schema: &mut Schema, datoms: &[Datom]) {
+///
+/// # Errors
+///
+/// Returns `FerraError::SchemaViolation` if a single entity carries
+/// conflicting values for `db/ident`, `db/valueType`, or `db/cardinality`
+/// within the same transaction (bd-ty5 / CR-037).
+pub fn evolve_schema(schema: &mut Schema, datoms: &[Datom]) -> Result<(), FerraError> {
     let mut by_entity: HashMap<EntityId, Vec<&Datom>> = HashMap::new();
     for datom in datoms {
         by_entity.entry(datom.entity()).or_default().push(datom);
@@ -108,15 +100,47 @@ pub fn evolve_schema(schema: &mut Schema, datoms: &[Datom]) {
         for datom in entity_datoms {
             if datom.attribute() == &db_ident {
                 if let ferratom::Value::Keyword(kw) = datom.value() {
-                    ident = Some(kw.as_ref());
+                    let new_val = kw.as_ref();
+                    if let Some(prev) = ident {
+                        if prev != new_val {
+                            return Err(FerraError::SchemaViolation {
+                                attribute: "db/ident".to_string(),
+                                expected: prev.to_string(),
+                                got: new_val.to_string(),
+                            });
+                        }
+                    }
+                    ident = Some(new_val);
                 }
             } else if datom.attribute() == &db_value_type {
                 if let ferratom::Value::Keyword(kw) = datom.value() {
-                    value_type = parse_value_type(kw);
+                    if let Some(new_vt) = parse_value_type(kw) {
+                        if let Some(ref prev_vt) = value_type {
+                            if *prev_vt != new_vt {
+                                return Err(FerraError::SchemaViolation {
+                                    attribute: "db/valueType".to_string(),
+                                    expected: format!("{prev_vt:?}"),
+                                    got: format!("{new_vt:?}"),
+                                });
+                            }
+                        }
+                        value_type = Some(new_vt);
+                    }
                 }
             } else if datom.attribute() == &db_cardinality {
                 if let ferratom::Value::Keyword(kw) = datom.value() {
-                    cardinality = parse_cardinality(kw);
+                    if let Some(new_card) = parse_cardinality(kw) {
+                        if let Some(ref prev_card) = cardinality {
+                            if *prev_card != new_card {
+                                return Err(FerraError::SchemaViolation {
+                                    attribute: "db/cardinality".to_string(),
+                                    expected: format!("{prev_card:?}"),
+                                    got: format!("{new_card:?}"),
+                                });
+                            }
+                        }
+                        cardinality = Some(new_card);
+                    }
                 }
             }
         }
@@ -124,15 +148,11 @@ pub fn evolve_schema(schema: &mut Schema, datoms: &[Datom]) {
         if let (Some(name), Some(vt), Some(card)) = (ident, value_type, cardinality) {
             schema.define(
                 Attribute::from(name),
-                AttributeDef {
-                    value_type: vt,
-                    cardinality: card,
-                    resolution_mode: ResolutionMode::Lww,
-                    doc: None,
-                },
+                AttributeDef::new(vt, card, ResolutionMode::Lww, None),
             );
         }
     }
+    Ok(())
 }
 
 /// Parse a `db.type/*` keyword into a `ValueType`.

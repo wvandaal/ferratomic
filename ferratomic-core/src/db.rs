@@ -120,7 +120,7 @@ impl Database {
 
         let mut store = Store::genesis();
         for entry in &entries {
-            let datoms: Vec<ferratom::Datom> = serde_json::from_slice(&entry.payload)
+            let datoms: Vec<ferratom::Datom> = bincode::deserialize(&entry.payload)
                 .map_err(|e| FerraError::WalRead(e.to_string()))?;
             // Re-insert recovered datoms directly (they already have real TxIds).
             for datom in datoms {
@@ -158,7 +158,7 @@ impl Database {
 
         for entry in &entries {
             if entry.epoch > checkpoint_epoch {
-                let datoms: Vec<ferratom::Datom> = serde_json::from_slice(&entry.payload)
+                let datoms: Vec<ferratom::Datom> = bincode::deserialize(&entry.payload)
                     .map_err(|e| FerraError::WalRead(e.to_string()))?;
                 for datom in datoms {
                     store.insert(datom);
@@ -298,14 +298,12 @@ impl Database {
 
         // Step 1: Apply transaction to a cloned store (stamps TxIds, creates
         // tx metadata datoms). The clone is NOT yet published.
+        // TxReceipt carries the inserted datoms directly — no O(n) set
+        // difference needed. This is O(m) where m = transaction datom count.
         let current = self.current.load();
         let mut new_store = Store::clone(&current);
         let receipt = new_store.transact(transaction)?;
-        let diff = new_store
-            .datom_set()
-            .clone()
-            .difference(current.datom_set().clone());
-        let new_datoms: Vec<ferratom::Datom> = diff.into_iter().collect();
+        let new_datoms = receipt.datoms().to_vec();
 
         // Step 2: INV-FERR-008: Write WAL with STAMPED datoms BEFORE publishing.
         // durable(WAL(T)) BEFORE visible(SNAP(e)).
@@ -313,7 +311,7 @@ impl Database {
         {
             let mut wal_guard = self.wal.lock().map_err(|_| FerraError::Backpressure)?;
             if let Some(ref mut wal) = *wal_guard {
-                let payload = serde_json::to_vec(&new_datoms)
+                let payload = bincode::serialize(&new_datoms)
                     .map_err(|e| FerraError::WalWrite(e.to_string()))?;
                 wal.append_raw(receipt.epoch(), &payload)?;
                 wal.fsync()?;
@@ -323,6 +321,16 @@ impl Database {
         // Step 3: Atomic swap — readers loading after this point see the new state.
         // INV-FERR-006 preserved: im::OrdSet nodes are reference-counted.
         self.current.store(Arc::new(new_store));
+
+        // Release write lock and backpressure slot BEFORE observer delivery
+        // (bd-jxi / CR-032). Slow observer on_commit callbacks no longer
+        // block concurrent transact() callers. WAL + ArcSwap are already
+        // committed; observer delivery is best-effort at-least-once.
+        drop(_guard);
+        drop(_write_slot);
+
+        // Step 4: Observer delivery (outside write lock scope).
+        // INV-FERR-011: delivery serialized by observers mutex, not write lock.
         let published = self.current.load();
         let mut observers = self
             .observers

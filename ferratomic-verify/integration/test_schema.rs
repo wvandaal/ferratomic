@@ -3,7 +3,7 @@
 //! INV-FERR-009, INV-FERR-031.
 //! ALL TESTS MUST FAIL (red phase). Types are not yet implemented.
 
-use ferratom::{AgentId, Attribute, EntityId, Op, TxId, Value};
+use ferratom::{AgentId, Attribute, EntityId, Value};
 use ferratomic_core::store::Store;
 use ferratomic_core::writer::{Transaction, TxValidationError};
 

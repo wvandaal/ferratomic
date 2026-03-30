@@ -18,7 +18,7 @@
 //! Implements the G-Set CRDT semilattice (INV-FERR-001..003).
 
 #![forbid(unsafe_code)]
-#![deny(clippy::all)]
+#![deny(clippy::all, missing_docs)]
 #![warn(clippy::pedantic)]
 
 pub mod indexes;

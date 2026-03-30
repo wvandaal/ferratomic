@@ -886,7 +886,7 @@ theorem partition_detected_in_two_rounds (target : Nat) :
 ### INV-FERR-035: Partition-Safe Operation
 
 **Traces to**: SEED.md §4, C4, INV-FERR-001 through INV-FERR-003 (CRDT laws)
-**Verification**: `V:PROP`, `V:MODEL`, `V:LEAN`
+**Verification**: `V:PROP`, `V:MODEL`
 **Stage**: 0
 
 #### Level 0 (Algebraic Law)
