@@ -53,6 +53,8 @@ structure HLC where
 def HLC.lt (a b : HLC) : Prop :=
   a.physical < b.physical ∨ (a.physical = b.physical ∧ a.logical < b.logical)
 
+instance : LT HLC := ⟨HLC.lt⟩
+
 /-- Local tick: advance the HLC given current wall clock. -/
 def hlc_tick (prev : HLC) (wall : Nat) : HLC :=
   if wall > prev.physical then ⟨wall, 0⟩
