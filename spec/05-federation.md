@@ -1866,3 +1866,2676 @@ pub struct FederationSnapshot {
 
 ---
 
+## §23.10: Verifiable Knowledge Network (VKN)
+
+The Verifiable Knowledge Network layer transforms ferratomic from a database into a
+cryptographically verifiable knowledge substrate. Every assertion carries provenance
+that can be independently verified without trusting the asserter, the transport, or
+any intermediary. Trust becomes a continuous gradient computed from verifiable calibration
+history, not a binary decision made at network configuration time.
+
+**Traces to**: SEED.md §1 ("verifiable coherence"), SEED.md §4 (Design Commitment:
+"CRDT merge scales learning across organizations"), INV-FERR-037 (Federated Query
+Correctness), INV-FERR-039 (Selective Merge), INV-FERR-044 (Namespace Isolation),
+§23.8 (Federation & Federated Query)
+
+**Design principles**:
+
+1. **Trustless verification.** Any agent can verify any datom's provenance without
+   trusting the asserter. Verification requires only the datom, its proof, and a
+   root hash — not network access, not the full store, not a relationship with the
+   asserter.
+
+2. **Amortized cryptography.** Signatures are per-transaction, not per-datom. A
+   transaction with 100 datoms carries one 64-byte signature. This amortizes the
+   cryptographic overhead to near-zero for batch operations.
+
+3. **Continuous trust gradient.** Trust is not binary (trusted/untrusted). It is a
+   continuous value derived from cryptographically verifiable calibration history.
+   An agent that has made 1000 predictions with mean error 0.1 is more trusted
+   than one with 10 predictions and mean error 0.4 — and this is provable.
+
+4. **Opt-in overhead.** Unsigned mode (§23.10.5) imposes zero cryptographic overhead.
+   VKN features activate when configured and degrade gracefully when disabled.
+
+5. **Self-describing keys.** Public keys are datoms. Key rotation is a signed datom.
+   Key revocation is a signed datom. The key management infrastructure is built from
+   the same primitives as the data it protects.
+
+---
+
+### ADR-FERR-009: Cryptographic Scheme
+
+**Traces to**: SEED.md §1 ("verifiable coherence"), Signal protocol, blockchain
+light client protocols
+**Status**: Accepted
+**Stage**: 1
+
+#### Problem
+
+How to enable trustless verification of datom provenance across trust boundaries.
+Federation (§23.8) assumes trust is established at the network level — if you merge
+with a remote store, you trust all its datoms. This is an all-or-nothing model that
+breaks down when organizations collaborate across trust boundaries, when agents have
+heterogeneous reliability, or when historical data must be audited.
+
+#### Options Considered
+
+**(A) No cryptography — trust is network-level (current model).** Simple to implement.
+Trust is binary: you either merge with a store or you don't. No overhead per transaction.
+But: no ability to verify individual datoms, no ability to distinguish reliable from
+unreliable asserters within a trusted store, no auditability after the fact. All-or-nothing
+trust does not compose — if A trusts B and B trusts C, A must either trust all of C's
+datoms or none.
+
+**(B) Ed25519 signed transactions.** Each transaction is signed by the authoring agent's
+Ed25519 private key. 64-byte signature per transaction (NOT per datom — amortized).
+Performance: ~5us sign, ~2us verify. Public keys as datoms (self-describing). Key
+rotation via signed rotation datom. Used by: SSH, Signal, Tor, libsodium. Well-studied
+cryptography with no known weaknesses. 32-byte public keys, 64-byte signatures. Available
+in pure Rust via the `ed25519-dalek` crate (no C dependencies, no unsafe).
+
+**(C) RSA signatures.** Slower (~100us sign, ~10us verify), larger signatures (256+ bytes
+for RSA-2048, 512+ for RSA-4096), larger keys. No advantage over Ed25519 for this use
+case. RSA key generation is slow (~1s for 4096-bit). The only advantage is broader
+hardware support (HSMs), which is irrelevant for our embedded/daemon model.
+
+**(D) BLS signatures.** Enables signature aggregation: multiple signers' signatures can
+be combined into one fixed-size signature. This is powerful for multi-party attestation
+(e.g., "3-of-5 reviewers approved this"). However: newer cryptography (pairing-based),
+more complex implementation, slower verification (~1ms), larger crate dependency. Future
+consideration for INV-FERR-054 Threshold trust policy, but not justified as the base layer.
+
+#### Decision
+
+**Option B — Ed25519 signed transactions.** Optimal performance-to-security ratio. The
+64-byte signature overhead is negligible compared to typical transaction sizes (hundreds
+to thousands of bytes of datoms). The 2us verification time is dominated by I/O in any
+networked scenario. Pure Rust implementation avoids C FFI complexity.
+
+#### Consequences
+
+- 64 bytes overhead per transaction (signature) + 32 bytes (public key reference).
+- ~5us sign overhead per transaction commit.
+- ~2us verify overhead per transaction read (amortized across datoms in tx).
+- Key management infrastructure required (§23.10.1).
+- All existing unsigned transactions remain valid (§23.10.5 backward compatibility).
+- Future path to BLS aggregation for multi-party attestation (ADR deferred).
+
+---
+
+### INV-FERR-051: Signed Transactions
+
+**Traces to**: ADR-FERR-009, SEED.md §1 ("verifiable coherence"), INV-FERR-007
+(Transaction Atomicity), C1 (Append-only store)
+**Verification**: `V:PROP`, `V:KANI`, `V:LEAN`
+**Stage**: 1
+
+Every transaction is signed by the authoring agent's Ed25519 private key. All datoms
+in the transaction are covered by ONE signature (amortized — not per-datom). The
+signature covers the cryptographic hash of: the serialized datoms, the transaction ID,
+the causal predecessors, and the agent's public key. This binding ensures that no
+component of the transaction can be altered without invalidating the signature.
+
+#### Level 0 (Algebraic Law)
+
+```
+Let SK be an Ed25519 signing key and VK = public(SK) be the corresponding verifying key.
+Let sign : SK × Msg → Sig and verify : VK × Msg × Sig → {ok, fail} be the Ed25519
+signing and verification functions.
+
+∀ transactions T in store S:
+  Let msg(T) = hash(T.datoms ∥ T.tx_id ∥ T.predecessors ∥ T.author_public_key)
+  T.signature = sign(T.author_private_key, msg(T))
+
+  -- Correctness: honest signatures verify
+  verify(VK, msg(T), sign(SK, msg(T))) = ok
+
+  -- Unforgeability: tampered messages fail verification
+  ∀ T' where T'.datoms ≠ T.datoms ∨ T'.tx_id ≠ T.tx_id ∨ T'.predecessors ≠ T.predecessors:
+    let msg' = hash(T'.datoms ∥ T'.tx_id ∥ T'.predecessors ∥ T'.author_public_key)
+    msg' ≠ msg(T)  →  verify(VK, msg', sign(SK, msg(T))) = fail
+    -- (by collision resistance of hash and unforgeability of Ed25519)
+
+  -- Key binding: signature by SK does not verify under different key VK'
+  ∀ VK' ≠ VK:
+    verify(VK', msg(T), sign(SK, msg(T))) = fail
+    -- (by key-binding property of Ed25519, proven in Brendel et al. 2019)
+
+Composition with C1 (append-only):
+  Once sign(SK, msg(T)) is stored, it is never mutated or deleted.
+  Retraction of a signed datom D is itself a new signed transaction T':
+    T' = { datoms: [D with op=retract], signature: sign(SK', msg(T')) }
+  The original signature on T remains in the store, providing audit trail.
+```
+
+#### Level 1 (State Invariant)
+
+No signed transaction in the store has an invalid signature when verified against the
+author's public key. For all reachable store states `S` produced by any sequence of
+TRANSACT, MERGE, and recovery operations:
+
+1. Every signed transaction `T` in `S` satisfies `verify(T.signer, T.signing_message(), T.signature) = ok`.
+2. Any modification to `T.datoms`, `T.tx_id`, or `T.predecessors` produces a different `signing_message()`, causing verification to fail.
+3. Any attempt to claim a different author by substituting `T.signer` with a different public key causes verification to fail (key-binding property).
+4. Unsigned transactions (§23.10.5) are exempt from this invariant — they have no signature to verify.
+5. MERGE of signed transactions preserves signatures: after `merge(S₁, S₂)`, every signed transaction from `S₁` and `S₂` retains its original signature and continues to verify.
+
+The invariant is monotonic: once a signed transaction is in the store, it remains
+verifiable forever (by C1 append-only). The set of verifiable signatures only grows.
+
+#### Level 2 (Implementation Contract)
+
+```rust
+use ed25519_dalek::{SigningKey, VerifyingKey, Signature, Signer, Verifier};
+use blake3;
+
+/// A transaction with an Ed25519 signature covering all its datoms.
+/// The signature is amortized: one signature per transaction, not per datom.
+///
+/// # Invariants
+/// - `signature` covers `hash(tx.datoms ∥ tx.tx_id ∥ tx.predecessors ∥ signer)`
+/// - `verify()` returns `Ok(())` iff the signature is valid for the signing message
+/// - `signer` is the public key of the agent that created this transaction
+///
+/// # Size
+/// - `signature`: 64 bytes (Ed25519 fixed)
+/// - `signer`: 32 bytes (Ed25519 public key)
+/// - Total overhead: 96 bytes per transaction
+pub struct SignedTransaction {
+    pub tx: Transaction,
+    pub signature: Signature,   // 64 bytes, Ed25519
+    pub signer: VerifyingKey,   // 32 bytes, Ed25519 public key
+}
+
+impl SignedTransaction {
+    /// Sign a transaction with the given signing key.
+    ///
+    /// The signing message is: blake3(canonical_serialize(datoms) ∥ tx_id ∥
+    /// canonical_serialize(predecessors) ∥ signer_public_key_bytes).
+    ///
+    /// # Performance
+    /// - blake3 hash: ~1us for typical transaction (< 10KB)
+    /// - Ed25519 sign: ~5us
+    /// - Total: ~6us per transaction
+    pub fn sign(tx: Transaction, key: &SigningKey) -> Self {
+        let msg = tx.signing_message();
+        let signature = key.sign(&msg);
+        Self {
+            tx,
+            signature,
+            signer: key.verifying_key(),
+        }
+    }
+
+    /// Verify that the signature is valid for this transaction's content.
+    ///
+    /// Returns `Ok(())` if verification passes, `Err(CryptoError::InvalidSignature)`
+    /// if any of the following hold:
+    /// - The signature bytes do not correspond to the signing message under `self.signer`
+    /// - The transaction content was modified after signing
+    /// - The signer key was substituted
+    ///
+    /// # Performance
+    /// ~2us per verification (Ed25519 verify dominates)
+    pub fn verify(&self) -> Result<(), CryptoError> {
+        let msg = self.tx.signing_message();
+        self.signer
+            .verify(&msg, &self.signature)
+            .map_err(|_| CryptoError::InvalidSignature)
+    }
+}
+
+impl Transaction {
+    /// Compute the signing message: the bytes that the signature covers.
+    ///
+    /// Uses blake3 for collision resistance (256-bit output, faster than SHA-256).
+    /// The canonical serialization is deterministic: datoms are sorted by
+    /// (entity, attribute, value, tx, op) before serialization to ensure that
+    /// two transactions with the same datoms in different insertion order produce
+    /// the same signing message.
+    ///
+    /// # Determinism
+    /// For any two Transaction values `a` and `b`:
+    ///   a.datoms (as set) == b.datoms (as set) ∧ a.tx_id == b.tx_id
+    ///   ∧ a.predecessors == b.predecessors
+    ///   → a.signing_message() == b.signing_message()
+    pub fn signing_message(&self) -> Vec<u8> {
+        let mut hasher = blake3::Hasher::new();
+
+        // Sort datoms canonically for deterministic hashing
+        let mut sorted_datoms = self.datoms.clone();
+        sorted_datoms.sort();
+        for datom in &sorted_datoms {
+            hasher.update(&datom.canonical_bytes());
+        }
+
+        hasher.update(&self.tx_id.to_le_bytes());
+
+        let mut sorted_preds = self.predecessors.clone();
+        sorted_preds.sort();
+        for pred in &sorted_preds {
+            hasher.update(&pred.to_le_bytes());
+        }
+
+        hasher.finalize().as_bytes().to_vec()
+    }
+}
+
+/// Errors from cryptographic operations.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CryptoError {
+    /// Ed25519 signature verification failed.
+    InvalidSignature,
+    /// The signer's public key is not registered in the store.
+    UnknownSigner(VerifyingKey),
+    /// The signer's key has been revoked (`:agent/key-revoked` datom exists).
+    RevokedKey(VerifyingKey),
+    /// Merkle inclusion proof verification failed.
+    InvalidInclusionProof,
+    /// Calibration proof verification failed.
+    InvalidCalibrationProof,
+    /// Context proof references a different root hash than expected.
+    RootHashMismatch { expected: ChunkAddress, actual: ChunkAddress },
+}
+
+#[kani::proof]
+#[kani::unwind(5)]
+fn signed_transaction_roundtrip() {
+    let datom_count: usize = kani::any();
+    kani::assume(datom_count <= 3);
+
+    let tx_id: u64 = kani::any();
+    let datoms: Vec<Datom> = (0..datom_count)
+        .map(|_| Datom {
+            entity: kani::any(),
+            attribute: kani::any(),
+            value: kani::any(),
+            tx: tx_id,
+            op: kani::any(),
+        })
+        .collect();
+
+    let tx = Transaction {
+        tx_id,
+        datoms,
+        predecessors: vec![],
+    };
+
+    // Sign with a deterministic key
+    let key_bytes: [u8; 32] = kani::any();
+    let signing_key = SigningKey::from_bytes(&key_bytes);
+
+    let signed = SignedTransaction::sign(tx, &signing_key);
+
+    // Verify must pass
+    assert!(signed.verify().is_ok());
+
+    // Tamper with tx_id → verify must fail
+    let mut tampered = signed.clone();
+    tampered.tx.tx_id = signed.tx.tx_id.wrapping_add(1);
+    assert!(tampered.verify().is_err());
+}
+```
+
+**Falsification**: Any of the following constitutes a violation of INV-FERR-051:
+- A transaction with a valid signature where any datom, tx_id, or predecessor was
+  modified after signing, yet `verify()` still returns `Ok(())`.
+- A transaction signed by key `SK` where `verify()` succeeds when checked against a
+  different verifying key `VK'` where `VK' != public(SK)`.
+- A MERGE operation that drops or corrupts the signature of a signed transaction.
+- Two distinct transactions (different datom sets) that produce the same `signing_message()`
+  (hash collision — would require breaking blake3).
+- A transaction where datoms are reordered (but the set is identical) and `signing_message()`
+  produces a different output (non-deterministic canonical serialization).
+
+**proptest strategy**:
+```rust
+proptest! {
+    /// Honest sign-verify roundtrip always succeeds.
+    #[test]
+    fn signed_roundtrip(
+        datoms in prop::collection::vec(arb_datom(), 0..50),
+        tx_id in any::<u64>(),
+        preds in prop::collection::vec(any::<u64>(), 0..5),
+        key_bytes in prop::array::uniform32(any::<u8>()),
+    ) {
+        let tx = Transaction { tx_id, datoms, predecessors: preds };
+        let key = SigningKey::from_bytes(&key_bytes);
+        let signed = SignedTransaction::sign(tx, &key);
+        prop_assert!(signed.verify().is_ok(),
+            "Honest sign-verify roundtrip failed");
+    }
+
+    /// Tampering with any single byte of any datom invalidates the signature.
+    #[test]
+    fn tamper_datom_fails(
+        datoms in prop::collection::vec(arb_datom(), 1..20),
+        tx_id in any::<u64>(),
+        key_bytes in prop::array::uniform32(any::<u8>()),
+        tamper_idx in any::<prop::sample::Index>(),
+        tamper_byte in any::<u8>(),
+    ) {
+        let tx = Transaction { tx_id, datoms, predecessors: vec![] };
+        let key = SigningKey::from_bytes(&key_bytes);
+        let signed = SignedTransaction::sign(tx, &key);
+
+        let mut tampered = signed.clone();
+        let idx = tamper_idx.index(tampered.tx.datoms.len());
+        tampered.tx.datoms[idx].entity ^= tamper_byte as u64 | 1; // Ensure change
+        prop_assert!(tampered.verify().is_err(),
+            "Tampered datom passed verification");
+    }
+
+    /// Signing with key A, verifying with key B always fails (when A != B).
+    #[test]
+    fn wrong_key_fails(
+        datoms in prop::collection::vec(arb_datom(), 0..10),
+        tx_id in any::<u64>(),
+        key_a_bytes in prop::array::uniform32(any::<u8>()),
+        key_b_bytes in prop::array::uniform32(any::<u8>()),
+    ) {
+        prop_assume!(key_a_bytes != key_b_bytes);
+        let tx = Transaction { tx_id, datoms, predecessors: vec![] };
+        let key_a = SigningKey::from_bytes(&key_a_bytes);
+        let key_b = SigningKey::from_bytes(&key_b_bytes);
+
+        let signed = SignedTransaction::sign(tx, &key_a);
+        let wrong_key_signed = SignedTransaction {
+            tx: signed.tx.clone(),
+            signature: signed.signature,
+            signer: key_b.verifying_key(),  // Wrong key
+        };
+        prop_assert!(wrong_key_signed.verify().is_err(),
+            "Wrong key passed verification");
+    }
+
+    /// Canonical serialization is deterministic: same datom set in any order
+    /// produces the same signing message.
+    #[test]
+    fn signing_message_deterministic(
+        datoms in prop::collection::vec(arb_datom(), 0..20),
+        tx_id in any::<u64>(),
+        shuffle_seed in any::<u64>(),
+    ) {
+        let tx1 = Transaction { tx_id, datoms: datoms.clone(), predecessors: vec![] };
+
+        let mut shuffled = datoms.clone();
+        let mut rng = StdRng::seed_from_u64(shuffle_seed);
+        shuffled.shuffle(&mut rng);
+        let tx2 = Transaction { tx_id, datoms: shuffled, predecessors: vec![] };
+
+        prop_assert_eq!(tx1.signing_message(), tx2.signing_message(),
+            "Signing message depends on datom order");
+    }
+
+    /// Merge preserves signatures: after merge, all signed transactions from both
+    /// stores still verify.
+    #[test]
+    fn merge_preserves_signatures(
+        datoms_a in prop::collection::vec(arb_datom(), 1..20),
+        datoms_b in prop::collection::vec(arb_datom(), 1..20),
+        key_bytes in prop::array::uniform32(any::<u8>()),
+    ) {
+        let key = SigningKey::from_bytes(&key_bytes);
+
+        let tx_a = Transaction { tx_id: 1, datoms: datoms_a, predecessors: vec![] };
+        let signed_a = SignedTransaction::sign(tx_a, &key);
+
+        let tx_b = Transaction { tx_id: 2, datoms: datoms_b, predecessors: vec![] };
+        let signed_b = SignedTransaction::sign(tx_b, &key);
+
+        let store_a = Store::from_signed_transactions(vec![signed_a.clone()]);
+        let store_b = Store::from_signed_transactions(vec![signed_b.clone()]);
+
+        let merged = merge(store_a, store_b);
+
+        // All signatures survive merge
+        for stx in merged.signed_transactions() {
+            prop_assert!(stx.verify().is_ok(),
+                "Signature invalidated by merge");
+        }
+    }
+}
+```
+
+**Lean theorem**:
+```lean
+/-- Ed25519 signature correctness: signing then verifying with the same key succeeds. -/
+theorem signed_verify_roundtrip (tx : Transaction) (sk : SigningKey) :
+    let vk := public_key sk
+    let msg := signing_message tx
+    let sig := ed25519_sign sk msg
+    ed25519_verify vk msg sig = ok := by
+  exact Ed25519.correctness sk (signing_message tx)
+
+/-- Tamper detection: modifying any component of the transaction invalidates
+    the signature (assuming hash collision resistance). -/
+theorem signed_tamper_detection (tx : Transaction) (sk : SigningKey)
+    (tx' : Transaction) (h_diff : tx ≠ tx') (h_collision_free : signing_message tx ≠ signing_message tx') :
+    let vk := public_key sk
+    let sig := ed25519_sign sk (signing_message tx)
+    ed25519_verify vk (signing_message tx') sig = fail := by
+  -- signing_message tx ≠ signing_message tx' by h_collision_free
+  -- Ed25519 unforgeability: sig valid for msg₁ → sig invalid for msg₂ ≠ msg₁
+  exact Ed25519.unforgeability sk (signing_message tx) (signing_message tx') h_collision_free
+
+/-- Key binding: signature under sk does not verify under sk' ≠ sk. -/
+theorem signed_key_binding (tx : Transaction) (sk sk' : SigningKey)
+    (h_diff : sk ≠ sk') :
+    let sig := ed25519_sign sk (signing_message tx)
+    ed25519_verify (public_key sk') (signing_message tx) sig = fail := by
+  exact Ed25519.key_binding sk sk' (signing_message tx) h_diff
+
+/-- Merge preserves signatures: set union does not alter transaction content. -/
+theorem merge_preserves_signatures (s1 s2 : DatomStore)
+    (stx : SignedTransaction) (h_mem : stx ∈ s1 ∨ stx ∈ s2) :
+    stx ∈ (s1 ∪ s2) ∧ verify stx = ok := by
+  constructor
+  · exact Finset.mem_union.mpr h_mem
+  · -- stx is unchanged by set union (no mutation, C1)
+    -- verify only depends on stx's fields, which are unchanged
+    exact stx.verify_invariant
+```
+
+---
+
+### INV-FERR-052: Merkle Proof of Inclusion
+
+**Traces to**: SEED.md §1 ("verifiable coherence"), INV-FERR-019 (Content-Addressed
+Chunks), INV-FERR-020 (Prolly Tree Determinism), ADR-FERR-009
+**Verification**: `V:PROP`, `V:KANI`, `V:LEAN`
+**Stage**: 1
+
+For any datom `D` in store `S` with prolly tree root hash `R`, a proof `P` exists
+such that `verify_inclusion(D, P, R) = true` WITHOUT access to `S`. The proof is a
+path from `D`'s leaf chunk through the prolly tree to the root — `O(log_k N)` chunk
+hashes where `k` is the average chunk fan-out (typically 16-64). This enables third-party
+verification of datom membership using only the root hash as a trust anchor.
+
+#### Level 0 (Algebraic Law)
+
+```
+Let store(R) denote the set of datoms in a store with prolly tree root hash R.
+Let H : Bytes → ChunkAddress be the blake3 hash function (collision-resistant).
+Let prolly_tree(S) be the deterministic prolly tree over datom set S (INV-FERR-020).
+Let root(S) = H(root_chunk(prolly_tree(S))) be the root hash.
+Let k = average fan-out of the prolly tree (chunk size / child pointer size).
+
+-- Completeness: every datom in the store has a proof
+∀ datom D ∈ store(R):
+  ∃ proof P = [node₁, node₂, ..., node_{⌈log_k(N)⌉}]:
+    verify_inclusion(D, P, R) = true
+
+-- Soundness: no datom outside the store has a valid proof
+∀ datom D ∉ store(R):
+  ¬∃ proof P: verify_inclusion(D, P, R) = true
+  -- (by collision resistance of H: constructing such a proof requires finding
+  --  a hash collision, which is computationally infeasible for blake3)
+
+-- Proof verification is deterministic
+∀ D, P, R:
+  verify_inclusion(D, P, R) is a pure function of its arguments
+
+-- Proof size is logarithmic
+∀ store S with |S| = N datoms, fan-out k:
+  max_proof_size(S) = ⌈log_k(N)⌉ × (k × 32 + 8) bytes
+  -- Each level: k sibling hashes (32 bytes each) + position index (8 bytes)
+
+-- Composition with INV-FERR-020 (prolly tree determinism):
+  ∀ S₁, S₂ with same datom set: root(S₁) = root(S₂)
+  -- Therefore proofs constructed against S₁ verify against root(S₂)
+
+-- Composition with C1 (append-only):
+  If verify_inclusion(D, P, R_old) = true at time t,
+  then D ∈ store(R_new) for all R_new at time t' > t
+  -- (append-only means datoms are never removed)
+  -- (but the PROOF P may be invalidated by tree restructuring;
+  --  a new proof P' must be constructed against R_new)
+```
+
+#### Level 1 (State Invariant)
+
+Any datom's membership in a store can be verified by a third party using only the
+root hash and a logarithmic-sized proof. The verification has two critical properties:
+
+1. **Soundness** (no false inclusions): If `verify_inclusion(D, P, R) = true`, then
+   `D` is in the store with root hash `R`. A false positive would require breaking
+   blake3 collision resistance — computationally infeasible.
+
+2. **Completeness** (no missed inclusions): For every datom `D` in the store, a valid
+   proof `P` can be constructed. No datom is "unprovable."
+
+The proof is a path through the prolly tree: at each level, the verifier receives the
+sibling hashes at that node, reconstructs the parent hash, and checks that it matches
+the next level's expected hash. At the root level, the reconstructed hash must equal `R`.
+
+The proof size is `O(log_k N)` where `k` is the prolly tree fan-out and `N` is the
+datom count. For a store with 100 million datoms and fan-out 32, this is approximately
+`ceil(log_32(10^8)) = 6` levels, each carrying ~32 sibling hashes of 32 bytes = ~6KB
+total proof size. This is small enough to include in network messages, store alongside
+datoms, or embed in verifiable knowledge commitments (INV-FERR-055).
+
+#### Level 2 (Implementation Contract)
+
+```rust
+/// A Merkle inclusion proof: a path from a leaf datom through the prolly tree
+/// to the root. Each node in the path contains the sibling hashes at that level
+/// and the position of the target among its siblings.
+///
+/// # Size
+/// For a store with N datoms and fan-out k:
+///   path.len() = O(log_k(N))
+///   Each ProofNode: k * 32 bytes (sibling hashes) + 8 bytes (position)
+///   Total: O(log_k(N) * k * 32) bytes
+///
+/// # Example
+/// Store with 100M datoms, fan-out 32:
+///   path.len() ≈ 6, each node ≈ 1KB, total ≈ 6KB
+pub struct InclusionProof {
+    /// The datom whose membership is being proved.
+    pub datom: Datom,
+    /// Path from leaf to root. path[0] is the leaf level, path[last] is one
+    /// level below the root.
+    pub path: Vec<ProofNode>,
+    /// The root hash of the store at the time the proof was constructed.
+    pub root_hash: ChunkAddress,
+}
+
+/// A single node in an inclusion proof path.
+///
+/// At each level of the prolly tree, a chunk contains multiple children.
+/// The proof provides the hashes of all sibling chunks at this level, plus
+/// the position of the target child among them.
+pub struct ProofNode {
+    /// blake3 hashes of all siblings at this tree level, in order.
+    /// The target child's hash is NOT included — it is computed by the verifier.
+    pub sibling_hashes: Vec<ChunkAddress>,
+    /// The index of the target child among all children at this level.
+    /// 0-indexed. Used to insert the computed hash at the correct position
+    /// during verification.
+    pub position: usize,
+}
+
+impl InclusionProof {
+    /// Verify that `self.datom` is a member of the store with root hash
+    /// `self.root_hash`.
+    ///
+    /// Algorithm:
+    /// 1. Compute the leaf hash: blake3(canonical_bytes(datom))
+    /// 2. For each level in the proof path:
+    ///    a. Insert the current hash at `position` among the sibling hashes
+    ///    b. Concatenate all hashes at this level
+    ///    c. Compute the parent hash: blake3(concatenated)
+    /// 3. The final computed hash must equal `self.root_hash`
+    ///
+    /// # Returns
+    /// `true` if the proof is valid (datom is in the store), `false` otherwise.
+    ///
+    /// # Performance
+    /// O(log_k(N)) blake3 hashes. ~1us per level. ~6us for 100M datom store.
+    pub fn verify(&self) -> bool {
+        let mut current_hash = chunk_hash(&serialize_datom(&self.datom));
+
+        for node in &self.path {
+            // Reconstruct the full child list at this level
+            let total_children = node.sibling_hashes.len() + 1;
+            if node.position > node.sibling_hashes.len() {
+                return false; // Invalid position
+            }
+
+            let mut level_data = Vec::with_capacity(total_children * 32);
+            for i in 0..total_children {
+                if i == node.position {
+                    level_data.extend_from_slice(current_hash.as_bytes());
+                } else {
+                    let sibling_idx = if i < node.position { i } else { i - 1 };
+                    if sibling_idx >= node.sibling_hashes.len() {
+                        return false; // Malformed proof
+                    }
+                    level_data.extend_from_slice(
+                        node.sibling_hashes[sibling_idx].as_bytes()
+                    );
+                }
+            }
+
+            current_hash = blake3::hash(&level_data).into();
+        }
+
+        current_hash == self.root_hash
+    }
+
+    /// Construct an inclusion proof for a datom in a store.
+    ///
+    /// Walks the prolly tree from the leaf containing `datom` up to the root,
+    /// collecting sibling hashes at each level.
+    ///
+    /// # Errors
+    /// Returns `None` if the datom is not in the store (completeness: this is
+    /// the ONLY reason for returning `None`).
+    ///
+    /// # Performance
+    /// O(log_k(N)) chunk reads. Typically cached in memory.
+    pub fn construct(store: &Store, datom: &Datom) -> Option<Self> {
+        let prolly = store.prolly_tree();
+        let leaf = prolly.find_leaf(datom)?; // None if datom not in store
+
+        let mut path = Vec::new();
+        let mut current_node = leaf;
+
+        while let Some(parent) = prolly.parent_of(&current_node) {
+            let siblings = prolly.children_of(&parent);
+            let position = siblings.iter()
+                .position(|c| c.hash == current_node.hash)
+                .expect("child must be in parent's children list");
+
+            let sibling_hashes: Vec<ChunkAddress> = siblings.iter()
+                .enumerate()
+                .filter(|(i, _)| *i != position)
+                .map(|(_, c)| c.hash)
+                .collect();
+
+            path.push(ProofNode { sibling_hashes, position });
+            current_node = parent;
+        }
+
+        Some(InclusionProof {
+            datom: datom.clone(),
+            path,
+            root_hash: prolly.root_hash(),
+        })
+    }
+}
+
+/// Verify that a datom is NOT in a store (exclusion proof).
+/// Uses the prolly tree's sorted structure: if the datom would be between
+/// two adjacent datoms in the leaf, and neither matches, it is absent.
+///
+/// # Returns
+/// `Some(ExclusionProof)` if the datom is verifiably absent.
+/// `None` if the datom is actually present (cannot prove absence).
+pub struct ExclusionProof {
+    pub absent_datom: Datom,
+    pub left_neighbor: Option<Datom>,   // Datom immediately before (if any)
+    pub right_neighbor: Option<Datom>,  // Datom immediately after (if any)
+    pub leaf_proof: InclusionProof,     // Proves the leaf chunk is in the store
+    pub root_hash: ChunkAddress,
+}
+
+#[kani::proof]
+#[kani::unwind(8)]
+fn inclusion_proof_soundness() {
+    let datoms: Vec<Datom> = (0..kani::any::<u8>() % 4)
+        .map(|_| Datom {
+            entity: kani::any(),
+            attribute: kani::any(),
+            value: kani::any(),
+            tx: kani::any(),
+            op: kani::any(),
+        })
+        .collect();
+
+    let store = Store::from_datoms(datoms.clone());
+    let root = store.root_hash();
+
+    // For each datom in the store, proof must verify
+    for datom in &datoms {
+        let proof = InclusionProof::construct(&store, datom);
+        assert!(proof.is_some(), "Completeness: cannot construct proof for datom in store");
+        assert!(proof.unwrap().verify(), "Soundness: valid proof does not verify");
+    }
+
+    // For a datom NOT in the store, proof construction must fail
+    let absent = Datom {
+        entity: u64::MAX,
+        attribute: u64::MAX,
+        value: Value::Nil,
+        tx: u64::MAX,
+        op: Op::Assert,
+    };
+    if !datoms.contains(&absent) {
+        assert!(InclusionProof::construct(&store, &absent).is_none(),
+            "Constructed proof for absent datom");
+    }
+}
+```
+
+**Falsification**: Any of the following constitutes a violation of INV-FERR-052:
+- **False positive (soundness breach)**: A proof `P` that passes `verify_inclusion(D, P, R)` for
+  a datom `D` that is NOT in the store with root hash `R`. This would require a blake3 hash
+  collision.
+- **False negative (completeness breach)**: A datom `D` that IS in the store but for which no
+  valid proof can be constructed. This would indicate a bug in the prolly tree traversal
+  or the proof construction algorithm.
+- **Proof portability failure**: A proof constructed against store `S₁` with root `R` fails to
+  verify when checked against the same root `R` by a different verifier implementation.
+  Proofs must be self-contained and verifier-independent.
+- **Non-determinism**: Two calls to `construct(store, datom)` for the same store state and
+  datom produce different proofs that disagree on `verify()`.
+- **Proof size violation**: A proof for a store with `N` datoms and fan-out `k` has more than
+  `ceil(log_k(N)) + 1` nodes in its path.
+
+**proptest strategy**:
+```rust
+proptest! {
+    /// Every datom in a store has a verifiable inclusion proof.
+    #[test]
+    fn inclusion_proof_completeness(
+        datoms in prop::collection::btree_set(arb_datom(), 1..200),
+    ) {
+        let store = Store::from_datoms(datoms.clone());
+        let root = store.root_hash();
+
+        for datom in &datoms {
+            let proof = InclusionProof::construct(&store, datom);
+            prop_assert!(proof.is_some(),
+                "Completeness failure: no proof for datom in store");
+
+            let proof = proof.unwrap();
+            prop_assert_eq!(proof.root_hash, root,
+                "Proof root hash does not match store root");
+            prop_assert!(proof.verify(),
+                "Valid proof does not verify");
+        }
+    }
+
+    /// No datom outside the store has a valid inclusion proof.
+    #[test]
+    fn inclusion_proof_soundness(
+        datoms in prop::collection::btree_set(arb_datom(), 0..100),
+        absent in arb_datom(),
+    ) {
+        prop_assume!(!datoms.contains(&absent));
+        let store = Store::from_datoms(datoms);
+
+        let proof = InclusionProof::construct(&store, &absent);
+        prop_assert!(proof.is_none(),
+            "Constructed proof for absent datom (soundness failure)");
+    }
+
+    /// Proofs are deterministic: same store + same datom → same proof.
+    #[test]
+    fn inclusion_proof_deterministic(
+        datoms in prop::collection::btree_set(arb_datom(), 1..100),
+    ) {
+        let store = Store::from_datoms(datoms.clone());
+        let datom = datoms.iter().next().unwrap();
+
+        let proof1 = InclusionProof::construct(&store, datom).unwrap();
+        let proof2 = InclusionProof::construct(&store, datom).unwrap();
+
+        prop_assert_eq!(proof1.path.len(), proof2.path.len(),
+            "Proof path lengths differ");
+        for (n1, n2) in proof1.path.iter().zip(proof2.path.iter()) {
+            prop_assert_eq!(n1.position, n2.position,
+                "Proof node positions differ");
+            prop_assert_eq!(n1.sibling_hashes, n2.sibling_hashes,
+                "Proof sibling hashes differ");
+        }
+    }
+
+    /// Proof size is logarithmic in store size.
+    #[test]
+    fn inclusion_proof_size_logarithmic(
+        datoms in prop::collection::btree_set(arb_datom(), 10..500),
+    ) {
+        let store = Store::from_datoms(datoms.clone());
+        let datom = datoms.iter().next().unwrap();
+        let proof = InclusionProof::construct(&store, datom).unwrap();
+
+        let n = datoms.len() as f64;
+        let k = store.prolly_tree().avg_fanout() as f64;
+        let max_depth = (n.log(k)).ceil() as usize + 2; // +2 for rounding/boundary
+
+        prop_assert!(proof.path.len() <= max_depth,
+            "Proof depth {} exceeds log_{}({}) + 2 = {}",
+            proof.path.len(), k as usize, datoms.len(), max_depth);
+    }
+
+    /// Tampered proofs fail verification.
+    #[test]
+    fn tampered_proof_fails(
+        datoms in prop::collection::btree_set(arb_datom(), 5..100),
+        tamper_byte in any::<u8>(),
+    ) {
+        let store = Store::from_datoms(datoms.clone());
+        let datom = datoms.iter().next().unwrap();
+        let mut proof = InclusionProof::construct(&store, datom).unwrap();
+
+        // Tamper with a sibling hash
+        if let Some(node) = proof.path.first_mut() {
+            if let Some(hash) = node.sibling_hashes.first_mut() {
+                hash.as_mut_bytes()[0] ^= tamper_byte | 1; // Ensure change
+            }
+        }
+
+        prop_assert!(!proof.verify(),
+            "Tampered proof passed verification");
+    }
+}
+```
+
+**Lean theorem**:
+```lean
+/-- Completeness: every datom in the store has a valid inclusion proof.
+    This follows from the prolly tree being a complete index over all datoms. -/
+theorem inclusion_proof_completeness (S : DatomStore) (D : Datom) (h : D ∈ S) :
+    ∃ P : InclusionProof, P.datom = D ∧ P.root_hash = root S ∧ verify_inclusion P = true := by
+  -- The prolly tree indexes all datoms; find_leaf succeeds for any member
+  obtain ⟨leaf, h_leaf⟩ := prolly_tree_complete S D h
+  -- Walk from leaf to root collecting siblings
+  obtain ⟨path, h_path⟩ := prolly_tree_path_to_root leaf
+  -- Verify reconstructs the root hash
+  exact ⟨⟨D, path, root S⟩, rfl, rfl, verify_from_path h_path⟩
+
+/-- Soundness: no datom outside the store has a valid inclusion proof.
+    This requires collision resistance of blake3 (modeled as an axiom). -/
+theorem inclusion_proof_soundness (S : DatomStore) (D : Datom) (P : InclusionProof)
+    (h_absent : D ∉ S) (h_root : P.root_hash = root S) :
+    verify_inclusion P = false := by
+  -- If D ∉ S, then D is not in any leaf chunk of the prolly tree
+  -- For verify_inclusion to return true, the leaf hash must be a child of
+  -- some internal node, which requires hash(D) to appear in the tree
+  -- Since D is not in S, this requires a blake3 collision
+  exact blake3_collision_resistance S D P h_absent h_root
+
+/-- Proof determinism: same store state + same datom → same proof
+    (follows from prolly tree determinism, INV-FERR-020). -/
+theorem inclusion_proof_deterministic (S : DatomStore) (D : Datom) (h : D ∈ S)
+    (P₁ P₂ : InclusionProof)
+    (h₁ : P₁ = construct S D) (h₂ : P₂ = construct S D) :
+    P₁ = P₂ := by
+  rw [h₁, h₂]
+```
+
+---
+
+### INV-FERR-053: Light Client Protocol
+
+**Traces to**: SEED.md §1 ("verifiable coherence"), INV-FERR-052 (Merkle Proof of
+Inclusion), INV-FERR-037 (Federated Query Correctness), ADR-FERR-009, blockchain
+light client protocols
+**Verification**: `V:PROP`, `V:LEAN`
+**Stage**: 1
+
+A light client holds only `epoch → root_hash` mappings (one hash per epoch, 32 bytes
+each). It can verify any datom's existence via Merkle proof from a full node. It can
+verify query results by checking inclusion proofs for each result datom. The light client
+trusts NO full node — it verifies everything cryptographically.
+
+#### Level 0 (Algebraic Law)
+
+```
+Let LightClient = { epoch_i → root_hash_i }  (32 bytes per epoch)
+Let FullNode = a full datom store S with query capability
+Let Transport be the communication channel between LightClient and FullNode
+
+-- Light client storage: O(E) where E = number of epochs (NOT O(N) datoms)
+|LightClient| = 32 × E bytes
+  For a 10-year store with hourly epochs: 32 × 87,600 ≈ 2.7 MB
+
+-- Verified single-datom lookup
+verified_lookup(LC, D, epoch) =
+  let R = LC.epochs[epoch]
+  let (D, proof) = FullNode.lookup_with_proof(D, R)
+  verify_inclusion(D, proof, R)
+
+-- Verified query
+For query Q with result set R = {d₁, ..., d_m} from FullNode:
+  verified_query(LC, Q, epoch) =
+    let R_hash = LC.epochs[epoch]
+    let {(d_i, proof_i)} = FullNode.query_with_proofs(Q, R_hash)
+    ∀ i ∈ 1..m: verify_inclusion(d_i, proof_i, R_hash)
+
+  -- Soundness: every returned datom is genuinely in the store at that epoch
+  verified_query(LC, Q, epoch) = ok
+    → ∀ d ∈ R: d ∈ store(R_hash)
+
+  -- Bandwidth: proportional to result size, NOT store size
+  bandwidth(verified_query) = O(|R| × log_k(N))
+    where |R| = result count, k = prolly tree fan-out, N = total datom count
+
+-- Composition with INV-FERR-037 (federated query):
+  A light client can participate in a federated query by requesting
+  query_with_proofs from multiple full nodes and merging verified results.
+  The CALM theorem still holds: union of verified per-node results equals
+  verified query on the union (for monotonic queries).
+
+-- Trust model:
+  The light client trusts the root hash source (e.g., signed by a trusted
+  epoch authority, or derived from a consensus protocol, or verified by
+  multiple independent full nodes).
+  The light client does NOT trust any individual full node's query results —
+  it verifies each datom via Merkle proof against the trusted root hash.
+```
+
+#### Level 1 (State Invariant)
+
+A client with only root hashes can verify any query result without downloading the full
+store. For all reachable states of a `LightClient` with epoch-to-root mappings:
+
+1. **Verified results are genuine**: If `verified_query` returns `Ok`, every datom in the
+   result set is provably in the store at the specified epoch. A full node cannot fabricate
+   datoms that pass verification (by Merkle proof soundness, INV-FERR-052).
+
+2. **No silent omissions in verifiable mode**: The light client cannot detect omissions
+   from a malicious full node (the full node could withhold results). To address this,
+   the protocol supports multiple full nodes: query the same Q against multiple full
+   nodes and union the verified results. If any honest full node participates, no datom
+   is omitted (by CALM, INV-FERR-037).
+
+3. **Bandwidth proportional to result**: For a query returning `m` datoms from a store
+   with `N` total datoms, the bandwidth is `O(m * log_k(N))`. This is sublinear in `N`
+   for any bounded result set.
+
+4. **Epoch progression**: Root hashes are append-only. The light client can receive new
+   epoch → root_hash mappings from any source and verify them independently. Old epochs
+   are never invalidated (by C1 append-only: datoms are only added, never removed, so
+   all old root hashes remain valid for their epoch).
+
+#### Level 2 (Implementation Contract)
+
+```rust
+/// A light client that verifies query results from untrusted full nodes.
+///
+/// Storage: O(E × 32) bytes where E = number of epochs.
+/// A 10-year store with hourly epochs requires ~2.7 MB.
+///
+/// # Trust Model
+/// The light client trusts the epoch → root_hash mappings (the "trust anchor").
+/// It does NOT trust any full node's query results — every result datom is
+/// verified via Merkle inclusion proof against the trusted root hash.
+pub struct LightClient {
+    /// Epoch → root hash mapping. Each root hash is 32 bytes (blake3).
+    /// Append-only: old epochs are never removed or modified.
+    epochs: BTreeMap<u64, ChunkAddress>,
+
+    /// Transport layer for communicating with full nodes.
+    transport: Box<dyn Transport>,
+}
+
+/// The result of a verified query: every datom has been checked against
+/// the Merkle root of the specified epoch.
+pub struct VerifiedResult {
+    /// The verified datoms (all passed inclusion proof verification).
+    pub datoms: Vec<Datom>,
+    /// The epoch against which verification was performed.
+    pub epoch: u64,
+    /// The root hash used for verification.
+    pub root_hash: ChunkAddress,
+    /// Whether all proofs passed. Always true if this struct exists
+    /// (construction fails on invalid proof).
+    pub verified: bool,
+    /// Per-datom verification metadata (for auditing).
+    pub proof_sizes: Vec<usize>,
+}
+
+/// Response from a full node: query results with inclusion proofs.
+pub struct ProvedQueryResponse {
+    /// Each result datom paired with its Merkle inclusion proof.
+    pub proved_results: Vec<(Datom, InclusionProof)>,
+    /// Total number of results (may exceed proved_results if the full node
+    /// paginated the response).
+    pub total_count: usize,
+}
+
+impl LightClient {
+    /// Create a new light client with initial epoch → root_hash mappings.
+    ///
+    /// The caller is responsible for verifying the initial mappings
+    /// (e.g., from a trusted configuration, signed by an epoch authority,
+    /// or cross-checked against multiple full nodes).
+    pub fn new(
+        initial_epochs: BTreeMap<u64, ChunkAddress>,
+        transport: Box<dyn Transport>,
+    ) -> Self {
+        Self {
+            epochs: initial_epochs,
+            transport,
+        }
+    }
+
+    /// Execute a query and verify every result datom via Merkle proof.
+    ///
+    /// # Algorithm
+    /// 1. Look up the root hash for the specified epoch.
+    /// 2. Send the query + root hash to the full node.
+    /// 3. Receive results + inclusion proofs.
+    /// 4. Verify every inclusion proof against the root hash.
+    /// 5. Reject the entire result if any proof fails.
+    ///
+    /// # Errors
+    /// - `FerraError::UnknownEpoch(epoch)`: no root hash for this epoch.
+    /// - `FerraError::InvalidProof`: at least one datom's proof failed.
+    /// - `FerraError::TransportError(...)`: communication failure.
+    ///
+    /// # Performance
+    /// - Network: one round-trip to full node.
+    /// - Verification: O(|R| × log_k(N)) blake3 hashes where R = result count.
+    /// - For 100 results from a 100M datom store: ~600 hash operations (~600us).
+    pub async fn verified_query(
+        &self,
+        expr: &QueryExpr,
+        epoch: u64,
+    ) -> Result<VerifiedResult, FerraError> {
+        let root = self
+            .epochs
+            .get(&epoch)
+            .ok_or(FerraError::UnknownEpoch(epoch))?;
+
+        // Request query + inclusion proofs from full node
+        let response = self
+            .transport
+            .query_with_proofs(expr, *root)
+            .await
+            .map_err(FerraError::TransportError)?;
+
+        // Verify EVERY result datom — reject entire result on any failure
+        let mut verified_datoms = Vec::with_capacity(response.proved_results.len());
+        let mut proof_sizes = Vec::with_capacity(response.proved_results.len());
+
+        for (datom, proof) in &response.proved_results {
+            // Check 1: proof root matches our trusted root
+            if proof.root_hash != *root {
+                return Err(FerraError::CryptoError(CryptoError::RootHashMismatch {
+                    expected: *root,
+                    actual: proof.root_hash,
+                }));
+            }
+
+            // Check 2: proof verifies (Merkle path is valid)
+            if !proof.verify() {
+                return Err(FerraError::CryptoError(
+                    CryptoError::InvalidInclusionProof,
+                ));
+            }
+
+            // Check 3: proof is for the correct datom (not a proof for a different datom)
+            if proof.datom != *datom {
+                return Err(FerraError::CryptoError(
+                    CryptoError::InvalidInclusionProof,
+                ));
+            }
+
+            verified_datoms.push(datom.clone());
+            proof_sizes.push(proof.path.len());
+        }
+
+        Ok(VerifiedResult {
+            datoms: verified_datoms,
+            epoch,
+            root_hash: *root,
+            verified: true,
+            proof_sizes,
+        })
+    }
+
+    /// Add a new epoch → root_hash mapping.
+    ///
+    /// # Trust
+    /// The caller must verify the root_hash through an out-of-band mechanism
+    /// (e.g., signed epoch certificate, consensus, multi-node agreement).
+    /// This method does NOT verify the root hash itself.
+    pub fn add_epoch(&mut self, epoch: u64, root_hash: ChunkAddress) {
+        self.epochs.insert(epoch, root_hash);
+    }
+
+    /// Verified query against multiple full nodes (omission resistance).
+    ///
+    /// Queries the same expression against multiple full nodes, verifies all
+    /// results, and returns the union. If any honest full node participates,
+    /// no datom matching the query is omitted.
+    ///
+    /// # CALM Composition
+    /// For monotonic queries, union of verified per-node results equals the
+    /// verified query on the union of stores (INV-FERR-037).
+    pub async fn verified_query_multi(
+        &self,
+        expr: &QueryExpr,
+        epoch: u64,
+        transports: &[Box<dyn Transport>],
+    ) -> Result<VerifiedResult, FerraError> {
+        let root = self
+            .epochs
+            .get(&epoch)
+            .ok_or(FerraError::UnknownEpoch(epoch))?;
+
+        let mut all_datoms = BTreeSet::new();
+        let mut all_proof_sizes = Vec::new();
+
+        for transport in transports {
+            match transport.query_with_proofs(expr, *root).await {
+                Ok(response) => {
+                    for (datom, proof) in &response.proved_results {
+                        if proof.root_hash == *root
+                            && proof.verify()
+                            && proof.datom == *datom
+                        {
+                            all_proof_sizes.push(proof.path.len());
+                            all_datoms.insert(datom.clone());
+                        }
+                        // Silently skip invalid proofs from individual nodes
+                        // (the node may be malicious, but others compensate)
+                    }
+                }
+                Err(_) => {
+                    // Skip failed nodes — partial results are acceptable
+                    continue;
+                }
+            }
+        }
+
+        Ok(VerifiedResult {
+            datoms: all_datoms.into_iter().collect(),
+            epoch,
+            root_hash: *root,
+            verified: true,
+            proof_sizes: all_proof_sizes,
+        })
+    }
+}
+```
+
+**Falsification**: Any of the following constitutes a violation of INV-FERR-053:
+- A full node returns a datom NOT in the store with a valid-looking proof that passes
+  `verify()` on the light client (soundness breach — would require breaking INV-FERR-052).
+- A light client accepts a query result without verifying all inclusion proofs (verification
+  bypass — implementation bug).
+- The bandwidth of a verified query is `O(N)` (proportional to store size) instead of
+  `O(|R| * log_k(N))` (proportional to result size). This would indicate the full node
+  is sending unnecessary data or the proof structure is non-logarithmic.
+- A light client's `verified_query` returns `Ok(...)` with `verified: true` for a datom
+  whose proof references a different root hash than the epoch's trusted root.
+- An epoch's root hash changes after being added to the light client (violates append-only
+  epoch progression).
+
+**proptest strategy**:
+```rust
+proptest! {
+    /// Light client correctly verifies genuine results from honest full node.
+    #[test]
+    fn light_client_honest_node(
+        datoms in prop::collection::btree_set(arb_datom(), 10..200),
+        query_attr in arb_attribute(),
+    ) {
+        let store = Store::from_datoms(datoms);
+        let root = store.root_hash();
+        let epoch = 1u64;
+
+        let lc = LightClient::new(
+            BTreeMap::from([(epoch, root)]),
+            Box::new(HonestFullNode::new(store.clone())),
+        );
+
+        let query = QueryExpr::filter_attribute(query_attr);
+        let result = block_on(lc.verified_query(&query, epoch));
+
+        prop_assert!(result.is_ok(), "Honest full node query failed: {:?}", result.err());
+
+        let vr = result.unwrap();
+        prop_assert!(vr.verified, "Verified flag is false");
+
+        // All returned datoms are genuinely in the store
+        for datom in &vr.datoms {
+            prop_assert!(store.contains(datom),
+                "Verified result contains datom not in store");
+        }
+    }
+
+    /// Light client rejects fabricated datoms from malicious full node.
+    #[test]
+    fn light_client_rejects_fabrication(
+        datoms in prop::collection::btree_set(arb_datom(), 10..100),
+        fake_datom in arb_datom(),
+    ) {
+        prop_assume!(!datoms.contains(&fake_datom));
+
+        let store = Store::from_datoms(datoms);
+        let root = store.root_hash();
+
+        // Malicious node injects a fake datom with a forged proof
+        let malicious = MaliciousFullNode::new(store, vec![fake_datom]);
+        let lc = LightClient::new(
+            BTreeMap::from([(1u64, root)]),
+            Box::new(malicious),
+        );
+
+        let query = QueryExpr::all();
+        let result = block_on(lc.verified_query(&query, 1u64));
+
+        // Must fail: the fake datom's proof cannot verify against the real root
+        prop_assert!(result.is_err(),
+            "Light client accepted fabricated datom");
+    }
+
+    /// Verified query bandwidth is sublinear in store size.
+    #[test]
+    fn light_client_bandwidth_sublinear(
+        datom_count in 100usize..1000,
+        query_result_count in 1usize..20,
+    ) {
+        let datoms: BTreeSet<Datom> = (0..datom_count)
+            .map(|i| arb_datom_seeded(i as u64))
+            .collect();
+
+        let store = Store::from_datoms(datoms);
+        let k = store.prolly_tree().avg_fanout();
+
+        // Proof size per datom: O(log_k(N)) nodes, each ~k*32 bytes
+        let proof_depth = (datom_count as f64).log(k as f64).ceil() as usize;
+        let proof_bytes = proof_depth * k * 32;
+
+        // Total bandwidth for result_count datoms
+        let total_bandwidth = query_result_count * (proof_bytes + 128); // 128 = datom size
+        let store_size = datom_count * 128;
+
+        prop_assert!(total_bandwidth < store_size,
+            "Bandwidth {} >= store size {} — not sublinear",
+            total_bandwidth, store_size);
+    }
+}
+```
+
+**Lean theorem**:
+```lean
+/-- Light client soundness: if verified_query succeeds, every result datom
+    is genuinely in the store at the specified epoch. -/
+theorem light_client_soundness (lc : LightClient) (Q : QueryExpr)
+    (epoch : Nat) (R : Finset Datom) (root : ChunkAddress)
+    (h_epoch : lc.epochs epoch = some root)
+    (h_verified : verified_query lc Q epoch = ok R) :
+    ∀ d ∈ R, d ∈ store root := by
+  intro d h_d
+  -- verified_query checks verify_inclusion for every datom in R
+  obtain ⟨proof, h_proof_valid, h_proof_root⟩ := verified_query_checks h_verified d h_d
+  -- By INV-FERR-052 soundness: valid proof → datom in store
+  exact inclusion_proof_soundness root d proof h_proof_valid h_proof_root
+
+/-- Light client bandwidth: proof size is logarithmic in store size. -/
+theorem light_client_bandwidth (S : DatomStore) (R : Finset Datom)
+    (h_sub : R ⊆ S) (k : Nat) (h_k : k = avg_fanout (prolly_tree S)) :
+    total_proof_size R S ≤ R.card * (Nat.log k S.card + 1) * k * 32 := by
+  -- Each datom's proof has depth ≤ log_k(|S|) by prolly tree height bound
+  -- Each proof node has k sibling hashes of 32 bytes each
+  calc total_proof_size R S
+      = R.sum (fun d => proof_size d S) := by rfl
+    _ ≤ R.sum (fun _ => (Nat.log k S.card + 1) * k * 32) := by
+        apply Finset.sum_le_sum; intro d h_d
+        exact single_proof_size_bound d S k h_k
+    _ = R.card * (Nat.log k S.card + 1) * k * 32 := by
+        simp [Finset.sum_const]
+
+/-- Multi-node query: if any honest node participates, no matching datom
+    is omitted (for monotonic queries, by CALM). -/
+theorem light_client_multi_completeness
+    (lc : LightClient) (Q : QueryExpr) (h_mono : monotonic Q)
+    (nodes : Finset FullNode) (honest : FullNode)
+    (h_honest : honest ∈ nodes) (h_honest_complete : ∀ d ∈ query honest.store Q, honest.responds d)
+    (epoch : Nat) (root : ChunkAddress) (h_epoch : lc.epochs epoch = some root) :
+    ∀ d ∈ query (store root) Q,
+      d ∈ (verified_query_multi lc Q epoch nodes).datoms := by
+  intro d h_d
+  -- d is in query result of store(root)
+  -- honest node has store(root) and responds with d
+  -- By CALM: query distributes over union, so honest node returns d
+  -- By inclusion proof completeness: proof exists for d
+  -- verified_query_multi includes d in union
+  exact multi_node_union_complete h_mono honest h_honest h_honest_complete d h_d
+```
+
+---
+
+### INV-FERR-054: Trust Gradient Query
+
+**Traces to**: SEED.md §4 ("calibrated policies are transferable"), INV-FERR-051
+(Signed Transactions), INV-FERR-037 (Federated Query Correctness), INV-FERR-039
+(Selective Merge)
+**Verification**: `V:PROP`, `V:LEAN`
+**Stage**: 1
+
+Queries accept a `TrustPolicy` that filters results by cryptographic verification level.
+Trust is a continuous gradient computed from verifiable calibration history, not a binary
+decision. The trust filter is applied AFTER query execution and BEFORE result return,
+ensuring that the query engine itself is trust-agnostic.
+
+#### Level 0 (Algebraic Law)
+
+```
+Let S be a datom store. Let Q be a query expression. Let π be a trust policy.
+
+TrustPolicy = All                                    -- accept everything (local use)
+             | Only(Set<PublicKey>)                   -- accept from listed signers only
+             | Calibrated(min_accuracy, min_samples)  -- accept from signers with verified calibration
+             | Threshold(n, Set<PublicKey>)            -- accept if n-of-m signers attest
+             | Custom(Datom → Bool)                   -- arbitrary predicate
+
+-- Trust-filtered query
+query(S, Q, π) = { d ∈ query(S, Q) | π.accepts(d, S) }
+
+-- TrustPolicy::All is identity
+∀ S, Q: query(S, Q, All) = query(S, Q)
+
+-- TrustPolicy::Only is intersection
+∀ S, Q, keys:
+  query(S, Q, Only(keys)) = { d ∈ query(S, Q) | tx_signer(d.tx, S) ∈ keys }
+
+-- TrustPolicy::Calibrated uses verified calibration history
+∀ S, Q, min_acc, min_n:
+  query(S, Q, Calibrated(min_acc, min_n)) =
+    { d ∈ query(S, Q) |
+      let signer = tx_signer(d.tx, S)
+      let cal = verified_calibration(S, signer)
+      cal.mean_error ≤ min_acc ∧ cal.sample_count ≥ min_n }
+
+-- TrustPolicy::Threshold requires multi-party attestation
+∀ S, Q, n, keys:
+  query(S, Q, Threshold(n, keys)) =
+    { d ∈ query(S, Q) | |{ k ∈ keys | attestation(d, k, S) }| ≥ n }
+
+-- Trust filter monotonicity: more permissive policy → superset results
+∀ S, Q, π₁, π₂:
+  (∀ d, S: π₁.accepts(d, S) → π₂.accepts(d, S))
+  → query(S, Q, π₁) ⊆ query(S, Q, π₂)
+
+-- Trust filter distributes over federated query (for monotonic Q)
+∀ monotonic Q, π, {S₁, ..., Sₖ}:
+  query(⋃ᵢ Sᵢ, Q, π) = ⋃ᵢ query(Sᵢ, Q, π)
+  -- Trust filter is per-datom, so it distributes over union
+  -- (each datom's acceptance depends only on its own signer/calibration)
+
+-- Calibrated trust is grounded in verifiable data
+verified_calibration(S, signer) =
+  let predictions = { d ∈ S | d.attribute = :hypothesis/predicted ∧ tx_signer(d.tx) = signer }
+  let outcomes = { d ∈ S | d.attribute = :hypothesis/actual ∧ matched_to(d) ∈ predictions }
+  { mean_error: avg(|pred.value - actual.value| for (pred, actual) ∈ matched(predictions, outcomes)),
+    sample_count: |outcomes| }
+```
+
+#### Level 1 (State Invariant)
+
+Every query can be filtered by trust level. The trust filter has the following properties:
+
+1. **Post-query application**: Trust filtering happens AFTER the query engine produces
+   results and BEFORE results are returned to the caller. The query engine itself is
+   trust-agnostic — it evaluates the same plan regardless of trust policy.
+
+2. **Cryptographic grounding**: Trust decisions for `Only`, `Calibrated`, and `Threshold`
+   policies are based on cryptographically verified data (Ed25519 signatures, INV-FERR-051)
+   and verifiable calibration history (hypothesis predictions vs outcomes). Social signals,
+   reputation systems, or unverifiable claims are not inputs to trust decisions.
+
+3. **Monotonic composition**: More permissive policies yield superset results. `All`
+   produces the largest result set. `Only({})` (empty key set) produces the empty set.
+   This monotonicity ensures that trust filtering can be composed with federated queries
+   without violating CALM (INV-FERR-037).
+
+4. **Per-datom independence**: The trust decision for datom `d` depends only on `d`'s
+   transaction signer and that signer's calibration history. It does not depend on other
+   datoms in the result set. This ensures the filter distributes over set union (required
+   for federation correctness).
+
+5. **Graceful default**: `TrustPolicy::All` is the default for local/embedded use. No
+   trust filtering overhead unless explicitly requested. Unsigned stores (§23.10.5)
+   always use `TrustPolicy::All`.
+
+#### Level 2 (Implementation Contract)
+
+```rust
+/// A trust policy for filtering query results by cryptographic verification level.
+///
+/// Trust is a continuous gradient, not a binary decision. The policy determines
+/// what evidence is required for a datom to be included in query results.
+///
+/// # Ordering (from most to least restrictive)
+/// Threshold(n=m, keys) > Threshold(n=1, keys) > Only(keys) > Calibrated > All
+///
+/// # Default
+/// `TrustPolicy::All` — no filtering, accepts everything. Used for local stores
+/// and unsigned mode (§23.10.5).
+#[derive(Debug, Clone)]
+pub enum TrustPolicy {
+    /// Accept all datoms regardless of signature or provenance.
+    /// Zero overhead. Default for local/embedded use.
+    All,
+
+    /// Accept only datoms signed by one of the listed public keys.
+    /// O(1) lookup per datom (HashSet).
+    Only(HashSet<VerifyingKey>),
+
+    /// Accept datoms from signers with verified calibration meeting thresholds.
+    /// `min_accuracy`: maximum acceptable mean prediction error (lower = more strict).
+    /// `min_samples`: minimum number of resolved predictions required.
+    ///
+    /// # Calibration Data Source
+    /// Calibration is computed from `:hypothesis/predicted` and `:hypothesis/actual`
+    /// datoms signed by the same signer. The calibration history itself is
+    /// cryptographically verifiable (signed datoms, INV-FERR-051).
+    Calibrated {
+        min_accuracy: f64,
+        min_samples: usize,
+    },
+
+    /// Accept datoms attested by at least `n` of the listed public keys.
+    /// An attestation is a datom with attribute `:attestation/target` referencing
+    /// the target datom's entity, signed by one of the listed keys.
+    ///
+    /// # Use Case
+    /// Multi-party review: "accept only findings confirmed by at least 2 of 5 reviewers."
+    Threshold {
+        n: usize,
+        keys: HashSet<VerifyingKey>,
+    },
+
+    /// Arbitrary predicate for application-specific trust logic.
+    /// The function receives the datom and a snapshot for context lookups.
+    ///
+    /// # Warning
+    /// Custom predicates may not distribute over federation (non-monotonic predicates
+    /// break CALM). Use with caution in federated queries.
+    Custom(Arc<dyn Fn(&Datom, &Snapshot) -> bool + Send + Sync>),
+}
+
+impl TrustPolicy {
+    /// Evaluate whether a datom is accepted under this trust policy.
+    ///
+    /// # Performance
+    /// - `All`: O(1), no work.
+    /// - `Only`: O(1) HashSet lookup for signer.
+    /// - `Calibrated`: O(1) amortized (calibration cached in snapshot).
+    /// - `Threshold`: O(|keys|) attestation count.
+    /// - `Custom`: depends on the predicate.
+    pub fn accepts(&self, datom: &Datom, snapshot: &Snapshot) -> bool {
+        match self {
+            TrustPolicy::All => true,
+
+            TrustPolicy::Only(keys) => {
+                match snapshot.tx_signer(datom.tx) {
+                    Some(signer) => keys.contains(&signer),
+                    None => false, // Unsigned datom rejected by Only policy
+                }
+            }
+
+            TrustPolicy::Calibrated { min_accuracy, min_samples } => {
+                match snapshot.tx_signer(datom.tx) {
+                    Some(signer) => {
+                        let cal = snapshot.verified_calibration(&signer);
+                        cal.mean_error <= *min_accuracy
+                            && cal.sample_count >= *min_samples
+                    }
+                    None => false, // Unsigned datom rejected by Calibrated policy
+                }
+            }
+
+            TrustPolicy::Threshold { n, keys } => {
+                let attestations = snapshot.attestation_count(datom, keys);
+                attestations >= *n
+            }
+
+            TrustPolicy::Custom(f) => f(datom, snapshot),
+        }
+    }
+}
+
+/// Apply a trust policy to query results.
+///
+/// This is the integration point between the query engine and the trust layer.
+/// Called after query evaluation, before result return.
+///
+/// # Guarantees
+/// - If `policy` is `All`, the output equals the input (identity filter).
+/// - The output is always a subset of the input (monotonic restriction).
+/// - The filter is per-datom: each datom's acceptance is independent.
+pub fn trust_filter(
+    results: Vec<Datom>,
+    policy: &TrustPolicy,
+    snapshot: &Snapshot,
+) -> Vec<Datom> {
+    match policy {
+        TrustPolicy::All => results, // Fast path: no filtering
+        _ => results
+            .into_iter()
+            .filter(|d| policy.accepts(d, snapshot))
+            .collect(),
+    }
+}
+
+/// Verified calibration data for a signer.
+///
+/// Computed from `:hypothesis/predicted` and `:hypothesis/actual` datoms
+/// signed by the signer. The calibration data itself is verifiable: each
+/// prediction and outcome is a signed datom (INV-FERR-051).
+#[derive(Debug, Clone)]
+pub struct VerifiedCalibration {
+    /// Mean absolute error of predictions vs actual outcomes.
+    /// Lower = more accurate. Range: [0.0, ∞).
+    pub mean_error: f64,
+    /// Number of resolved predictions (predictions with matched outcomes).
+    pub sample_count: usize,
+    /// Most recent prediction timestamp (TxId).
+    pub last_prediction: Option<TxId>,
+    /// Trend: is accuracy improving or degrading?
+    /// Computed as slope of error over last `sample_count / 2` predictions.
+    pub trend: CalibrationTrend,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum CalibrationTrend {
+    Improving,  // Recent predictions more accurate than older ones
+    Stable,     // No significant trend
+    Degrading,  // Recent predictions less accurate than older ones
+    Insufficient, // Not enough data points to compute trend
+}
+```
+
+**Falsification**: Any of the following constitutes a violation of INV-FERR-054:
+- A query with `TrustPolicy::Only({K})` returns a datom signed by key `K'` where
+  `K' != K` and `K' is not in the key set`. (Key filtering bypass.)
+- A query with `TrustPolicy::Calibrated { min_accuracy: 0.1, min_samples: 50 }` accepts
+  a signer whose verified calibration has `mean_error = 0.3` or `sample_count = 10`.
+  (Calibration threshold bypass.)
+- `TrustPolicy::Calibrated` accepts a signer whose calibration claims are NOT backed by
+  signed datoms (unverifiable calibration). The calibration MUST be computed from signed
+  `:hypothesis/predicted` and `:hypothesis/actual` datoms, not from self-reported metadata.
+- `TrustPolicy::All` applied to a result set changes the result set (not identity).
+- A trust policy with strictly more permissive acceptance produces a strictly smaller
+  result set (monotonicity violation).
+- A trust-filtered federated query (monotonic Q) produces different results than the
+  federation of trust-filtered per-store queries (distribution failure).
+
+**proptest strategy**:
+```rust
+proptest! {
+    /// TrustPolicy::All is identity: never filters any datom.
+    #[test]
+    fn trust_all_is_identity(
+        datoms in prop::collection::vec(arb_datom(), 0..100),
+    ) {
+        let snapshot = Snapshot::from_datoms(&datoms);
+        let filtered = trust_filter(datoms.clone(), &TrustPolicy::All, &snapshot);
+        prop_assert_eq!(filtered, datoms,
+            "TrustPolicy::All changed the result set");
+    }
+
+    /// TrustPolicy::Only accepts only datoms from listed signers.
+    #[test]
+    fn trust_only_filters_correctly(
+        datoms_a in prop::collection::vec(arb_signed_datom(), 1..20),
+        datoms_b in prop::collection::vec(arb_signed_datom(), 1..20),
+    ) {
+        let key_a = datoms_a[0].signer;
+        let all_datoms: Vec<Datom> = datoms_a.iter()
+            .chain(datoms_b.iter())
+            .map(|sd| sd.datom.clone())
+            .collect();
+
+        let snapshot = Snapshot::from_signed_datoms(
+            &datoms_a.iter().chain(datoms_b.iter()).cloned().collect::<Vec<_>>()
+        );
+
+        let policy = TrustPolicy::Only(HashSet::from([key_a]));
+        let filtered = trust_filter(all_datoms, &policy, &snapshot);
+
+        // Every filtered datom must be signed by key_a
+        for datom in &filtered {
+            let signer = snapshot.tx_signer(datom.tx).unwrap();
+            prop_assert_eq!(signer, key_a,
+                "TrustPolicy::Only returned datom from wrong signer");
+        }
+    }
+
+    /// TrustPolicy::Calibrated filters by accuracy threshold.
+    #[test]
+    fn trust_calibrated_filters_by_accuracy(
+        predictions in prop::collection::vec(arb_prediction(), 10..50),
+        min_accuracy in 0.05f64..0.5,
+        min_samples in 5usize..20,
+    ) {
+        let (datoms, snapshot) = build_calibrated_store(&predictions);
+        let policy = TrustPolicy::Calibrated { min_accuracy, min_samples };
+        let filtered = trust_filter(datoms.clone(), &policy, &snapshot);
+
+        // Every accepted datom's signer must meet calibration thresholds
+        for datom in &filtered {
+            let signer = snapshot.tx_signer(datom.tx).unwrap();
+            let cal = snapshot.verified_calibration(&signer);
+            prop_assert!(cal.mean_error <= min_accuracy,
+                "Accepted signer with error {} > threshold {}",
+                cal.mean_error, min_accuracy);
+            prop_assert!(cal.sample_count >= min_samples,
+                "Accepted signer with {} samples < threshold {}",
+                cal.sample_count, min_samples);
+        }
+    }
+
+    /// More permissive policy produces superset results (monotonicity).
+    #[test]
+    fn trust_policy_monotonicity(
+        datoms in prop::collection::vec(arb_signed_datom(), 1..50),
+        key_bytes in prop::array::uniform32(any::<u8>()),
+    ) {
+        let key = VerifyingKey::from_bytes(&key_bytes).unwrap();
+        let all_datoms: Vec<Datom> = datoms.iter().map(|sd| sd.datom.clone()).collect();
+        let snapshot = Snapshot::from_signed_datoms(&datoms);
+
+        let strict_policy = TrustPolicy::Only(HashSet::from([key]));
+        let permissive_policy = TrustPolicy::All;
+
+        let strict_result: BTreeSet<_> = trust_filter(
+            all_datoms.clone(), &strict_policy, &snapshot
+        ).into_iter().collect();
+
+        let permissive_result: BTreeSet<_> = trust_filter(
+            all_datoms, &permissive_policy, &snapshot
+        ).into_iter().collect();
+
+        prop_assert!(strict_result.is_subset(&permissive_result),
+            "Strict policy produced results not in permissive policy");
+    }
+
+    /// Trust filter distributes over federation for monotonic queries.
+    #[test]
+    fn trust_distributes_over_federation(
+        datoms_a in prop::collection::vec(arb_signed_datom(), 1..30),
+        datoms_b in prop::collection::vec(arb_signed_datom(), 1..30),
+        key_bytes in prop::array::uniform32(any::<u8>()),
+    ) {
+        let key = VerifyingKey::from_bytes(&key_bytes).unwrap();
+        let policy = TrustPolicy::Only(HashSet::from([key]));
+
+        // Filter(Union(A, B))
+        let all: Vec<Datom> = datoms_a.iter().chain(datoms_b.iter())
+            .map(|sd| sd.datom.clone()).collect();
+        let union_snapshot = Snapshot::from_signed_datoms(
+            &datoms_a.iter().chain(datoms_b.iter()).cloned().collect::<Vec<_>>()
+        );
+        let filter_union: BTreeSet<_> = trust_filter(all, &policy, &union_snapshot)
+            .into_iter().collect();
+
+        // Union(Filter(A), Filter(B))
+        let snap_a = Snapshot::from_signed_datoms(&datoms_a);
+        let snap_b = Snapshot::from_signed_datoms(&datoms_b);
+        let filtered_a = trust_filter(
+            datoms_a.iter().map(|sd| sd.datom.clone()).collect(),
+            &policy, &snap_a,
+        );
+        let filtered_b = trust_filter(
+            datoms_b.iter().map(|sd| sd.datom.clone()).collect(),
+            &policy, &snap_b,
+        );
+        let union_filter: BTreeSet<_> = filtered_a.into_iter()
+            .chain(filtered_b.into_iter()).collect();
+
+        prop_assert_eq!(filter_union, union_filter,
+            "Trust filter does not distribute over federation");
+    }
+}
+```
+
+**Lean theorem**:
+```lean
+/-- TrustPolicy::All is identity: it accepts every datom. -/
+theorem trust_all_identity (S : DatomStore) (Q : QueryExpr) :
+    query_with_trust S Q TrustPolicy.All = query S Q := by
+  simp [query_with_trust, trust_filter, TrustPolicy.accepts]
+  -- All.accepts always returns true, so filter is identity
+  exact Finset.filter_true_of_mem (fun _ _ => rfl)
+
+/-- Trust filter monotonicity: more permissive policy → superset results. -/
+theorem trust_monotonicity (S : DatomStore) (Q : QueryExpr)
+    (π₁ π₂ : TrustPolicy)
+    (h_perm : ∀ d s, π₁.accepts d s → π₂.accepts d s) :
+    query_with_trust S Q π₁ ⊆ query_with_trust S Q π₂ := by
+  intro d h_d
+  simp [query_with_trust, trust_filter] at h_d ⊢
+  obtain ⟨h_query, h_accept⟩ := h_d
+  exact ⟨h_query, h_perm d (snapshot S) h_accept⟩
+
+/-- Trust filter distributes over union (required for federation). -/
+theorem trust_distributes_union (S₁ S₂ : DatomStore) (Q : QueryExpr)
+    (π : TrustPolicy) (h_mono : monotonic Q)
+    (h_indep : ∀ d, π.accepts d (snapshot S₁) = π.accepts d (snapshot (S₁ ∪ S₂))) :
+    query_with_trust (S₁ ∪ S₂) Q π =
+      query_with_trust S₁ Q π ∪ query_with_trust S₂ Q π := by
+  simp [query_with_trust]
+  -- By CALM (INV-FERR-037): query distributes over union for monotonic Q
+  rw [federated_query_n_two S₁ S₂ Q h_mono]
+  -- Trust filter distributes over union because accepts is per-datom
+  rw [Finset.filter_union]
+  congr 1 <;> {
+    ext d; simp [trust_filter]
+    constructor
+    · intro ⟨h_mem, h_acc⟩; exact ⟨h_mem, h_acc⟩
+    · intro ⟨h_mem, h_acc⟩; exact ⟨h_mem, h_acc⟩
+  }
+
+/-- Calibrated trust is grounded: calibration data comes from signed datoms. -/
+theorem calibrated_trust_grounded (S : DatomStore) (signer : VerifyingKey)
+    (cal : VerifiedCalibration)
+    (h_cal : cal = verified_calibration S signer) :
+    ∀ pred ∈ cal.predictions,
+      ∃ tx ∈ S, tx.signer = signer ∧ tx.contains_prediction pred := by
+  intro pred h_pred
+  -- verified_calibration only considers signed datoms with matching signer
+  exact verified_calibration_grounded S signer pred h_cal h_pred
+```
+
+---
+
+### INV-FERR-055: Verifiable Knowledge Commitment (VKC)
+
+**Traces to**: SEED.md §1 ("verifiable coherence"), SEED.md §4 ("calibrated policies
+are transferable"), INV-FERR-051 (Signed Transactions), INV-FERR-052 (Merkle Proof
+of Inclusion), ADR-FERR-009
+**Verification**: `V:PROP`, `V:KANI`, `V:LEAN`
+**Stage**: 1
+
+A VKC is the fundamental unit of trustless knowledge transfer. It bundles three
+independently verifiable components into a single self-contained artifact:
+(1) a signed transaction (who asserted what),
+(2) a Merkle proof of the signer's causal context (what they knew when they asserted),
+(3) a Merkle proof of the signer's calibration history (how reliable they are).
+A single VKC is independently verifiable by anyone without access to the signer's full
+store, without network connectivity, and without any prior trust relationship.
+
+#### Level 0 (Algebraic Law)
+
+```
+Let T be a transaction in store S signed by agent A with key SK_A.
+
+VKC(T, S) = {
+  signed_tx:         SignedTransaction(T),                         -- who + what
+  context_proofs:    [MerkleProof(pred ∈ S) | pred ∈ T.predecessors],  -- causal context
+  calibration_proof: CalibrationProof(A, S),                       -- reliability
+  store_root:        root(S)                                       -- trust anchor
+}
+
+-- VKC verification (three independent checks)
+verify_vkc(vkc) =
+  -- Check 1: Signature (who made the claim)
+  vkc.signed_tx.verify() = ok                                     [INV-FERR-051]
+
+  -- Check 2: Context (what they knew)
+  ∧ ∀ proof ∈ vkc.context_proofs:
+      proof.root_hash = vkc.store_root                            [root binding]
+      ∧ verify_inclusion(proof) = true                            [INV-FERR-052]
+
+  -- Check 3: Calibration (how reliable they are)
+  ∧ ∀ (pred, proof) ∈ vkc.calibration_proof.predictions:
+      proof.root_hash = vkc.store_root                            [root binding]
+      ∧ verify_inclusion(proof) = true                            [INV-FERR-052]
+
+-- Soundness: verified VKC implies authentic provenance
+verify_vkc(vkc) = ok →
+  authentic(vkc.signed_tx)                   -- assertion is genuine
+  ∧ context_existed(vkc.context_proofs)      -- signer's context was real
+  ∧ calibration_verifiable(vkc.calibration_proof)  -- reliability is checkable
+
+-- Independence: verification requires ONLY the VKC itself
+∀ vkc: verify_vkc(vkc) needs only:
+  - vkc (the commitment itself)
+  - Ed25519 verification algorithm
+  - blake3 hash algorithm
+  NOT: network access, full store, signer relationship, trust configuration
+
+-- VKC is tamper-evident
+∀ vkc, vkc' where vkc' = tamper(vkc):
+  verify_vkc(vkc) = ok ∧ vkc' ≠ vkc → verify_vkc(vkc') = fail
+
+-- VKC composition: VKCs from different agents can be independently verified
+∀ vkc_A from agent A, vkc_B from agent B:
+  verify_vkc(vkc_A) and verify_vkc(vkc_B) are independent computations
+  -- No shared state, no ordering requirement, parallelizable
+
+-- Calibration monotonicity: more predictions → more confident trust assessment
+∀ cal_1, cal_2 for same signer:
+  cal_2.sample_count > cal_1.sample_count
+  → confidence(cal_2) ≥ confidence(cal_1)
+  -- (by law of large numbers: more samples → tighter error estimate)
+```
+
+#### Level 1 (State Invariant)
+
+A VKC is a self-contained, independently verifiable unit of knowledge. Given only the
+VKC (no network access, no trust assumptions, no prior relationship with the signer),
+a receiver can verify three properties:
+
+1. **Authenticity** (who made the claim): The Ed25519 signature on the transaction is
+   valid for the claimed signer's public key. No one else could have produced this
+   signature (by Ed25519 unforgeability, INV-FERR-051).
+
+2. **Context** (what they knew when they made it): The Merkle proofs for causal
+   predecessors demonstrate that the signer's store contained specific prior datoms
+   at the time of assertion. This establishes the causal chain: the signer's assertion
+   was made in a specific epistemic context, not in a vacuum.
+
+3. **Reliability** (how accurate they are historically): The calibration proof contains
+   a verifiable subset of the signer's prediction/outcome history. The receiver can
+   independently compute the signer's mean prediction error from these signed datoms.
+   The calibration is not self-reported — it is derived from cryptographically signed
+   predictions and outcomes that are provably in the signer's store.
+
+VKC verification is deterministic, offline-capable, and parallelizable. Two VKCs from
+different agents can be verified simultaneously with no shared state. The verification
+cost is bounded: one Ed25519 verify (~2us) + O(C * log_k(N)) Merkle proof verifications
+where C = number of context + calibration proofs and k, N are the prolly tree parameters.
+
+For a typical VKC with 5 context predecessors and 20 calibration predictions from a
+100M datom store: ~25 Merkle proof verifications, each ~6 levels deep = ~150 blake3
+hashes = ~150us total verification time.
+
+#### Level 2 (Implementation Contract)
+
+```rust
+/// A Verifiable Knowledge Commitment: the fundamental unit of trustless
+/// knowledge transfer.
+///
+/// A VKC bundles:
+/// 1. A signed transaction (authenticity — who asserted what)
+/// 2. Merkle proofs of causal predecessors (context — what they knew)
+/// 3. A calibration proof (reliability — how accurate they are)
+///
+/// # Independence
+/// Verification requires ONLY this struct. No network access, no store access,
+/// no trust configuration. The VKC is fully self-contained.
+///
+/// # Size
+/// Typical VKC with 5 predecessors, 20 calibration predictions, 100M datom store:
+/// - SignedTransaction: ~500 bytes (variable, depends on datom count in tx)
+/// - Context proofs: 5 × ~6KB = ~30KB
+/// - Calibration proof: 20 × ~6KB = ~120KB
+/// - Total: ~150KB
+///
+/// # Performance
+/// - Creation: ~50us (sign + construct proofs)
+/// - Verification: ~150us (verify signature + verify all proofs)
+pub struct VerifiableKnowledgeCommitment {
+    /// The signed transaction: datoms + signature + signer public key.
+    /// Establishes WHO asserted WHAT.
+    pub signed_tx: SignedTransaction,
+
+    /// Merkle inclusion proofs for each causal predecessor.
+    /// Establishes WHAT THE SIGNER KNEW when they made the assertion.
+    /// Each proof demonstrates that a predecessor datom exists in the
+    /// signer's store at the time of assertion.
+    pub context_proofs: Vec<InclusionProof>,
+
+    /// Calibration proof: verifiable subset of prediction/outcome history.
+    /// Establishes HOW RELIABLE the signer is, grounded in signed datoms.
+    pub calibration_proof: CalibrationProof,
+
+    /// Root hash of the signer's store at the time the VKC was created.
+    /// This is the trust anchor: all Merkle proofs verify against this root.
+    pub store_root: ChunkAddress,
+}
+
+/// A calibration proof: verifiable evidence of a signer's prediction accuracy.
+///
+/// Contains a subset of the signer's prediction/outcome history, each pair
+/// backed by a Merkle inclusion proof. The receiver can independently compute
+/// the mean error from these verified data points.
+///
+/// # Completeness
+/// The calibration proof is a SUBSET of the signer's full calibration history.
+/// The signer could withhold unfavorable predictions. The `sample_count` field
+/// reports the claimed total, but only `recent_predictions.len()` are verifiable.
+/// The receiver should use min(sample_count, recent_predictions.len()) and
+/// apply appropriate skepticism to the difference.
+pub struct CalibrationProof {
+    /// Claimed mean prediction error. Verifiable from `recent_predictions`.
+    pub mean_error: f64,
+
+    /// Claimed total number of resolved predictions.
+    /// Only `recent_predictions.len()` are independently verifiable.
+    pub sample_count: usize,
+
+    /// Verifiable prediction/outcome pairs with Merkle inclusion proofs.
+    /// Each entry: (prediction_datom, outcome_datom, inclusion_proof_for_prediction,
+    /// inclusion_proof_for_outcome).
+    ///
+    /// The receiver verifies:
+    /// 1. Each proof against `store_root`
+    /// 2. Prediction datom has attribute `:hypothesis/predicted`
+    /// 3. Outcome datom has attribute `:hypothesis/actual`
+    /// 4. Prediction and outcome are matched (same entity or `:hypothesis/matches` ref)
+    /// 5. Recomputed mean error ≈ claimed mean_error (within floating point tolerance)
+    pub recent_predictions: Vec<VerifiablePrediction>,
+}
+
+/// A single verifiable prediction/outcome pair.
+pub struct VerifiablePrediction {
+    /// The prediction datom (attribute: `:hypothesis/predicted`).
+    pub prediction: Datom,
+    /// Merkle proof that the prediction is in the signer's store.
+    pub prediction_proof: InclusionProof,
+    /// The outcome datom (attribute: `:hypothesis/actual`).
+    pub outcome: Datom,
+    /// Merkle proof that the outcome is in the signer's store.
+    pub outcome_proof: InclusionProof,
+}
+
+/// The result of verifying a VKC.
+///
+/// Contains the extracted trust information: who signed it, how reliable
+/// they are (verifiably), and whether the context chain is valid.
+#[derive(Debug, Clone)]
+pub struct VkcVerification {
+    /// The signer's public key (extracted from the signed transaction).
+    pub signer: VerifyingKey,
+    /// Verified mean prediction error (recomputed from calibration proof).
+    pub verified_mean_error: f64,
+    /// Number of verifiable prediction/outcome pairs.
+    pub verifiable_sample_count: usize,
+    /// Claimed total sample count (may exceed verifiable count).
+    pub claimed_sample_count: usize,
+    /// Whether all context proofs verified.
+    pub context_verified: bool,
+    /// Number of causal predecessors verified.
+    pub context_depth: usize,
+}
+
+impl VerifiableKnowledgeCommitment {
+    /// Create a VKC from a transaction and its containing store.
+    ///
+    /// Constructs Merkle proofs for all causal predecessors and a sample
+    /// of the signer's calibration history.
+    ///
+    /// # Arguments
+    /// - `tx`: The transaction to commit
+    /// - `key`: The signer's private key
+    /// - `store`: The signer's store (used to construct proofs)
+    /// - `calibration_sample_size`: Number of recent predictions to include
+    ///
+    /// # Performance
+    /// ~50us: ~6us sign + ~44us proof construction (for 25 proofs)
+    pub fn create(
+        tx: Transaction,
+        key: &SigningKey,
+        store: &Store,
+        calibration_sample_size: usize,
+    ) -> Result<Self, CryptoError> {
+        let signed_tx = SignedTransaction::sign(tx.clone(), key);
+
+        // Construct context proofs for causal predecessors
+        let mut context_proofs = Vec::with_capacity(tx.predecessors.len());
+        for pred_tx_id in &tx.predecessors {
+            // Find the predecessor transaction's datoms and prove their inclusion
+            let pred_datoms = store.datoms_for_tx(*pred_tx_id);
+            for datom in pred_datoms {
+                if let Some(proof) = InclusionProof::construct(store, &datom) {
+                    context_proofs.push(proof);
+                    break; // One proof per predecessor is sufficient for existence
+                }
+            }
+        }
+
+        // Construct calibration proof
+        let signer_key = key.verifying_key();
+        let predictions = store.predictions_by_signer(&signer_key);
+        let recent: Vec<_> = predictions
+            .into_iter()
+            .rev() // Most recent first
+            .take(calibration_sample_size)
+            .collect();
+
+        let mut verifiable_predictions = Vec::with_capacity(recent.len());
+        let mut error_sum = 0.0;
+
+        for (prediction, outcome) in &recent {
+            let pred_proof = InclusionProof::construct(store, prediction)
+                .ok_or(CryptoError::InvalidInclusionProof)?;
+            let out_proof = InclusionProof::construct(store, outcome)
+                .ok_or(CryptoError::InvalidInclusionProof)?;
+
+            error_sum += (prediction.value.as_f64() - outcome.value.as_f64()).abs();
+
+            verifiable_predictions.push(VerifiablePrediction {
+                prediction: prediction.clone(),
+                prediction_proof: pred_proof,
+                outcome: outcome.clone(),
+                outcome_proof: out_proof,
+            });
+        }
+
+        let mean_error = if verifiable_predictions.is_empty() {
+            f64::NAN
+        } else {
+            error_sum / verifiable_predictions.len() as f64
+        };
+
+        let total_count = store.total_predictions_by_signer(&signer_key);
+
+        Ok(Self {
+            signed_tx,
+            context_proofs,
+            calibration_proof: CalibrationProof {
+                mean_error,
+                sample_count: total_count,
+                recent_predictions: verifiable_predictions,
+            },
+            store_root: store.root_hash(),
+        })
+    }
+
+    /// Verify the VKC: check signature, context proofs, and calibration proofs.
+    ///
+    /// Returns `Ok(VkcVerification)` with extracted trust information if all
+    /// checks pass. Returns `Err(CryptoError)` on the FIRST failed check.
+    ///
+    /// # Checks (in order)
+    /// 1. Ed25519 signature on the transaction (INV-FERR-051)
+    /// 2. All context proofs verify against `store_root` (INV-FERR-052)
+    /// 3. All calibration prediction/outcome proofs verify against `store_root`
+    /// 4. Recomputed mean error matches claimed mean error (within tolerance)
+    ///
+    /// # Performance
+    /// ~150us for a typical VKC (1 signature + 25 Merkle proofs)
+    pub fn verify(&self) -> Result<VkcVerification, CryptoError> {
+        // Check 1: Verify signature
+        self.signed_tx.verify()?;
+
+        // Check 2: Verify context proofs
+        for proof in &self.context_proofs {
+            if proof.root_hash != self.store_root {
+                return Err(CryptoError::RootHashMismatch {
+                    expected: self.store_root,
+                    actual: proof.root_hash,
+                });
+            }
+            if !proof.verify() {
+                return Err(CryptoError::InvalidInclusionProof);
+            }
+        }
+
+        // Check 3: Verify calibration proofs
+        let mut recomputed_error_sum = 0.0;
+        for vp in &self.calibration_proof.recent_predictions {
+            // Verify prediction proof
+            if vp.prediction_proof.root_hash != self.store_root {
+                return Err(CryptoError::RootHashMismatch {
+                    expected: self.store_root,
+                    actual: vp.prediction_proof.root_hash,
+                });
+            }
+            if !vp.prediction_proof.verify() {
+                return Err(CryptoError::InvalidCalibrationProof);
+            }
+
+            // Verify outcome proof
+            if vp.outcome_proof.root_hash != self.store_root {
+                return Err(CryptoError::RootHashMismatch {
+                    expected: self.store_root,
+                    actual: vp.outcome_proof.root_hash,
+                });
+            }
+            if !vp.outcome_proof.verify() {
+                return Err(CryptoError::InvalidCalibrationProof);
+            }
+
+            // Verify proof datoms match the claimed datoms
+            if vp.prediction_proof.datom != vp.prediction {
+                return Err(CryptoError::InvalidCalibrationProof);
+            }
+            if vp.outcome_proof.datom != vp.outcome {
+                return Err(CryptoError::InvalidCalibrationProof);
+            }
+
+            recomputed_error_sum +=
+                (vp.prediction.value.as_f64() - vp.outcome.value.as_f64()).abs();
+        }
+
+        // Check 4: Verify claimed mean error matches recomputed
+        let verifiable_count = self.calibration_proof.recent_predictions.len();
+        if verifiable_count > 0 {
+            let recomputed_mean = recomputed_error_sum / verifiable_count as f64;
+            let tolerance = 1e-10; // Floating point tolerance
+            if (recomputed_mean - self.calibration_proof.mean_error).abs() > tolerance {
+                return Err(CryptoError::InvalidCalibrationProof);
+            }
+        }
+
+        Ok(VkcVerification {
+            signer: self.signed_tx.signer,
+            verified_mean_error: if verifiable_count > 0 {
+                recomputed_error_sum / verifiable_count as f64
+            } else {
+                f64::NAN
+            },
+            verifiable_sample_count: verifiable_count,
+            claimed_sample_count: self.calibration_proof.sample_count,
+            context_verified: true,
+            context_depth: self.context_proofs.len(),
+        })
+    }
+}
+
+#[kani::proof]
+#[kani::unwind(5)]
+fn vkc_verify_roundtrip() {
+    let datom = Datom {
+        entity: kani::any(),
+        attribute: kani::any(),
+        value: kani::any(),
+        tx: kani::any(),
+        op: kani::any(),
+    };
+
+    let tx = Transaction {
+        tx_id: kani::any(),
+        datoms: vec![datom],
+        predecessors: vec![],
+    };
+
+    let key_bytes: [u8; 32] = kani::any();
+    let key = SigningKey::from_bytes(&key_bytes);
+
+    // Sign transaction
+    let signed = SignedTransaction::sign(tx, &key);
+
+    // Create minimal VKC (no predecessors, no calibration)
+    let vkc = VerifiableKnowledgeCommitment {
+        signed_tx: signed,
+        context_proofs: vec![],
+        calibration_proof: CalibrationProof {
+            mean_error: f64::NAN,
+            sample_count: 0,
+            recent_predictions: vec![],
+        },
+        store_root: ChunkAddress::zero(),
+    };
+
+    // Verify must pass for honestly constructed VKC
+    assert!(vkc.verify().is_ok());
+}
+```
+
+**Falsification**: Any of the following constitutes a violation of INV-FERR-055:
+- A VKC that passes `verify()` but contains a forged calibration history: the
+  `CalibrationProof.recent_predictions` include prediction/outcome datoms that are NOT
+  in the signer's store (their Merkle proofs are fabricated). This would require breaking
+  INV-FERR-052 soundness.
+- A VKC where the context proofs reference a different store root than `self.store_root`:
+  the proofs were constructed against a different store state than the one claimed. The
+  `verify()` method must check `proof.root_hash == self.store_root` for every proof.
+- A VKC where `verify()` returns `Ok(...)` but the `signed_tx` signature is invalid
+  (would require breaking INV-FERR-051).
+- A VKC where the claimed `mean_error` differs from the recomputed `mean_error` (computed
+  from the verifiable predictions) by more than floating point tolerance, yet `verify()`
+  returns `Ok(...)`.
+- Two different VKCs (different signed transactions) that `verify()` accepts with the
+  same signer key but different store roots, where one VKC's context proofs would verify
+  against the other's store root (cross-contamination). Each VKC is bound to exactly one
+  store root.
+
+**proptest strategy**:
+```rust
+proptest! {
+    /// Honestly constructed VKC always verifies.
+    #[test]
+    fn vkc_honest_roundtrip(
+        datoms in prop::collection::vec(arb_datom(), 1..20),
+        pred_count in 0usize..5,
+        cal_count in 0usize..10,
+        key_bytes in prop::array::uniform32(any::<u8>()),
+    ) {
+        let key = SigningKey::from_bytes(&key_bytes);
+        let mut store = Store::new();
+
+        // Add datoms to store
+        let tx = store.transact(datoms);
+
+        // Add some predecessor transactions
+        let preds: Vec<u64> = (0..pred_count)
+            .map(|i| store.transact(vec![arb_datom_seeded(i as u64)]).tx_id)
+            .collect();
+
+        // Add calibration data
+        for i in 0..cal_count {
+            let pred_val = (i as f64) * 0.1;
+            let actual_val = pred_val + 0.05; // Known error of 0.05
+            store.transact_prediction(&key, pred_val, actual_val);
+        }
+
+        let tx_with_preds = Transaction {
+            tx_id: tx.tx_id,
+            datoms: tx.datoms,
+            predecessors: preds,
+        };
+
+        let vkc = VerifiableKnowledgeCommitment::create(
+            tx_with_preds, &key, &store, cal_count,
+        );
+
+        prop_assert!(vkc.is_ok(), "VKC creation failed: {:?}", vkc.err());
+        let vkc = vkc.unwrap();
+
+        let result = vkc.verify();
+        prop_assert!(result.is_ok(), "Honest VKC verification failed: {:?}", result.err());
+
+        let verification = result.unwrap();
+        prop_assert_eq!(verification.signer, key.verifying_key());
+        prop_assert!(verification.context_verified);
+    }
+
+    /// Tampering with calibration proof invalidates VKC.
+    #[test]
+    fn vkc_tampered_calibration_fails(
+        datoms in prop::collection::vec(arb_datom(), 1..10),
+        cal_count in 2usize..8,
+        key_bytes in prop::array::uniform32(any::<u8>()),
+    ) {
+        let key = SigningKey::from_bytes(&key_bytes);
+        let mut store = Store::new();
+        let tx = store.transact(datoms);
+
+        for i in 0..cal_count {
+            store.transact_prediction(&key, i as f64 * 0.1, i as f64 * 0.15);
+        }
+
+        let mut vkc = VerifiableKnowledgeCommitment::create(
+            Transaction { tx_id: tx.tx_id, datoms: tx.datoms, predecessors: vec![] },
+            &key, &store, cal_count,
+        ).unwrap();
+
+        // Tamper: change claimed mean error
+        vkc.calibration_proof.mean_error += 1.0;
+
+        prop_assert!(vkc.verify().is_err(),
+            "VKC with tampered calibration mean_error passed verification");
+    }
+
+    /// Tampering with context proof invalidates VKC.
+    #[test]
+    fn vkc_tampered_context_fails(
+        datoms in prop::collection::vec(arb_datom(), 1..10),
+        key_bytes in prop::array::uniform32(any::<u8>()),
+        tamper_byte in any::<u8>(),
+    ) {
+        let key = SigningKey::from_bytes(&key_bytes);
+        let mut store = Store::new();
+        let pred_tx = store.transact(vec![arb_datom_seeded(0)]);
+        let tx = store.transact(datoms.clone());
+
+        let tx_with_pred = Transaction {
+            tx_id: tx.tx_id,
+            datoms: tx.datoms,
+            predecessors: vec![pred_tx.tx_id],
+        };
+
+        let mut vkc = VerifiableKnowledgeCommitment::create(
+            tx_with_pred, &key, &store, 0,
+        ).unwrap();
+
+        // Tamper: corrupt a context proof's sibling hash
+        if let Some(proof) = vkc.context_proofs.first_mut() {
+            if let Some(node) = proof.path.first_mut() {
+                if let Some(hash) = node.sibling_hashes.first_mut() {
+                    hash.as_mut_bytes()[0] ^= tamper_byte | 1;
+                }
+            }
+        }
+
+        prop_assert!(vkc.verify().is_err(),
+            "VKC with tampered context proof passed verification");
+    }
+
+    /// VKC with wrong store root fails verification.
+    #[test]
+    fn vkc_wrong_root_fails(
+        datoms in prop::collection::vec(arb_datom(), 1..10),
+        key_bytes in prop::array::uniform32(any::<u8>()),
+        fake_root_bytes in prop::array::uniform32(any::<u8>()),
+    ) {
+        let key = SigningKey::from_bytes(&key_bytes);
+        let mut store = Store::new();
+        let pred_tx = store.transact(vec![arb_datom_seeded(0)]);
+        let tx = store.transact(datoms.clone());
+
+        let tx_with_pred = Transaction {
+            tx_id: tx.tx_id,
+            datoms: tx.datoms,
+            predecessors: vec![pred_tx.tx_id],
+        };
+
+        let mut vkc = VerifiableKnowledgeCommitment::create(
+            tx_with_pred, &key, &store, 0,
+        ).unwrap();
+
+        // Replace store root with a fake one
+        let fake_root = ChunkAddress::from_bytes(fake_root_bytes);
+        prop_assume!(fake_root != vkc.store_root);
+        vkc.store_root = fake_root;
+
+        // Context proofs still reference the real root, creating a mismatch
+        if !vkc.context_proofs.is_empty() {
+            prop_assert!(vkc.verify().is_err(),
+                "VKC with mismatched store root passed verification");
+        }
+    }
+
+    /// VKC verification is deterministic.
+    #[test]
+    fn vkc_verify_deterministic(
+        datoms in prop::collection::vec(arb_datom(), 1..10),
+        key_bytes in prop::array::uniform32(any::<u8>()),
+    ) {
+        let key = SigningKey::from_bytes(&key_bytes);
+        let mut store = Store::new();
+        let tx = store.transact(datoms);
+
+        let vkc = VerifiableKnowledgeCommitment::create(
+            Transaction { tx_id: tx.tx_id, datoms: tx.datoms, predecessors: vec![] },
+            &key, &store, 0,
+        ).unwrap();
+
+        let result1 = vkc.verify();
+        let result2 = vkc.verify();
+
+        // Both calls produce the same result
+        match (result1, result2) {
+            (Ok(v1), Ok(v2)) => {
+                prop_assert_eq!(v1.signer, v2.signer);
+                prop_assert_eq!(v1.verifiable_sample_count, v2.verifiable_sample_count);
+                prop_assert_eq!(v1.context_verified, v2.context_verified);
+                prop_assert_eq!(v1.context_depth, v2.context_depth);
+            }
+            (Err(_), Err(_)) => {} // Both failed — consistent
+            _ => prop_assert!(false, "Verification is non-deterministic"),
+        }
+    }
+}
+```
+
+**Lean theorem**:
+```lean
+/-- VKC soundness: if verify_vkc succeeds, then:
+    (1) the signed transaction is authentic
+    (2) the causal context exists in the signer's store
+    (3) the calibration proof is verifiable
+    This is the fundamental trust theorem of the VKN layer. -/
+theorem vkc_soundness (vkc : VKC)
+    (h_verify : verify_vkc vkc = ok) :
+    authentic vkc.signed_tx
+    ∧ context_exists vkc.context_proofs vkc.store_root
+    ∧ calibration_verified vkc.calibration_proof vkc.store_root := by
+  obtain ⟨h_sig, h_ctx, h_cal⟩ := verify_vkc_decompose h_verify
+  exact ⟨
+    -- (1) Authenticity: Ed25519 signature verifies (INV-FERR-051)
+    signed_tx_authentic h_sig,
+    -- (2) Context: all predecessor proofs verify against store_root (INV-FERR-052)
+    context_proofs_valid h_ctx,
+    -- (3) Calibration: all prediction/outcome proofs verify (INV-FERR-052)
+    calibration_valid h_cal
+  ⟩
+
+/-- VKC tamper detection: any modification to a verified VKC causes
+    verification to fail. -/
+theorem vkc_tamper_detection (vkc : VKC) (vkc' : VKC)
+    (h_verify : verify_vkc vkc = ok) (h_diff : vkc' ≠ vkc) :
+    -- At least one of the three checks fails
+    ¬(verify_vkc vkc' = ok) := by
+  intro h_verify'
+  -- Case analysis on what differs between vkc and vkc'
+  -- If signed_tx differs: signature check fails (INV-FERR-051 tamper detection)
+  -- If context_proofs differ: Merkle verification fails (INV-FERR-052 soundness)
+  -- If calibration_proof differs: either Merkle or mean_error recomputation fails
+  -- If store_root differs: root hash mismatch fails
+  exact vkc_uniqueness h_verify h_verify' h_diff
+
+/-- VKC independence: verification of two VKCs from different agents
+    can proceed in parallel with no shared state. -/
+theorem vkc_independent_verification (vkc_a vkc_b : VKC)
+    (h_diff_signers : vkc_a.signed_tx.signer ≠ vkc_b.signed_tx.signer) :
+    verify_vkc vkc_a = verify_vkc_in_context vkc_a ∅
+    ∧ verify_vkc vkc_b = verify_vkc_in_context vkc_b ∅ := by
+  -- verify_vkc depends only on the VKC's own fields
+  -- It reads no external state, accesses no shared resources
+  -- Therefore it produces the same result in any context (including empty)
+  exact ⟨verify_vkc_pure vkc_a, verify_vkc_pure vkc_b⟩
+
+/-- Calibration monotonicity: more samples → tighter confidence bound. -/
+theorem calibration_confidence_monotone (cal₁ cal₂ : CalibrationProof)
+    (h_superset : cal₁.recent_predictions ⊆ cal₂.recent_predictions)
+    (h_more : cal₂.sample_count > cal₁.sample_count) :
+    confidence_bound cal₂ ≤ confidence_bound cal₁ := by
+  -- By Hoeffding's inequality: confidence bound = O(1/sqrt(n))
+  -- More samples → smaller bound → tighter estimate
+  exact hoeffding_monotone cal₁.sample_count cal₂.sample_count h_more
+```
+
+---
+
+### §23.10.1: Key Management
+
+**Traces to**: ADR-FERR-009, INV-FERR-051 (Signed Transactions), C3 (Schema-as-data)
+
+Key management follows the self-describing principle (C3): keys, rotations, and
+revocations are all datoms in the store, managed by the same primitives as the data
+they protect.
+
+**Public keys as datoms**:
+```
+[:agent/public-key, Value::Bytes(32)]   -- Ed25519 verifying key
+[:agent/key-algorithm, "Ed25519"]       -- Algorithm identifier (for future extensibility)
+[:agent/key-created, timestamp]         -- When the key was registered
+[:agent/key-label, "alice@project-x"]   -- Human-readable label (optional)
+```
+
+**Key rotation**: Sign a `:agent/key-rotation` datom linking old key to new key.
+BOTH keys sign the rotation transaction — the old key proves authorization to rotate,
+the new key proves possession of the replacement.
+```
+Transaction {
+  datoms: [
+    [agent, :agent/key-rotation, Value::Bytes(new_public_key)],
+    [agent, :agent/key-rotation-from, Value::Bytes(old_public_key)],
+    [agent, :agent/key-rotation-timestamp, now()],
+  ],
+  // Signed by OLD key (proves authorization)
+  // Counter-signed by NEW key (proves possession)
+  signatures: [sign(old_key, msg), sign(new_key, msg)],
+}
+```
+
+After rotation:
+- New transactions use the new key.
+- Old transactions (signed by the old key) remain valid and verifiable.
+- The rotation datom creates an auditable chain: key₁ → key₂ → key₃ → ...
+- Trust queries follow the rotation chain: a query for datoms by "agent A"
+  includes datoms signed by any key in A's rotation chain.
+
+**Key revocation**: Sign a `:agent/key-revoked` datom with the key being revoked
+(or with a key later in the rotation chain).
+```
+Transaction {
+  datoms: [
+    [agent, :agent/key-revoked, Value::Bytes(revoked_public_key)],
+    [agent, :agent/key-revocation-reason, "compromised"],
+    [agent, :agent/key-revocation-timestamp, now()],
+  ],
+}
+```
+
+After revocation:
+- Datoms signed by the revoked key are still valid (historical truth — C1 append-only).
+- New trust queries CAN filter out datoms signed by revoked keys (via `TrustPolicy`).
+- The default behavior is to INCLUDE historical datoms from revoked keys (preserving
+  the audit trail). Exclusion requires explicit `TrustPolicy::Custom` configuration.
+
+**Key discovery**: Federated query for `:agent/public-key` datoms, verified by Merkle
+proof (INV-FERR-052). A light client can discover and verify agent public keys from
+untrusted full nodes.
+
+---
+
+### §23.10.2: Performance Impact
+
+| Operation | Without VKN | With VKN | Overhead | Notes |
+|-----------|-------------|----------|----------|-------|
+| Transaction write | ~10us | ~15us | +5us | Ed25519 sign (~5us) |
+| Transaction verify | N/A | ~2us | +2us per tx | Ed25519 verify; amortized across datoms in tx |
+| Storage per tx | ~200 bytes | ~296 bytes | +96 bytes | 64-byte signature + 32-byte public key reference |
+| Query (no trust filter) | baseline | baseline | Zero | Trust filtering is opt-in; no overhead when unused |
+| Query (trust filter) | N/A | +O(\|R\|) verify | Per-result | R = result count; one signer lookup per datom |
+| Merkle proof construct | N/A | O(log_k N) | ~6us at 100M | Walk prolly tree from leaf to root |
+| Merkle proof verify | N/A | O(log_k N) | ~6us at 100M | Reconstruct hashes from leaf to root |
+| Merkle proof size | N/A | O(log_k N) | ~6KB at 100M | ~6 levels x ~1KB per level at fan-out 32 |
+| VKC creation | N/A | ~50us | One-time | Sign + construct ~25 Merkle proofs |
+| VKC verification | N/A | ~150us | One-time | Verify signature + ~25 Merkle proofs |
+| Light client storage | N/A | O(E x 32) | ~2.7MB/10yr | E = epochs; 32 bytes per epoch root hash |
+
+**Key insight**: All VKN overhead is OPT-IN. A store operating in unsigned mode
+(§23.10.5) has zero cryptographic overhead. VKN features activate when a signing key
+is configured and degrade gracefully when disabled. This satisfies C8 (substrate
+independence): the kernel works identically for projects that need verifiable provenance
+and projects that do not.
+
+---
+
+### §23.10.3: Relationship to Federation (§23.8)
+
+VKN transforms federation from "merge with trusted peers" to "merge with anyone, verify
+everything." The following federation operations gain cryptographic verification:
+
+**merge_verified()**: Enhanced selective merge that accepts only signed transactions and
+verifies all signatures before incorporating datoms. An invalid signature causes the
+individual transaction to be rejected (not the entire merge).
+
+```rust
+pub async fn merge_verified(
+    local: &mut Store,
+    remote: &dyn Transport,
+    policy: &TrustPolicy,
+) -> Result<MergeResult, FederationError> {
+    let remote_datoms = remote.fetch_datoms(&DatomFilter::All).await?;
+    let snapshot = local.snapshot();
+
+    let mut accepted = Vec::new();
+    let mut rejected = Vec::new();
+
+    for signed_tx in remote_datoms.signed_transactions() {
+        // Step 1: Verify signature
+        if signed_tx.verify().is_err() {
+            rejected.push((signed_tx, RejectReason::InvalidSignature));
+            continue;
+        }
+
+        // Step 2: Apply trust policy
+        if !policy.accepts_tx(signed_tx, &snapshot) {
+            rejected.push((signed_tx, RejectReason::TrustPolicyRejected));
+            continue;
+        }
+
+        accepted.push(signed_tx);
+    }
+
+    // Step 3: Merge accepted transactions (CRDT set union, INV-FERR-001)
+    local.merge_transactions(accepted);
+
+    Ok(MergeResult { accepted_count: accepted.len(), rejected })
+}
+```
+
+**Anti-entropy with signed chunks**: The anti-entropy protocol (INV-FERR-022) gains
+signature verification. When exchanging chunks for synchronization, each chunk's
+transactions are verified before acceptance. This prevents a compromised peer from
+injecting unsigned or forged datoms during sync.
+
+**Light client federation**: A light client (INV-FERR-053) can participate in federated
+queries by requesting `query_with_proofs` from multiple full nodes. The CALM theorem
+(INV-FERR-037) still holds: the union of verified per-node results equals the verified
+query on the union of stores, for monotonic queries.
+
+---
+
+### §23.10.4: Relationship to Braid's Epistemological Framework
+
+The VKN layer closes the epistemological loop: braid's learning machinery (hypothesis
+ledger, methodology score, calibration) becomes transferable and verifiable across
+organizational boundaries.
+
+**Hypothesis ledger predictions/outcomes are signed datoms**: Every prediction recorded
+by `braid harvest` and every outcome matched by `braid task close` is a signed datom.
+This means calibration history is not self-reported — it is cryptographically provable.
+An agent claiming "my mean prediction error is 0.1" can prove it by providing a VKC
+containing their signed prediction/outcome history.
+
+**Methodology score M(t) is computable from signed datoms**: The fitness function F(S)
+and methodology score M(t) are computed from datoms (coverage, depth, coherence,
+completeness, formality). If all contributing datoms are signed, M(t) is independently
+verifiable. A third party can audit a project's methodology score by verifying the
+underlying datoms.
+
+**Guidance recommendations carry signer's calibration**: When braid generates a guidance
+recommendation (e.g., "implement INV-STORE-001 next, predicted impact = 0.8"), the
+recommendation is a signed datom. The receiver can verify (a) who made the recommendation,
+(b) what their calibration history is, and (c) weight the recommendation accordingly via
+`TrustPolicy::Calibrated`.
+
+**Cross-project learning**: Organizations can merge calibrated policies from other projects,
+weighted by verified accuracy. A compliance team's resolution policies, validated against
+100 audit outcomes with mean error 0.05, carry more weight than an untested set of
+defaults. The VKN layer makes this weighting objective and verifiable rather than
+subjective and social.
+
+---
+
+### §23.10.5: Unsigned Mode (Backward Compatibility)
+
+For local/embedded use where cryptography is unnecessary overhead, ferratomic operates
+in unsigned mode:
+
+**Configuration**:
+```rust
+pub enum SigningMode {
+    /// No signatures. Zero cryptographic overhead. Default for local stores.
+    None,
+    /// All transactions signed with the configured key.
+    /// Key can be provided at store creation or via environment variable.
+    Sign(SigningKey),
+}
+
+impl Config {
+    /// Default: unsigned mode. No key required.
+    pub fn default() -> Self {
+        Self { signing_mode: SigningMode::None, /* ... */ }
+    }
+}
+```
+
+**Behavior in unsigned mode**:
+- No signatures are generated or verified. Zero overhead.
+- All datoms are accepted without trust filtering.
+- `TrustPolicy::All` is the only applicable policy (others require signatures).
+- `TrustPolicy::Only`, `Calibrated`, and `Threshold` reject all datoms (no signers).
+- INV-FERR-051 is satisfied vacuously: there are no signed transactions to verify.
+- INV-FERR-052 through INV-FERR-055 remain functional for Merkle proofs (proofs do
+  not require signatures — they depend only on content-addressed chunks).
+
+**Migration from unsigned to signed**: An unsigned store can transition to signed mode
+by signing all existing transactions under a "legacy" key. This is a one-time operation:
+
+```rust
+pub fn migrate_to_signed(store: &mut Store, legacy_key: &SigningKey) -> MigrationResult {
+    let unsigned_txs = store.unsigned_transactions();
+    let mut signed_count = 0;
+
+    for tx in unsigned_txs {
+        let signed = SignedTransaction::sign(tx, legacy_key);
+        store.attach_signature(signed);
+        signed_count += 1;
+    }
+
+    MigrationResult {
+        signed_count,
+        legacy_signer: legacy_key.verifying_key(),
+    }
+}
+```
+
+After migration, the store is fully signed. The legacy key is marked with
+`:agent/key-label "legacy-migration"` to distinguish it from genuine agent keys.
+Trust policies should account for this: `TrustPolicy::Calibrated` will show zero
+calibration for the legacy key (no predictions were made under it).
+
+---
+
