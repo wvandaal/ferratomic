@@ -4,8 +4,8 @@
 //!
 //! ## Architecture
 //!
-//! - `Store`: im::OrdMap persistent indexes (EAVT, entity, attribute, VAET, AVET, LIVE)
-//! - `Database`: MVCC snapshots via ArcSwap, single writer actor, group commit
+//! - `Store`: `im::OrdMap` persistent indexes (EAVT, entity, attribute, VAET, AVET, LIVE)
+//! - `Database`: MVCC snapshots via `ArcSwap`, single writer actor, group commit
 //! - `Snapshot`: lock-free read handle (~1ns load, zero contention)
 //! - `WriterActor`: mpsc channel, WAL append, two-fsync barrier, batch commit
 //! - `Wal`: write-ahead log with chain-hash integrity

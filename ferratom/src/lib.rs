@@ -23,13 +23,13 @@
 #![deny(clippy::all)]
 #![warn(clippy::pedantic)]
 
-pub mod datom;
-pub mod schema;
 pub mod clock;
+pub mod datom;
 pub mod error;
+pub mod schema;
 pub mod traits;
 
-pub use datom::{Datom, EntityId, Attribute, Value, Op};
-pub use schema::{Schema, AttributeDef, ValueType, Cardinality};
-pub use clock::{TxId, AgentId, HybridClock, Frontier};
+pub use clock::{AgentId, Frontier, HybridClock, TxId};
+pub use datom::{Attribute, Datom, EntityId, Op, Value};
 pub use error::FerraError;
+pub use schema::{AttributeDef, Cardinality, ResolutionMode, Schema, ValueType};

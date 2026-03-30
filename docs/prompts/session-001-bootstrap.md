@@ -12,7 +12,7 @@
 ## Phase 0: Context Recovery (do this FIRST)
 
 1. Read `AGENTS.md` (this project's guidelines and hard constraints)
-2. Read `spec/README.md` and relevant spec modules — the formal specification (50 INV, 8 ADR, 5 NEG)
+2. Read `spec/README.md` and relevant spec modules — the formal specification (55 INV, 9 ADR, 5 NEG)
 3. Read `docs/design/FERRATOMIC_ARCHITECTURE.md` — comprehensive architecture (17 sections)
 4. Read `ferratomic-verify/lean/Ferratomic/Store.lean` — existing Lean proofs (CRDT foundation)
 5. Run `ms load rust-formal-engineering -m --full`

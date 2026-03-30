@@ -1,11 +1,24 @@
-//! Algebraic traits that encode the formal properties of Ferratomic types.
+//! Algebraic traits for Ferratomic.
 //!
-//! These traits ARE propositions (Curry-Howard). Implementing them IS
-//! proving the property holds for the implementing type.
-//!
-//! - `Semilattice`: join-semilattice with idempotent, commutative, associative merge
-//! - `ContentAddressed`: identity determined by content hash
-//! - `CausalOrder`: partial order via happens-before relation
+//! These traits encode the algebraic structure at the type level
+//! via the Curry-Howard correspondence.
 
-// TODO(Phase 3): Define Semilattice, ContentAddressed, CausalOrder traits
-// See spec/23-ferratomic.md §23.0.4 for the algebraic foundation.
+/// A join-semilattice with idempotent, commutative, associative merge.
+/// INV-FERR-001 (commutativity), INV-FERR-002 (associativity), INV-FERR-003 (idempotency).
+///
+/// Laws (verified by Lean proofs in Store.lean):
+/// - `merge(a, b) = merge(b, a)` (commutativity)
+/// - `merge(merge(a, b), c) = merge(a, merge(b, c))` (associativity)
+/// - `merge(a, a) = a` (idempotency)
+pub trait Semilattice {
+    /// Merge two values. The result is the least upper bound.
+    #[must_use]
+    fn merge(&self, other: &Self) -> Self;
+}
+
+/// Content-addressed identity: identity determined by content hash.
+/// INV-FERR-012: Two values with identical content have identical identity.
+pub trait ContentAddressed {
+    /// Compute the content-addressed hash of this value.
+    fn content_hash(&self) -> [u8; 32];
+}

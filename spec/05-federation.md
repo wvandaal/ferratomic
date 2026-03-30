@@ -4827,14 +4827,14 @@ query on the union of stores, for monotonic queries.
 
 ---
 
-### §23.10.4: Relationship to Braid's Epistemological Framework
+### §23.10.4: Relationship to Epistemological Frameworks
 
-The VKN layer closes the epistemological loop: braid's learning machinery (hypothesis
-ledger, methodology score, calibration) becomes transferable and verifiable across
-organizational boundaries.
+The VKN layer closes the epistemological loop: any application's learning machinery
+(hypothesis ledger, methodology score, calibration) becomes transferable and verifiable
+across organizational boundaries.
 
-**Hypothesis ledger predictions/outcomes are signed datoms**: Every prediction recorded
-by `braid harvest` and every outcome matched by `braid task close` is a signed datom.
+**Hypothesis ledger predictions/outcomes are signed datoms**: Every prediction and
+every outcome matched to it is a signed datom.
 This means calibration history is not self-reported — it is cryptographically provable.
 An agent claiming "my mean prediction error is 0.1" can prove it by providing a VKC
 containing their signed prediction/outcome history.
@@ -4845,7 +4845,7 @@ completeness, formality). If all contributing datoms are signed, M(t) is indepen
 verifiable. A third party can audit a project's methodology score by verifying the
 underlying datoms.
 
-**Guidance recommendations carry signer's calibration**: When braid generates a guidance
+**Guidance recommendations carry signer's calibration**: When the application generates a guidance
 recommendation (e.g., "implement INV-STORE-001 next, predicted impact = 0.8"), the
 recommendation is a signed datom. The receiver can verify (a) who made the recommendation,
 (b) what their calibration history is, and (c) weight the recommendation accordingly via

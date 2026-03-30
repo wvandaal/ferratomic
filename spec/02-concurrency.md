@@ -2318,8 +2318,8 @@ This is achieved via a trait-based architecture:
   methods and the same behavioral guarantees (all INV-FERR invariants hold for
   both backends).
 
-The braid kernel imports Ferratomic and uses `Store<EmbeddedBackend>` (the current
-deployment model). If distribution is needed later, the kernel switches to
+The host application imports Ferratomic and uses `Store<EmbeddedBackend>` (the default
+deployment model). If distribution is needed later, the application switches to
 `Store<DistributedBackend>` without changing any of its own code.
 
 #### Level 2 (Implementation Contract)

@@ -1,7 +1,7 @@
 # Ferratomic — Agent Guidelines
 
 > Ferratomic is a formally verified, distributed embedded datom database engine.
-> It is the storage foundation for braid and any system built on the datom model.
+> A general-purpose storage foundation for any system built on the datom model.
 
 ---
 
@@ -9,7 +9,7 @@
 
 Ferratomic provides the universal substrate: an append-only datom store with
 content-addressed identity, CRDT merge, indexed random access, and cloud-scale
-distribution. It is to braid what PostgreSQL is to a web application — the
+distribution. It is to applications what PostgreSQL is to a web app — the
 foundational infrastructure that everything else builds on.
 
 **Store = (P(D), ∪)** — a G-Set CRDT semilattice. Writes are commutative,
@@ -27,7 +27,7 @@ Phase 1: Lean 4 theorem statements + proofs
 Phase 2: Test suite (Stateright, Kani, proptest) — ALL FAIL (red phase)
 Phase 3: Type definitions (ferratom crate — types ARE propositions)
 Phase 4: Implementation (ferratomic-core — programs ARE proofs)
-Phase 5: Integration (braid-kernel migration)
+Phase 5: Integration (application migration)
 ```
 
 **Phase gate**: Phase N+1 CANNOT begin until Phase N passes isomorphism check.
@@ -44,12 +44,9 @@ algebraic properties using `BTreeSet`. Implementation uses `im::OrdSet`/`im::Ord
 
 ## Specification
 
-The canonical specification lives in `spec/` in THIS repository (ferratomic).
-braid symlinks TO here (`spec/ferratomic → ../../ferratomic/spec/`), not the other
-way around. The old monolith `ddis-braid/spec/23-ferratomic.md` is retained for
-backward compatibility only.
+The canonical specification lives in `spec/` in THIS repository.
 
-- **Formal spec**: `spec/` (50 INV, 8 ADR, 5 NEG) — modular files, see `spec/README.md`
+- **Formal spec**: `spec/` (55 INV, 9 ADR, 5 NEG) — modular files, see `spec/README.md`
 - **Architecture**: `docs/design/FERRATOMIC_ARCHITECTURE.md`
 - **Design decisions**: `docs/design/`
 
@@ -190,15 +187,15 @@ too-many-lines-threshold = 50
   within 5 minutes of reading it. Keep it current.
 - **Session prompts (`docs/prompts/`) define execution scope.** One prompt per
   major work phase. The prompt IS the task specification.
-- **Braid integration for task tracking.** Use `braid observe`, `braid task create`,
-  `braid harvest` to maintain canonical project state. Braid IS the source of truth.
+- **Beads for task tracking.** Use `br ready`, `br create`, `br close` to manage
+  project tasks. Beads IS the source of truth for issue state.
 - **Skill loading protocol.** Load ONE methodology skill per cognitive phase:
   - Discovery: `ms load spec-first-design -m --full`
   - Implementation: `ms load rust-formal-engineering -m --full`
   - Optimization: `ms load prompt-optimization -m --pack 2000`
   - Never stack multiple full skills simultaneously (k* budget).
 - **Disjoint file sets for parallel agents.** Two agents NEVER edit the same file.
-  Agent coordination via braid tasks + dependency edges.
+  Agent coordination via beads tasks + dependency edges.
 - **Agents don't run cargo.** The orchestrator (human or primary agent) runs build/test
   ONCE after all agents complete. Prevents build lock contention and disk exhaustion.
 

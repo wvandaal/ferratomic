@@ -1,11 +1,9 @@
 # Ferratomic Specification
 
-> **These files are the CANONICAL specification.** braid's `spec/ferratomic → ../../ferratomic/spec/`
-> symlinks point here. The old monolith `ddis-braid/spec/23-ferratomic.md` is retained for backward
-> compatibility only.
+> **These files are the CANONICAL specification.**
 
 Formal specification using DDIS methodology (INV/ADR/NEG).
-50 invariants, 8 ADRs, 5 negative cases.
+55 invariants, 9 ADRs, 5 negative cases.
 
 **Implementation note**: Spec Level 2 contracts use `BTreeSet`/`BTreeMap` as conceptual
 illustrations. The actual implementation uses `im::OrdSet`/`im::OrdMap` per ADR-FERR-001.
@@ -28,7 +26,7 @@ Every invariant follows the Level 0/1/2 format:
 | [02-concurrency.md](02-concurrency.md) | §23.2 | 013-024 | Checkpoint, recovery, HLC, sharding, append-only, atomicity, backpressure, substrate |
 | [03-performance.md](03-performance.md) | §23.3 | 025-032 | Index backend, write amplification, tail latency, cold start, LIVE resolution, genesis |
 | [04-decisions-and-constraints.md](04-decisions-and-constraints.md) | §23.4-23.7 | 033-036 | ADR-FERR-001..007, NEG-FERR-001..005, cross-shard query, partition tolerance |
-| [05-federation.md](05-federation.md) | §23.8 | 037-044 | Federated query, selective merge, transport, live migration, namespace isolation |
+| [05-federation.md](05-federation.md) | §23.8, §23.10 | 037-044, 051-055 | Federated query, selective merge, transport, live migration, VKN |
 | [06-prolly-tree.md](06-prolly-tree.md) | §23.9 | 045-050 | Chunk addressing, history independence, O(d) diff, block store, substrate independence |
 
 ## Reading Order for Implementing Agents
@@ -43,5 +41,5 @@ Every invariant follows the Level 0/1/2 format:
 
 ## Traces
 
-Every INV-FERR traces to SEED.md (braid's foundational document).
+Every INV-FERR traces to SEED.md (the foundational design document).
 See 00-preamble.md §23.0.3 for the complete INV-STORE → INV-FERR mapping.

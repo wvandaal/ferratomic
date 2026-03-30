@@ -64,7 +64,7 @@ federation transfers where only a handful of datoms differ.
 
 | Option | Description | Pros | Cons |
 |--------|-------------|------|------|
-| A: Flat serialization (`store.bin`) | Current braid model. Full serialize on checkpoint. | Simple. No dependencies. | O(n) checkpoint. O(n) diff. O(n) transfer. No structural sharing. No version history. |
+| A: Flat serialization (`store.bin`) | Flat checkpoint model. Full serialize on checkpoint. | Simple. No dependencies. | O(n) checkpoint. O(n) diff. O(n) transfer. No structural sharing. No version history. |
 | B: Log-structured merge tree (LSM) | RocksDB/LevelDB model. Append-only write, background compaction. | Excellent write throughput. Battle-tested (RocksDB). | No structural sharing across versions. Complex compaction. Background I/O unpredictable. Hard to diff two versions. No content-addressing. |
 | C: Prolly tree block store | Dolt/Noms model. Content-addressed chunks, probabilistic B-tree, rolling hash boundaries. | O(d) diff, O(d) checkpoint (only changed chunks), O(d) transfer, structural sharing across versions, content-addressed deduplication, version history via root hashes. | Write overhead (1+k/w) x log_k(n) vs B-tree log_k(n). Rolling hash computation per key. More complex than flat serialization. |
 

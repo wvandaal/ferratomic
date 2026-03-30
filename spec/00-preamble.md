@@ -1,7 +1,36 @@
 > **Namespace**: FERR | **Wave**: 1 (Foundation) | **Stage**: 0
 > **Shared definitions**: [00-preamble.md](00-preamble.md) (conventions, verification tags, constraints)
-> **Supersedes**: spec/01-store.md (STORE namespace — algebraic datom store, implementation layer only)
-> **Depends on**: [01-store.md](01-store.md) (STORE namespace — algebraic axioms L1-L5 preserved verbatim)
+
+### External Traceability
+
+This specification traces to two foundational documents that live outside this repository:
+
+- **SEED.md** — The foundational design document defining datoms, the harvest/seed lifecycle,
+  and the bootstrap philosophy. Referenced as `SEED.md §N` throughout. The key axioms are:
+  §4 (Core Abstraction: Datoms, identity, snapshots, schema-as-data), §5 (Harvest/Seed
+  Lifecycle: durability, recovery), §10 (The Bootstrap: self-hosting, genesis).
+
+- **01-store.md** (STORE namespace) — The algebraic datom store specification defining the
+  five lattice laws preserved verbatim in FERR:
+  - **L1**: Merge commutativity (`merge(A, B) = merge(B, A)`)
+  - **L2**: Merge associativity (`merge(merge(A, B), C) = merge(A, merge(B, C))`)
+  - **L3**: Merge idempotency (`merge(A, A) = A`)
+  - **L4**: Monotonic growth (`S ⊆ apply(S, d)`)
+  - **L5**: Strict growth for transactions (`|transact(S, T)| > |S|`)
+
+### Constraints
+
+Referenced as `C1`, `C2`, etc. throughout the spec:
+
+| ID | Name | Definition |
+|----|------|-----------|
+| C1 | Append-only store | Never delete or mutate datoms. Retractions are new datoms. |
+| C2 | Content-addressed identity | EntityId = BLAKE3(content). |
+| C3 | Schema-as-data | Schema is defined by datoms, not hardcoded. Schema evolution is a transaction. |
+| C4 | CRDT merge = set union | Commutative, associative, idempotent. Merge is pure set union. |
+| C5 | Causal traceability | Every datom records its provenance: who, when, why, and what was known. |
+| C7 | Self-bootstrap | Genesis is deterministic and self-describing. The schema describes itself. |
+| C8 | Substrate independence | Ferratomic has no knowledge of application-layer concerns. |
 
 ## 23.0 Preamble
 
@@ -48,7 +77,7 @@ SEED.md 10 (The Bootstrap)
    across replicas and makes deduplication a structural tautology.
 
 5. **Substrate independence (C8).** Ferratomic is a general-purpose embedded datom database.
-   It has no knowledge of DDIS methodology, braid commands, observations, or spec elements.
+   It has no knowledge of application-layer methodology, commands, or domain elements.
    It stores `[e, a, v, tx, op]` tuples and enforces schema constraints. Everything
    domain-specific enters through the schema layer, not the engine.
 
@@ -89,8 +118,9 @@ ferratom  <--  ferratomic-core  <--  ferratomic-datalog
                     +-------  ferratomic-verify  (dev-dependency only)
 ```
 
-`ferratom` has zero external dependencies. `ferratomic-core` depends only on `ferratom`,
-`blake3`, and `serde`. `ferratomic-datalog` depends on `ferratomic-core`. `ferratomic-verify`
+`ferratom` has zero project-internal dependencies (it depends on blake3, ordered-float,
+serde as external crates). `ferratomic-core` depends on `ferratom`, `im`, `arc-swap`,
+`blake3`, `bincode`, `serde`, `asupersync`. `ferratomic-datalog` depends on `ferratomic-core`. `ferratomic-verify`
 is a dev-dependency workspace member that imports all three for testing.
 
 ### 23.0.3 Relationship to spec/01-store.md
@@ -149,6 +179,27 @@ def store_size (s : DatomStore) : Nat := s.card
 /-- Content-addressed identity: a datom's identity IS its content. -/
 def datom_id (d : Datom) : Datom := d  -- identity function (tautological by construction)
 ```
+
+#### Model Fidelity (ADR-FERR-007)
+
+The Lean model is a **parallel abstraction**, not a code extraction. It proves properties
+of the algebraic structure (`Finset Datom` with `Nat` fields), not of the Rust implementation
+(`im::OrdMap` with BLAKE3 hashes). This is intentional per ADR-FERR-007 (parallel models).
+
+The following aspects are **abstracted away** in Lean and verified by other layers:
+
+| Aspect | Lean abstracts as | Verified instead by | INV-FERR |
+|--------|------------------|--------------------|---------|
+| Content-addressed hashing | Structural equality (`Datom.ext`) | proptest + Kani (BLAKE3 roundtrip) | 012 |
+| Binary serialization | `toTuple`/`ofTuple` record destructuring | proptest + integration (byte-level) | 013 |
+| Epoch-ordered LIVE resolution | `foldl apply_op` without epoch sorting | proptest + Kani (epoch-aware fold) | 029, 032 |
+| Ed25519 signatures | Axiomatized `ed25519_correctness` | proptest + integration (real ed25519-dalek) | 051 |
+| Merkle proof verification | Axiomatized `inclusion_proof_complete` | proptest + Kani (real prolly tree) | 052, 053 |
+| VKC 3-part verification | Signature check only (context/calibration axiomatized) | proptest + integration | 055 |
+
+The **conformance bridge** (proptest matching Lean predictions) catches divergence between
+the abstract model and concrete implementation. A property that holds in Lean but fails in
+proptest indicates an implementation bug. A property that fails in Lean is an algebraic defect.
 
 ### 23.0.5 Stateright Foundation Model
 

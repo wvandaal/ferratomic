@@ -21,7 +21,7 @@ The store is a grow-only set of datoms under set union. This single equation giv
 
 ```
 ┌─────────────────────────────────┐
-│       Application Layer          │  ← braid, your code
+│       Application Layer          │  ← your application
 ├─────────────────────────────────┤
 │     ferratomic-datalog           │  ← Datalog query engine
 ├─────────────────────────────────┤

@@ -1,13 +1,13 @@
 # Ferratomic — Quick Orientation
 
 **What**: Formally verified, distributed embedded datom database engine.
-**Why**: Foundation for braid and any system built on the datom model.
+**Why**: General-purpose storage foundation for any system built on the datom model.
 **Core property**: Store = (P(D), ∪) — G-Set CRDT semilattice. Writes never conflict.
 
-**Canonical spec**: `spec/` is the canonical specification. braid symlinks TO here, not the other way around.
+**Canonical spec**: `spec/` is the canonical specification.
 
-**Current state**: The workspace does NOT compile. This is intentional (Phase 2 red-phase TDD).
-Tests reference types that don't exist yet. Phase 3 creates type stubs to make tests compile.
+**Current state**: The workspace does NOT compile. Phase 3 (type definitions) will create
+type stubs that make Phase 2 tests compilable. Phase 4 implementation makes them pass.
 
 ## Current Phase
 

@@ -325,8 +325,8 @@ implementation details.
 `unreachable!()`, `todo!()`, `unimplemented!()`, or any other panicking construct on
 fallible operations in production code (non-test, non-bench).
 
-**Rationale**: A panic in a database engine corrupts the caller's process. If braid
-panics during `transact()`, the daemon crashes, the WAL may be left in an inconsistent
+**Rationale**: A panic in a database engine corrupts the caller's process. If the engine
+panics during `transact()`, the host process crashes, the WAL may be left in an inconsistent
 state, and all in-flight operations are lost. Database engines must return errors, not
 abort.
 
@@ -450,7 +450,7 @@ unbounded memory allocation. Specifically:
 - Index memory is proportional to the datom set size (no index bloat).
 
 **Rationale**: An embedded database that grows without bound eventually OOMs the host
-process. Since Ferratomic runs inside the braid daemon (which runs indefinitely),
+process. Since Ferratomic runs inside a long-lived host process (which runs indefinitely),
 any unbounded growth is a time bomb.
 
 **Falsification**: The Ferratomic engine's resident memory exceeds `expected_datom_memory
