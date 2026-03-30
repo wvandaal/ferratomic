@@ -1,1 +1,0 @@
-../../ddis-braid/spec/23-ferratomic.md

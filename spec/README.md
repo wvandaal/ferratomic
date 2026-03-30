@@ -1,0 +1,39 @@
+# Ferratomic Specification
+
+Formal specification using DDIS methodology (INV/ADR/NEG).
+50 invariants, 8 ADRs, 5 negative cases.
+
+Every invariant follows the Level 0/1/2 format:
+- **Level 0**: Algebraic law (formal predicate)
+- **Level 1**: State invariant (natural language)
+- **Level 2**: Implementation contract (Rust + Kani/proptest)
+- **Falsification**: What violates this invariant
+- **proptest strategy**: How to test with property-based testing
+- **Lean theorem**: Machine-checked proof (where applicable)
+
+## Modules
+
+| File | Section | INV-FERR | Focus |
+|------|---------|----------|-------|
+| [00-preamble.md](00-preamble.md) | §23.0 | — | Overview, crate structure, Lean foundation, Stateright model |
+| [01-core-invariants.md](01-core-invariants.md) | §23.1 | 001-012 | CRDT semilattice, indexes, snapshots, WAL, schema, identity |
+| [02-concurrency.md](02-concurrency.md) | §23.2 | 013-024 | Checkpoint, recovery, HLC, sharding, append-only, atomicity, backpressure, substrate |
+| [03-performance.md](03-performance.md) | §23.3 | 025-032 | Index backend, write amplification, tail latency, cold start, LIVE resolution, genesis |
+| [04-decisions-and-constraints.md](04-decisions-and-constraints.md) | §23.4-23.7 | 033-036 | ADR-FERR-001..007, NEG-FERR-001..005, cross-shard query, partition tolerance |
+| [05-federation.md](05-federation.md) | §23.8 | 037-044 | Federated query, selective merge, transport, live migration, namespace isolation |
+| [06-prolly-tree.md](06-prolly-tree.md) | §23.9 | 045-050 | Chunk addressing, history independence, O(d) diff, block store, substrate independence |
+
+## Reading Order for Implementing Agents
+
+- **Phase 1 (Lean proofs)**: 00-preamble + 01-core-invariants
+- **Phase 2 (tests)**: All modules (write tests for every INV)
+- **Phase 3 (types)**: 01-core-invariants (type contracts)
+- **Phase 4a (MVP)**: 01 + 02 + 03
+- **Phase 4b (prolly tree)**: 06-prolly-tree
+- **Phase 4c (federation)**: 05-federation + 06-prolly-tree
+- **Phase 4d (datalog)**: 04-decisions-and-constraints (§23.6 cross-shard query)
+
+## Traces
+
+Every INV-FERR traces to SEED.md (braid's foundational document).
+See 00-preamble.md §23.0.3 for the complete INV-STORE → INV-FERR mapping.
