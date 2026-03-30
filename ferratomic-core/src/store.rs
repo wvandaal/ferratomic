@@ -15,15 +15,19 @@
 //! - **INV-FERR-007**: epochs are strictly monotonically increasing.
 //! - **INV-FERR-031**: genesis produces a deterministic store.
 //!
-//! ## Design (Phase 4a MVP)
+//! ## Design (Phase 4a)
 //!
-//! The primary store is a `BTreeSet<Datom>`. All four secondary indexes
-//! hold identical copies of the primary set — true per-index sort ordering
-//! via newtype key wrappers is deferred to Phase 4b. This satisfies
-//! INV-FERR-005 trivially: every index is a clone of the primary.
+//! The primary store uses `im::OrdSet<Datom>` (ADR-FERR-001). Snapshots
+//! are O(1) via structural sharing — `clone()` shares the tree spine.
+//! All four secondary indexes hold identical copies of the primary set —
+//! true per-index sort ordering via newtype key wrappers is deferred to
+//! Phase 4b. This satisfies INV-FERR-005 trivially: every index is a
+//! clone of the primary.
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
+
+use im::OrdSet;
 
 use ferratom::{
     AgentId, Attribute, AttributeDef, Cardinality, Datom, FerraError, ResolutionMode, Schema,
@@ -39,19 +43,19 @@ use crate::writer::{Committed, Transaction};
 /// Secondary indexes over the datom set.
 ///
 /// INV-FERR-005: every secondary index is a bijection with the primary set.
-/// In Phase 4a, all four indexes contain identical `BTreeSet<Datom>` copies.
+/// In Phase 4a, all four indexes contain identical `im::OrdSet<Datom>` copies.
 /// True per-index sort ordering (EAVT, AEVT, VAET, AVET newtype keys) is
 /// deferred to Phase 4b.
 #[derive(Debug, Clone)]
 pub struct Indexes {
     /// Entity-Attribute-Value-Tx index.
-    eavt: BTreeSet<Datom>,
+    eavt: OrdSet<Datom>,
     /// Attribute-Entity-Value-Tx index.
-    aevt: BTreeSet<Datom>,
+    aevt: OrdSet<Datom>,
     /// Value-Attribute-Entity-Tx index (reverse references).
-    vaet: BTreeSet<Datom>,
+    vaet: OrdSet<Datom>,
     /// Attribute-Value-Entity-Tx index (unique/lookup).
-    avet: BTreeSet<Datom>,
+    avet: OrdSet<Datom>,
 }
 
 impl Indexes {
@@ -59,7 +63,7 @@ impl Indexes {
     ///
     /// INV-FERR-005: all four indexes receive the same datom set,
     /// ensuring bijection with the primary by construction.
-    fn from_primary(primary: &BTreeSet<Datom>) -> Self {
+    fn from_primary(primary: &OrdSet<Datom>) -> Self {
         Self {
             eavt: primary.clone(),
             aevt: primary.clone(),
@@ -83,7 +87,7 @@ impl Indexes {
     ///
     /// INV-FERR-005: returns a view bijective with the primary datom set.
     #[must_use]
-    pub fn eavt(&self) -> &BTreeSet<Datom> {
+    pub fn eavt(&self) -> &OrdSet<Datom> {
         &self.eavt
     }
 
@@ -91,7 +95,7 @@ impl Indexes {
     ///
     /// INV-FERR-005: returns a view bijective with the primary datom set.
     #[must_use]
-    pub fn aevt(&self) -> &BTreeSet<Datom> {
+    pub fn aevt(&self) -> &OrdSet<Datom> {
         &self.aevt
     }
 
@@ -99,7 +103,7 @@ impl Indexes {
     ///
     /// INV-FERR-005: returns a view bijective with the primary datom set.
     #[must_use]
-    pub fn vaet(&self) -> &BTreeSet<Datom> {
+    pub fn vaet(&self) -> &OrdSet<Datom> {
         &self.vaet
     }
 
@@ -107,7 +111,7 @@ impl Indexes {
     ///
     /// INV-FERR-005: returns a view bijective with the primary datom set.
     #[must_use]
-    pub fn avet(&self) -> &BTreeSet<Datom> {
+    pub fn avet(&self) -> &OrdSet<Datom> {
         &self.avet
     }
 }
@@ -144,12 +148,13 @@ impl TxReceipt {
 /// An immutable point-in-time view of the store.
 ///
 /// INV-FERR-006: a snapshot is frozen at creation time. Later writes
-/// to the store do not affect it. Implemented via `Arc` sharing of
-/// the datom set at the time the snapshot was taken.
+/// to the store do not affect it. `im::OrdSet` clone is O(1) via
+/// structural sharing (ADR-FERR-001), so snapshot creation is O(1).
 #[derive(Debug, Clone)]
 pub struct Snapshot {
-    /// Shared reference to the datom set at snapshot time.
-    datoms: Arc<BTreeSet<Datom>>,
+    /// Structurally-shared copy of the datom set at snapshot time.
+    /// O(1) clone via `im::OrdSet` (ADR-FERR-001).
+    datoms: OrdSet<Datom>,
     /// Epoch at the time the snapshot was taken.
     epoch: u64,
 }
@@ -190,7 +195,8 @@ impl Snapshot {
 #[derive(Debug, Clone)]
 pub struct Store {
     /// Primary datom set. The single source of truth.
-    datoms: BTreeSet<Datom>,
+    /// `im::OrdSet` provides O(1) clone via structural sharing (ADR-FERR-001).
+    datoms: OrdSet<Datom>,
     /// Secondary indexes maintained in bijection with the primary set.
     indexes: Indexes,
     /// Attribute definitions governing transact validation.
@@ -210,14 +216,15 @@ impl Store {
     /// ensuring bijection by construction. The schema is empty and
     /// epoch starts at 0.
     ///
-    /// Used by generators and tests that need to construct stores
-    /// from arbitrary datom collections. For merge, use [`from_merge`]
-    /// which preserves schema and epoch.
+    /// Accepts `BTreeSet` for generator/test compatibility and converts
+    /// to `im::OrdSet` internally (ADR-FERR-001). For merge, use
+    /// [`from_merge`] which preserves schema and epoch.
     #[must_use]
     pub fn from_datoms(datoms: BTreeSet<Datom>) -> Self {
-        let indexes = Indexes::from_primary(&datoms);
+        let ord_set: OrdSet<Datom> = datoms.into_iter().collect();
+        let indexes = Indexes::from_primary(&ord_set);
         Self {
-            datoms,
+            datoms: ord_set,
             indexes,
             schema: Schema::empty(),
             epoch: 0,
@@ -234,10 +241,8 @@ impl Store {
     /// least as current as either input.
     #[must_use]
     pub fn from_merge(a: &Store, b: &Store) -> Self {
-        let mut datoms = a.datoms.clone();
-        for datom in &b.datoms {
-            datoms.insert(datom.clone());
-        }
+        // im::OrdSet::union is O(n+m) with structural sharing.
+        let datoms = a.datoms.clone().union(b.datoms.clone());
         let indexes = Indexes::from_primary(&datoms);
 
         // Union schemas: all attributes from both stores.
@@ -338,8 +343,8 @@ impl Store {
         );
 
         Self {
-            datoms: BTreeSet::new(),
-            indexes: Indexes::from_primary(&BTreeSet::new()),
+            datoms: OrdSet::new(),
+            indexes: Indexes::from_primary(&OrdSet::new()),
             schema,
             epoch: 0,
             genesis_agent: AgentId::from_bytes([0u8; 16]),
@@ -351,7 +356,7 @@ impl Store {
     /// INV-FERR-005: this is the authoritative set. All secondary
     /// indexes are bijective with this set.
     #[must_use]
-    pub fn datom_set(&self) -> &BTreeSet<Datom> {
+    pub fn datom_set(&self) -> &OrdSet<Datom> {
         &self.datoms
     }
 
@@ -433,8 +438,10 @@ impl Store {
     /// calls to `transact` or `insert` do not affect it.
     #[must_use]
     pub fn snapshot(&self) -> Snapshot {
+        // O(1) via im::OrdSet structural sharing (ADR-FERR-001).
+        // No Arc wrapper needed — im::OrdSet clone shares the tree spine.
         Snapshot {
-            datoms: Arc::new(self.datoms.clone()),
+            datoms: self.datoms.clone(),
             epoch: self.epoch,
         }
     }
@@ -631,7 +638,9 @@ mod tests {
         set.insert(sample_datom("b"));
 
         let store = Store::from_datoms(set.clone());
-        assert_eq!(store.datom_set(), &set);
+        // Compare by converting BTreeSet to OrdSet for type compatibility.
+        let expected: im::OrdSet<Datom> = set.into_iter().collect();
+        assert_eq!(*store.datom_set(), expected);
         assert_eq!(store.len(), 2);
     }
 
