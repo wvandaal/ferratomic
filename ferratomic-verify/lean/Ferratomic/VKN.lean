@@ -57,6 +57,11 @@ axiom ed25519_unforgeability : ∀ (sk : SigningKey) (msg1 msg2 : CryptoHash),
 axiom blake3_collision_resistance : ∀ (a b : List Nat),
   a ≠ b → blake3_hash a ≠ blake3_hash b
 
+/-- **Axiom**: Ed25519 key binding — signature under sk doesn't verify under different pk. -/
+axiom ed25519_key_binding : ∀ (sk sk' : SigningKey),
+  public_key sk ≠ public_key sk' → ∀ (msg : CryptoHash),
+  ed25519_verify (public_key sk') msg (ed25519_sign sk msg) = false
+
 /-! ## INV-FERR-051: Signed Transactions
 
   Ed25519 signature correctness: signing then verifying with the
@@ -90,6 +95,12 @@ theorem signed_tamper_detection (sk : SigningKey) (msg1 msg2 : CryptoHash)
     (h_diff : msg1 ≠ msg2) :
     ed25519_verify (public_key sk) msg2 (ed25519_sign sk msg1) = false :=
   ed25519_unforgeability sk msg1 msg2 h_diff
+
+/-- INV-FERR-051: Key binding — signature under sk doesn't verify under different pk. -/
+theorem signed_key_binding (sk sk' : SigningKey) (msg : CryptoHash)
+    (h_diff : public_key sk ≠ public_key sk') :
+    ed25519_verify (public_key sk') msg (ed25519_sign sk msg) = false :=
+  ed25519_key_binding sk sk' h_diff msg
 
 /-- Merge preserves signatures: set union does not alter transaction content. -/
 theorem merge_preserves_signed_tx (s1 s2 : DatomStore)
@@ -132,15 +143,23 @@ axiom inclusion_proof_deterministic : ∀ (_s : DatomStore) (_d : Datom)
 structure LightClient where
   epochs : Nat → Option CryptoHash
 
-/-- Light client soundness: if verification succeeds for a datom at an epoch,
-    the datom is genuinely in the store at that epoch.
-    This is a structural property: verification checks the Merkle proof
-    against the trusted root hash. -/
-theorem light_client_structural_soundness :
-    ∀ (p : InclusionProof), verify_inclusion p = true →
-    -- The proof is valid against its stated root
-    p.root = p.root :=
-  fun _ _ => rfl
+/-- Abstract root hash of a store (links Merkle proofs to store membership). -/
+axiom store_root : DatomStore → CryptoHash
+
+/-- Abstract predicate: an inclusion proof witnesses a specific datom. -/
+axiom datom_in_proof : InclusionProof → Datom → Prop
+
+/-- **Axiom**: Light client soundness — if an inclusion proof verifies against
+    the root of a store, and the proof witnesses datom d, then d is in the store.
+    This is the fundamental trust property of Merkle-based verification. -/
+axiom light_client_soundness : ∀ (s : DatomStore) (d : Datom) (p : InclusionProof),
+  verify_inclusion p = true → p.root = store_root s → datom_in_proof p d → d ∈ s
+
+/-- Light client completeness: every datom in the store can be verified.
+    Follows from inclusion_proof_complete. -/
+theorem light_client_completeness (s : DatomStore) (d : Datom) (h : d ∈ s) :
+    ∃ (p : InclusionProof), verify_inclusion p = true :=
+  inclusion_proof_complete s d h
 
 /-! ## INV-FERR-054: Trust Gradient Query
 

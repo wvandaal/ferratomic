@@ -18,6 +18,7 @@ import Mathlib.Data.Finset.Basic
 import Mathlib.Data.Finset.Card
 import Mathlib.Data.Finset.Lattice.Basic
 import Mathlib.Data.Finset.Lattice.Lemmas
+import Mathlib.Data.Finset.Dedup
 
 /-! ### Foundation Model (§23.0.4) -/
 
@@ -92,6 +93,13 @@ theorem apply_monotone (s : DatomStore) (d : Datom) :
     s.card ≤ (apply_tx s d).card :=
   Finset.card_le_card (apply_superset s d)
 
+/-- INV-FERR-004: Strict growth — adding a new datom increases cardinality by exactly 1. -/
+theorem apply_strict_growth (s : DatomStore) (d : Datom) (h : d ∉ s) :
+    (apply_tx s d).card = s.card + 1 := by
+  show (s ∪ {d}).card = s.card + 1
+  rw [Finset.union_comm, Finset.singleton_union]
+  exact Finset.card_insert_of_notMem h
+
 /-! ## INV-FERR-010: Merge Convergence (Strong Eventual Consistency)
 
   If two replicas receive the same set of updates (in any order),
@@ -111,6 +119,32 @@ theorem convergence_symmetric (a b : DatomStore) :
     merge (merge ∅ a) b = merge (merge ∅ b) a := by
   simp only [Finset.empty_union]
   exact Finset.union_comm a b
+
+/-- Helper: foldl apply_tx distributes over the initial accumulator. -/
+private theorem foldl_apply_tx_union (ds : List Datom) (init : DatomStore) :
+    ds.foldl apply_tx init = init ∪ ds.toFinset := by
+  induction ds generalizing init with
+  | nil => simp [List.toFinset]
+  | cons d rest ih =>
+    simp only [List.foldl_cons, List.toFinset_cons]
+    rw [ih]
+    rw [Finset.union_assoc, ← Finset.insert_eq]
+
+/-- INV-FERR-010: foldl apply_tx from empty equals toFinset.
+    Sequential application of datoms produces the same result
+    as converting the list to a finite set. -/
+theorem apply_tx_foldl_eq_toFinset (ds : List Datom) :
+    ds.foldl apply_tx ∅ = ds.toFinset := by
+  rw [foldl_apply_tx_union]
+  exact Finset.empty_union ds.toFinset
+
+/-- INV-FERR-010: Strong eventual consistency — any permutation of the same
+    datom list produces the same store. This is the substantive convergence
+    theorem: order of transaction application is irrelevant. -/
+theorem convergence_perm (ds₁ ds₂ : List Datom) (h : ds₁.Perm ds₂) :
+    ds₁.foldl apply_tx ∅ = ds₂.foldl apply_tx ∅ := by
+  rw [apply_tx_foldl_eq_toFinset, apply_tx_foldl_eq_toFinset]
+  exact List.toFinset_eq_of_perm _ _ h
 
 /-! ## INV-FERR-012: Content-Addressed Identity
 

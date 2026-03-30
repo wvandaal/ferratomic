@@ -10,6 +10,7 @@
 -/
 
 import Ferratomic.Store
+import Mathlib.Data.Finset.Card
 
 /-! ## INV-FERR-031: Genesis Determinism
 
@@ -65,6 +66,35 @@ theorem assertion_adds (live : Finset (Nat × Nat × Nat)) (e a v : Nat) :
     (e, a, v) ∈ apply_op live ⟨e, a, v, 0, true⟩ := by
   unfold apply_op
   simp
+
+/-- Helper: each apply_op step changes cardinality by at most 1. -/
+private theorem apply_op_card_le (live : Finset (Nat × Nat × Nat)) (d : Datom) :
+    (apply_op live d).card ≤ live.card + 1 := by
+  unfold apply_op
+  split
+  · -- assert: live ∪ {key}, card ≤ card + 1
+    exact le_trans (Finset.card_union_le _ _) (by simp)
+  · -- retract: live \ {key}, card ≤ card ≤ card + 1
+    exact le_trans (Finset.card_le_card Finset.sdiff_subset) (Nat.le_add_right _ _)
+
+/-- INV-FERR-029: Generalized bound — live view card bounded by init.card + list length. -/
+private theorem live_bounded_aux (datoms : List Datom) (init : Finset (Nat × Nat × Nat)) :
+    (datoms.foldl apply_op init).card ≤ init.card + datoms.length := by
+  induction datoms generalizing init with
+  | nil => simp
+  | cons d rest ih =>
+    simp only [List.foldl_cons, List.length_cons]
+    have h := ih (apply_op init d)
+    have hstep := apply_op_card_le init d
+    omega
+
+/-- INV-FERR-029: The live view cardinality is bounded by the number of datoms. -/
+theorem live_bounded (datoms : List Datom) :
+    (live_view_model datoms).card ≤ datoms.length := by
+  unfold live_view_model
+  have h := live_bounded_aux datoms ∅
+  simp at h
+  exact h
 
 /-! ## INV-FERR-032: LIVE Resolution Correctness
 

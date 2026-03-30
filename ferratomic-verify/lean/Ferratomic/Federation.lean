@@ -77,6 +77,14 @@ theorem selective_merge_none (local_ remote : DatomStore) :
   have : remote.filter (fun _ => False) = ∅ := by ext; simp
   rw [this, Finset.union_empty]
 
+/-- INV-FERR-039: Selective merge is idempotent — repeating it is a no-op. -/
+theorem selective_merge_idemp (local_ remote : DatomStore) (p : Datom → Prop)
+    [DecidablePred p] :
+    selective_merge (selective_merge local_ remote p) remote p =
+    selective_merge local_ remote p := by
+  unfold selective_merge
+  rw [Finset.union_assoc, Finset.union_self]
+
 /-! ## INV-FERR-040: Merge Provenance Preservation
 
   Set union does not modify datom fields. Every datom in merge(A,B)

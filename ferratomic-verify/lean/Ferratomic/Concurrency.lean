@@ -17,15 +17,39 @@ import Mathlib.Data.Fintype.Fin
 /-! ## INV-FERR-013: Checkpoint Equivalence
 
   load(checkpoint(S)) = S — serialization is a faithful roundtrip.
-  Modeled as identity functions since the mathematical content is preserved;
-  only the physical representation changes. -/
+  Modeled through an intermediate tuple representation to force the proof
+  to demonstrate that field decomposition → reconstruction preserves all data. -/
 
-def checkpoint_serialize (s : DatomStore) : DatomStore := s
-def checkpoint_deserialize (s : DatomStore) : DatomStore := s
+/-- Encode a datom as a tuple of its five fields. -/
+def Datom.toTuple (d : Datom) : Nat × Nat × Nat × Nat × Bool :=
+  (d.e, d.a, d.v, d.tx, d.op)
 
-/-- Checkpoint roundtrip is identity. -/
+/-- Decode a tuple back to a datom. -/
+def Datom.ofTuple (t : Nat × Nat × Nat × Nat × Bool) : Datom :=
+  ⟨t.1, t.2.1, t.2.2.1, t.2.2.2.1, t.2.2.2.2⟩
+
+/-- Tuple roundtrip: ofTuple(toTuple(d)) = d. -/
+theorem Datom.tuple_roundtrip (d : Datom) : Datom.ofTuple (Datom.toTuple d) = d := by
+  cases d; rfl
+
+/-- Checkpoint serialize: encode each datom to its tuple representation. -/
+def checkpoint_serialize (s : DatomStore) : Finset (Nat × Nat × Nat × Nat × Bool) :=
+  s.image Datom.toTuple
+
+/-- Checkpoint deserialize: decode tuples back to datoms. -/
+def checkpoint_deserialize (t : Finset (Nat × Nat × Nat × Nat × Bool)) : DatomStore :=
+  t.image Datom.ofTuple
+
+/-- INV-FERR-013: Checkpoint roundtrip preserves the store exactly.
+    The proof forces decomposition through tuples and reconstruction,
+    demonstrating that all five fields survive the encode/decode cycle. -/
 theorem checkpoint_roundtrip (s : DatomStore) :
-    checkpoint_deserialize (checkpoint_serialize s) = s := rfl
+    checkpoint_deserialize (checkpoint_serialize s) = s := by
+  unfold checkpoint_deserialize checkpoint_serialize
+  simp only [Finset.image_image]
+  have : (Datom.ofTuple ∘ Datom.toTuple) = id := by
+    funext d; exact Datom.tuple_roundtrip d
+  rw [this]; exact Finset.image_id
 
 /-- Checkpoint preserves cardinality. -/
 theorem checkpoint_preserves_card (s : DatomStore) :
