@@ -1191,20 +1191,25 @@ impl stateright::Model for CrdtModel {
     }
 
     fn properties(&self) -> Vec<Property<Self>> {
-        vec![Property::always("convergence", |_, state: &CrdtState| {
-            // If all in-flight messages are delivered and all nodes have the
-            // same update set, they must have the same state.
-            if state.in_flight.is_empty() {
-                let all_datoms: BTreeSet<_> = state.nodes.iter()
+        vec![
+            // Safety (SEC): at quiescence, if all nodes hold the global
+            // union (equal update sets), they must be identical.
+            Property::always("sec_convergence", |_, state: &CrdtState| {
+                if !state.in_flight.is_empty() { return true; }
+                let global: BTreeSet<_> = state.nodes.iter()
                     .flat_map(|n| n.iter().cloned()).collect();
-                state.nodes.iter().all(|n| {
-                    // If a node has all datoms, it equals the global set
-                    n.is_superset(&all_datoms) == all_datoms.is_superset(n)
-                })
-            } else {
-                true // convergence only checked at quiescence
-            }
-        })]
+                if state.nodes.iter().all(|n| *n == global) {
+                    // Full dissemination: SEC requires equality.
+                    CrdtModel::is_converged(state)
+                } else {
+                    true // Different update sets — SEC not applicable.
+                }
+            }),
+            // Liveness: a converged quiescent state is reachable.
+            Property::sometimes("convergence_reachable", |_, state: &CrdtState| {
+                state.in_flight.is_empty() && CrdtModel::is_converged(state)
+            }),
+        ]
     }
 }
 

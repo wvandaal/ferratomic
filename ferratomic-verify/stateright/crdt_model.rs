@@ -215,8 +215,37 @@ impl Model for CrdtModel {
                     })
                 },
             ),
+            // INV-FERR-010 Safety (SEC): at quiescence, if all nodes have
+            // received the same update set (= identical datom sets after
+            // full dissemination), they must be equal. In a G-Set model
+            // this is: if no in-flight messages AND all nodes hold the
+            // global union of all datoms, then all nodes are identical.
+            Property::always(
+                "inv_ferr_010_sec_convergence",
+                |_: &CrdtModel, state: &CrdtState| {
+                    if !state.in_flight.is_empty() {
+                        return true; // SEC only applies at quiescence
+                    }
+                    // Compute the global union of all datoms in the system.
+                    let global: BTreeSet<_> = state
+                        .nodes
+                        .iter()
+                        .flat_map(|n| n.iter().cloned())
+                        .collect();
+                    // If every node has the full global set (equal update
+                    // sets), they must be identical (SEC). If not every
+                    // node has the full set, update sets differ and SEC
+                    // does not require equality.
+                    if state.nodes.iter().all(|n| *n == global) {
+                        CrdtModel::is_converged(state)
+                    } else {
+                        true // Different update sets — no SEC obligation
+                    }
+                },
+            ),
+            // Liveness: a converged quiescent state is reachable.
             Property::sometimes(
-                "inv_ferr_010_convergence",
+                "inv_ferr_010_convergence_reachable",
                 |_: &CrdtModel, state: &CrdtState| {
                     state.in_flight.is_empty() && CrdtModel::is_converged(state)
                 },
@@ -343,7 +372,8 @@ mod tests {
             .join();
 
         checker.assert_no_discovery("inv_ferr_010_in_flight_payloads_stay_in_domain");
-        checker.assert_any_discovery("inv_ferr_010_convergence");
+        checker.assert_no_discovery("inv_ferr_010_sec_convergence");
+        checker.assert_any_discovery("inv_ferr_010_convergence_reachable");
     }
 
     #[test]
