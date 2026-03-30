@@ -38,6 +38,18 @@ path = "proptest/wal_properties.rs"
 name = "proptest_schema"
 path = "proptest/schema_properties.rs"
 
+[[test]]
+name = "proptest_durability"
+path = "proptest/durability_properties.rs"
+
+[[test]]
+name = "proptest_clock"
+path = "proptest/clock_properties.rs"
+
+[[test]]
+name = "proptest_append_only"
+path = "proptest/append_only_properties.rs"
+
 # --- Integration test suites (integration/) ---
 
 [[test]]
