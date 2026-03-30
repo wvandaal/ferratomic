@@ -1155,7 +1155,7 @@ async fn query_store_with_timeout(
     query: &QueryExpr,
     timeout: Duration,
 ) -> Result<TransportResult, StoreError> {
-    match tokio::time::timeout(timeout, query_store(handle, query)).await {
+    match asupersync::time::timeout(timeout, query_store(handle, query)).await {
         Ok(result) => result,
         Err(_elapsed) => Err(StoreError::Timeout(timeout)),
     }
@@ -1444,7 +1444,7 @@ impl Migration {
 
         // Wait for drain period (in-flight queries complete)
         if Instant::now() < *drain_deadline {
-            tokio::time::sleep_until((*drain_deadline).into()).await;
+            asupersync::time::sleep_until((*drain_deadline).into()).await;
         }
 
         self.state = MigrationState::Complete;
@@ -2015,7 +2015,7 @@ pub enum FederationError {
 
 | Aspect | Characteristic | Bound |
 |--------|---------------|-------|
-| Fan-out parallelism | All stores queried concurrently via `tokio::join_all` | O(1) wall-clock for query dispatch |
+| Fan-out parallelism | All stores queried concurrently via `asupersync::join_all` | O(1) wall-clock for query dispatch |
 | Result merge | Union of per-store result sets | O(sum of |R_i|) — linear in total result size |
 | Network bandwidth | Only QUERY RESULTS cross the network, not full stores | O(|result|) per store, not O(|store|) |
 | Federated query latency | P99 = max(per-store P99) + merge overhead | Bounded by slowest responding store + O(|result|) merge |

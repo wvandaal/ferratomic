@@ -328,13 +328,15 @@ each reader performs a single atomic load, with no increment/decrement cycle. Th
 is that writers must construct a complete new snapshot before publishing, but this is
 amortized by group commit (below).
 
-### Single Writer Actor (mpsc Channel, Group Commit)
+### Single Writer Actor (asupersync mpsc Channel, Group Commit)
 
-All write operations are serialized through a single writer thread that receives transactions
-via an `mpsc` channel. This eliminates write contention without locks:
+All write operations are serialized through a single writer actor that receives transactions
+via an `asupersync::channel::mpsc` channel. This eliminates write contention without locks.
+The two-phase reserve/commit pattern ensures cancel-safety: a caller reserves a slot
+(cancel-safe, nothing committed), then sends (infallible, committed).
 
 ```rust
-use std::sync::mpsc;
+use asupersync::channel::mpsc;
 
 struct WriterActor {
     rx: mpsc::Receiver<WriteRequest>,
@@ -349,11 +351,12 @@ struct WriteRequest {
 }
 
 impl WriterActor {
-    fn run(&mut self) {
-        loop {
+    async fn run(&mut self, cx: &Cx) {
+        while let Some(req) = self.rx.recv(cx).await {
+            cx.checkpoint().await;  // Cancel-aware checkpoint
+
             // Collect batch: drain all pending writes
-            let mut batch = Vec::new();
-            batch.push(self.rx.recv().unwrap());
+            let mut batch = vec![req];
             while let Ok(req) = self.rx.try_recv() {
                 batch.push(req);
             }
@@ -368,7 +371,7 @@ impl WriterActor {
             // Apply to in-memory store
             for req in batch {
                 self.store.apply(req.tx);
-                req.reply.send(TxReceipt { epoch: self.epoch });
+                let _ = req.reply.send(TxReceipt { epoch: self.epoch });
             }
 
             // Publish new snapshot (readers see the update)
@@ -1688,16 +1691,15 @@ continues to work. This is the minimum viable migration.
 
 ### Asupersync Maturity
 
-**Risk**: Asupersync (structured concurrency for Rust) is a newer library. If it proves
+**Risk**: Asupersync (structured concurrency for Rust) is a pre-release library. If it proves
 unstable or insufficient for Ferratomic's requirements, the concurrency model needs
 an alternative.
 
-**Mitigation**: The `Transport` trait abstracts all I/O. The concurrency model (ArcSwap +
-single writer actor + mpsc) uses only `std::sync` primitives. Asupersync would be used for
-the distributed layer's structured concurrency (task spawning, cancellation, DPOR testing).
-If Asupersync is unavailable, `tokio` provides all necessary primitives with a different API.
-The fallback requires no architectural changes -- only the `NetworkTransport` implementation
-changes.
+**Mitigation**: Asupersync is the primary async runtime (ADR-FERR-002). The `Transport` trait
+abstracts all I/O. The `asupersync-tokio-compat` boundary adapter confines tokio to explicit
+adapter modules for any tokio-only dependency. Core domain code does not depend on tokio.
+If asupersync migration is ever needed, the `Transport` trait + `&Cx` abstraction boundaries
+contain the blast radius to adapter modules only.
 
 ### im-rs at 100M
 

@@ -44,38 +44,49 @@ and `std::BTreeSet`. All index structures use `im-rs`. Snapshot creation is
 **Stage**: 0
 
 **Problem**: Ferratomic needs concurrency for WAL writing, checkpoint creation, anti-entropy
-protocol, and read replica streaming. Which concurrency model should be used?
+protocol, read replica streaming, and federation fan-out. Which concurrency model should be used?
 
 **Options**:
 
 | Option | Description | Pros | Cons |
 |--------|-------------|------|------|
-| A: No async (`std::thread`) | OS threads for background tasks, channels for communication. | Simple, debuggable, no colored functions. Predictable latency. | Thread pool sizing is manual. No built-in backpressure on channels. |
-| B: Tokio | Full async runtime with spawn, select, channels. | Ecosystem standard. Built-in timers, I/O, networking. Backpressure via bounded channels. | Colored functions (async/await infects API). Runtime overhead. Harder to debug. |
-| C: Custom lightweight runtime | Task queue with work-stealing, no async/await. | Minimal overhead. Full control. | Reinventing the wheel. No ecosystem compatibility. |
+| A: Asupersync (native) | Structured concurrency with `Scope::spawn`, `&Cx` cancel-awareness, two-phase reserve/commit channels, obligation tracking, DPOR/LabRuntime for deterministic testing. | Structured concurrency by construction. Cancel-aware primitives. Deterministic testing via DPOR. Two-phase effects eliminate partial-commit bugs. | Pre-release (author-controlled). Smaller ecosystem. |
+| B: Tokio | Full async runtime with spawn, select, channels. | Ecosystem standard. Built-in timers, I/O, networking. Backpressure via bounded channels. | No DPOR. No structured concurrency (unscoped `tokio::spawn` leaks tasks). No cancel-aware two-phase effects. `JoinHandle` drops silently cancel tasks. |
+| C: No async (`std::thread`) | OS threads for background tasks, channels for communication. | Simple, debuggable, no colored functions. Predictable latency. | Thread pool sizing is manual. No built-in backpressure. No structured cancellation. Poor fit for federation fan-out. |
 
-**Decision**: **Option A: No async (`std::thread` + `crossbeam`)**
+**Decision**: **Option A: Asupersync (native greenfield)**
 
-Ferratomic is an embedded database, not a network server. The concurrency requirements
-are modest: one writer thread, one WAL flusher, one background checkpointer. OS threads
-are sufficient and avoid the complexity of async runtimes.
+Ferratomic uses asupersync as its primary async runtime. The key properties:
 
-The caller (braid kernel) may use an async runtime for its own purposes (HTTP server,
-daemon). Ferratomic does not impose a runtime choice on the caller (C8).
+- **Structured concurrency**: `Scope::spawn` ensures all spawned work is region-owned.
+  No orphaned tasks. Parent scope cannot complete until children finish or cancel.
+- **Cancel-aware primitives**: Every async function takes `&Cx` as first parameter.
+  Cancellation propagates through the call tree. No silent task drops.
+- **Two-phase reserve/commit channels**: `tx.reserve(cx).await?` is cancel-safe (nothing
+  committed). `permit.send(value)` is infallible (committed). Eliminates the partial-send
+  bugs inherent in `tokio::sync::mpsc::send`.
+- **DPOR/LabRuntime**: Deterministic testing explores all interleavings. This is critical
+  for verifying snapshot isolation and CRDT convergence properties under concurrency.
+- **Obligation tracking**: Runtime statically verifies that all spawned work is awaited.
 
-Backpressure is implemented via bounded `crossbeam::channel` (INV-FERR-021) and
-`try_lock` on the write mutex. No unbounded queues.
+**Fallback**: The `asupersync-tokio-compat` boundary adapter confines tokio to explicit
+adapter modules for any tokio-only dependency. Core domain code must NOT depend on tokio.
+The `Transport` trait abstracts all I/O, enabling runtime-agnostic core if migration is
+ever needed.
 
 **Rejected**:
-- Option B: Async infects the entire API surface. A `Store::transact()` that returns
-  a `Future` forces the caller to use an async runtime, violating substrate agnosticism
-  (INV-FERR-024, C8). The embedded use case (braid kernel) does not need async I/O.
-- Option C: The effort is not justified for ~3 background threads.
+- Option B (Tokio): No DPOR for deterministic testing. No structured concurrency
+  (`tokio::spawn` returns `JoinHandle` that silently cancels on drop). No cancel-aware
+  two-phase effects. `tokio::sync::mpsc::send` is not cancel-safe at the application
+  level (message may be consumed but reply channel dropped).
+- Option C (std::thread): Insufficient for federation fan-out and live migration
+  streaming. No built-in cancellation propagation.
 
-**Consequence**: All Ferratomic APIs are synchronous. Background tasks (WAL flush,
-checkpoint) run on dedicated OS threads spawned at store creation. Inter-thread
-communication uses `crossbeam::channel` (bounded) and `std::sync::Mutex`/`RwLock`.
-The caller can wrap Ferratomic in async wrappers (`spawn_blocking`) if needed.
+**Consequence**: Ferratomic async APIs use `&Cx` as first parameter. Background tasks
+use `Scope::spawn`. Channels use `asupersync::channel::mpsc` (two-phase reserve/commit)
+and `asupersync::channel::broadcast`. Locks use `asupersync::sync::RwLock` (cancel-aware).
+Tokio-only dependencies (if any) are wrapped in `asupersync-tokio-compat` adapter modules
+that are never imported by core domain code.
 
 **Source**: SEED.md §4, C8 (Substrate Independence)
 

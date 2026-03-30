@@ -203,6 +203,9 @@ too-many-lines-threshold = 50
 **C4: CRDT merge = set union.** Commutative, associative, idempotent.
 **INV-FERR-023: `#![forbid(unsafe_code)]`** in ALL crates. No exceptions.
 **NEG-FERR-001: No panics.** No `unwrap()`, no `expect()` in production code.
+**Forbidden crates in core:** `tokio`, `hyper`, `reqwest`, `axum`, `async-std`, `smol`.
+Tokio-only dependencies must be behind `asupersync-tokio-compat` adapter modules.
+Core domain code depends on `asupersync` only (ADR-FERR-002).
 
 ---
 

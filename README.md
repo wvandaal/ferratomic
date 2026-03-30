@@ -44,7 +44,7 @@ The store is a grow-only set of datoms under set union. This single equation giv
 | Crate | Role | Dependencies |
 |-------|------|-------------|
 | `ferratom` | Core types: Datom, EntityId, Value, Schema, HLC | blake3, ordered-float, serde |
-| `ferratomic-core` | Engine: Store, MVCC snapshots, WAL, observers, federation | ferratom, im, arc-swap, tokio |
+| `ferratomic-core` | Engine: Store, MVCC snapshots, WAL, observers, federation | ferratom, im, arc-swap, asupersync |
 | `ferratomic-datalog` | Query: Datalog parser, planner, evaluator, CALM classification | ferratom, ferratomic-core |
 | `ferratomic-verify` | Proofs: Lean 4, Stateright, Kani, proptest | ferratom, ferratomic-core |
 
@@ -56,7 +56,7 @@ The store is a grow-only set of datoms under set union. This single equation giv
 | Concurrency | ArcSwap + single writer | Lock-free reads (~1ns), zero contention |
 | Storage | Prolly tree block store | O(d) diff, chunk-based federation, on-disk structural sharing |
 | Clock | Hybrid Logical Clock | Causal ordering without central coordination |
-| Async | Asupersync (tokio fallback) | Structured concurrency, DPOR testing |
+| Async | Asupersync (native) | Structured concurrency, DPOR testing, cancel-aware `&Cx` |
 | Signing | Ed25519 per transaction | Trustless verification, 5µs sign / 2µs verify |
 | Trust | Query-level predicate | `TrustPolicy::Calibrated(accuracy, samples)` |
 

@@ -16,7 +16,9 @@ bincode = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 zstd = { workspace = true }
-tokio = { workspace = true }
+asupersync = { workspace = true }
+# tokio: optional, for asupersync-tokio-compat adapter modules only
+tokio = { workspace = true, optional = true }
 
 [dev-dependencies]
 proptest = { workspace = true }

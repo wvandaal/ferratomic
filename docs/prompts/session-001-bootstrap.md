@@ -370,9 +370,9 @@ pub struct VersionHistory { versions: Vec<Snapshot> }
    normal operation). The application decides which root hashes to retain. GC is a separate
    lifecycle event that rewrites table files to reclaim space from unreachable chunks.
 
-6. **S3ChunkStore uses synchronous HTTP.** Consistent with ADR-FERR-002 (no async in
-   ferratomic). The caller wraps in `spawn_blocking` if needed. This keeps the ChunkStore
-   trait synchronous and the API surface clean.
+6. **S3ChunkStore uses asupersync-tokio-compat for HTTP.** Consistent with ADR-FERR-002
+   (asupersync-first). Any tokio-only HTTP client is wrapped in an `asupersync-tokio-compat`
+   adapter module. Core `ChunkStore` trait methods take `&Cx` for cancel-awareness.
 
 ### Performance Targets
 

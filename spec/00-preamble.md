@@ -52,6 +52,12 @@ SEED.md 10 (The Bootstrap)
    It stores `[e, a, v, tx, op]` tuples and enforces schema constraints. Everything
    domain-specific enters through the schema layer, not the engine.
 
+6. **Asupersync-first concurrency (ADR-FERR-002).** Asupersync is the primary async runtime.
+   Structured concurrency via `Scope::spawn`, cancel-aware primitives (`&Cx`), two-phase
+   reserve/commit channels, obligation tracking, and deterministic testing via DPOR/LabRuntime.
+   Tokio is confined to explicit `asupersync-tokio-compat` adapter modules for tokio-only
+   dependencies. Core domain code must not depend on tokio.
+
 ### 23.0.2 Crate Structure
 
 ```

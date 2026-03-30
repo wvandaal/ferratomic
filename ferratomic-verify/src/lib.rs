@@ -9,3 +9,12 @@
 //! All tests must FAIL initially. Implementation makes them pass.
 
 #![forbid(unsafe_code)]
+
+pub mod generators;
+
+#[path = "../stateright/mod.rs"]
+pub mod stateright_models;
+
+#[cfg(kani)]
+#[path = "../kani/mod.rs"]
+pub mod kani;

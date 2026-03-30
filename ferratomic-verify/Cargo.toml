@@ -10,8 +10,45 @@ description = "Formal verification suite: Lean 4 proofs, Stateright models, Kani
 ferratom = { path = "../ferratom" }
 ferratomic-core = { path = "../ferratomic-core" }
 proptest = { workspace = true }
-# stateright = { workspace = true }
+stateright = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"
 tokio = { workspace = true }
+rand = "0.8"
+
+# --- Property-based test suites (proptest/) ---
+
+[[test]]
+name = "proptest_crdt"
+path = "proptest/crdt_properties.rs"
+
+[[test]]
+name = "proptest_index"
+path = "proptest/index_properties.rs"
+
+[[test]]
+name = "proptest_wal"
+path = "proptest/wal_properties.rs"
+
+[[test]]
+name = "proptest_schema"
+path = "proptest/schema_properties.rs"
+
+# --- Integration test suites (integration/) ---
+
+[[test]]
+name = "integration_crdt"
+path = "integration/test_crdt.rs"
+
+[[test]]
+name = "integration_snapshot"
+path = "integration/test_snapshot.rs"
+
+[[test]]
+name = "integration_recovery"
+path = "integration/test_recovery.rs"
+
+[[test]]
+name = "integration_schema"
+path = "integration/test_schema.rs"
