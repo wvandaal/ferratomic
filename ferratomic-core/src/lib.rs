@@ -21,6 +21,7 @@
 #![deny(clippy::all)]
 #![warn(clippy::pedantic)]
 
+pub mod indexes;
 pub mod store;
 pub mod db;
 pub mod snapshot;

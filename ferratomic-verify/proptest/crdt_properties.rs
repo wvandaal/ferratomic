@@ -16,10 +16,10 @@ use std::collections::BTreeSet;
 /// Verify index bijection: primary set == each secondary index set.
 fn verify_index_bijection(store: &Store) -> bool {
     let primary: BTreeSet<&Datom> = store.datoms().collect();
-    let eavt: BTreeSet<&Datom> = store.indexes().eavt().iter().collect();
-    let aevt: BTreeSet<&Datom> = store.indexes().aevt().iter().collect();
-    let vaet: BTreeSet<&Datom> = store.indexes().vaet().iter().collect();
-    let avet: BTreeSet<&Datom> = store.indexes().avet().iter().collect();
+    let eavt: BTreeSet<&Datom> = store.indexes().eavt_datoms().collect();
+    let aevt: BTreeSet<&Datom> = store.indexes().aevt_datoms().collect();
+    let vaet: BTreeSet<&Datom> = store.indexes().vaet_datoms().collect();
+    let avet: BTreeSet<&Datom> = store.indexes().avet_datoms().collect();
 
     primary == eavt && primary == aevt && primary == vaet && primary == avet
 }

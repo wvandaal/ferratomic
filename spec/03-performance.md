@@ -606,13 +606,32 @@ each assertion and retraction:
 - Assertions and retractions are matched by `(e, a, v)` triple.
 
 The LIVE view never modifies the primary store. The primary store contains all datoms
-(both assertions and retractions) in perpetuity (C1). The LIVE view is recomputed from
-the primary store on demand (or cached and invalidated when new transactions arrive).
+(both assertions and retractions) in perpetuity (C1).
+
+**Maintenance strategy (Phase 4a): incremental.** The LIVE view at the current epoch
+is maintained incrementally as a materialized `BTreeSet<(EntityId, Attribute, Value)>`
+(or `im::OrdSet` per ADR-FERR-001). When a transaction is committed, only the affected
+`(e, a, v)` triples are updated in the live set — assertions insert, retractions remove.
+The cost per transaction is `O(k)` where `k` is the number of datoms in the transaction,
+not `O(n)` where `n` is the total store size.
+
+This choice is forced by INV-FERR-027 (10ms P99.99 read latency at 100M datoms):
+- **On-demand recomputation** (`O(n)` per read) is infeasible at 100M datoms — a full
+  fold takes seconds, far exceeding the 10ms target.
+- **Cache-and-invalidate** has `O(n)` first-read-after-write latency, violating the
+  P99.99 bound whenever a write immediately precedes a read.
+- **Incremental** achieves `O(1)` read (access the cached live set) and `O(k)` write
+  overhead (update only affected triples). Both are within budget.
+
+The incremental live set is rebuilt from scratch during cold start: `cold_start` loads
+the checkpoint, replays the WAL delta, and folds the resulting datoms to produce the
+initial live set. After cold start, all updates are incremental.
 
 The LIVE view is epoch-sensitive: `LIVE(S, e)` gives the live set as of epoch `e`,
 considering only datoms with `tx_epoch <= e`. This enables time-travel queries:
-"what was the live state at epoch 1000?" without replaying the entire history from
-scratch (the fold can start from a cached snapshot and apply only new datoms).
+"what was the live state at epoch 1000?" Time-travel queries (historical epochs) use
+on-demand fold from the nearest checkpoint or cached snapshot — only the current-epoch
+LIVE view is maintained incrementally.
 
 The causal ordering (by TxId/epoch) is critical: if a retraction has a lower epoch
 than the assertion it retracts, the retraction has no effect (it was "before" the
@@ -642,6 +661,40 @@ pub fn live_view(store: &Store, epoch: u64) -> BTreeSet<(EntityId, Attribute, Va
 /// LIVE view NEVER modifies the primary store.
 /// This function takes &Store (immutable reference), not &mut Store.
 /// It returns a NEW set, leaving the store unchanged.
+
+/// --- Incremental maintenance (Phase 4a strategy) ---
+///
+/// The Store holds a cached `live_set: BTreeSet<(EntityId, Attribute, Value)>`
+/// that is updated incrementally on each transact(). The on-demand `live_view()`
+/// above is used only for time-travel queries at historical epochs.
+
+impl Store {
+    /// Update the cached LIVE set after a committed transaction.
+    /// Cost: O(k) where k = number of datoms in the transaction.
+    /// Called by transact() after epoch assignment, before ArcSwap publish.
+    fn update_live_set(&mut self, tx: &Transaction<Committed>) {
+        for datom in tx.datoms() {
+            let key = (datom.entity.clone(), datom.attribute.clone(), datom.value.clone());
+            match datom.op {
+                Op::Assert => { self.live_set.insert(key); }
+                Op::Retract => { self.live_set.remove(&key); }
+            }
+        }
+    }
+
+    /// Access the current LIVE view. O(1) — returns a reference to the cached set.
+    /// For time-travel at historical epochs, use `live_view(store, epoch)` instead.
+    pub fn live(&self) -> &BTreeSet<(EntityId, Attribute, Value)> {
+        &self.live_set
+    }
+
+    /// Rebuild the LIVE set from scratch by folding all datoms.
+    /// Used during cold_start after checkpoint + WAL replay.
+    /// Cost: O(n) — acceptable only during initialization.
+    fn rebuild_live_set(&mut self) {
+        self.live_set = live_view(self, self.current_epoch());
+    }
+}
 
 #[kani::proof]
 #[kani::unwind(10)]

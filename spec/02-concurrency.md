@@ -211,6 +211,53 @@ theorem checkpoint_preserves_mem (s : DatomStore) (d : Datom) :
   rw [checkpoint_roundtrip]
 ```
 
+**Checkpoint Triggering Policy**
+
+INV-FERR-013 specifies the checkpoint FORMAT and round-trip identity. This section
+specifies WHEN checkpoints are created.
+
+Default policy (configurable via `CheckpointPolicy`):
+- **Transaction count trigger**: every 1,000 committed transactions since last checkpoint.
+- **WAL size trigger**: when WAL file size exceeds 100 MB since last checkpoint.
+- **Whichever comes first** — the checkpoint fires when either threshold is crossed.
+- **Explicit trigger**: `Database::checkpoint()` forces a checkpoint at any time,
+  regardless of thresholds.
+
+The default thresholds are justified by two competing constraints:
+- **INV-FERR-028 (cold start < 5s at 100M datoms)**: recovery replays the WAL delta
+  since the last checkpoint. A 100MB WAL with 1,000 transactions contains ~100K datoms
+  at ~1KB/datom, which replays in < 1s. Larger gaps risk exceeding the 5s budget.
+- **INV-FERR-026 (write amplification)**: each checkpoint serializes the entire store
+  (O(n) where n = total datoms). At 100M datoms, a checkpoint takes ~5-30s. Checkpointing
+  too frequently wastes I/O bandwidth and stalls the write pipeline. The 1,000-transaction
+  interval limits checkpoint overhead to < 1% of write throughput.
+
+```rust
+/// Checkpoint triggering policy.
+pub struct CheckpointPolicy {
+    /// Checkpoint after this many transactions since last checkpoint.
+    /// Default: 1_000.
+    pub transaction_count_trigger: u64,
+    /// Checkpoint when WAL exceeds this size in bytes since last checkpoint.
+    /// Default: 100 * 1024 * 1024 (100 MB).
+    pub wal_size_trigger: u64,
+}
+
+impl Default for CheckpointPolicy {
+    fn default() -> Self {
+        Self {
+            transaction_count_trigger: 1_000,
+            wal_size_trigger: 100 * 1024 * 1024,
+        }
+    }
+}
+```
+
+In the Phase 4a Mutex model, the checkpoint runs synchronously inside `transact()` when
+a threshold is crossed (after WAL write, before `ArcSwap` publish). In the Phase 4b+
+WriterActor model, the checkpoint runs after a group commit batch completes, in the
+writer task context.
+
 ---
 
 ### INV-FERR-014: Recovery Correctness
@@ -2178,7 +2225,7 @@ theorem anti_entropy_complete (a b : DatomStore) (d : Datom) (h : d ∈ a ∨ d 
 
 ### INV-FERR-023: No Unsafe Code
 
-**Traces to**: NEG-FERR-002, ADRS FD-001
+**Traces to**: SEED.md §4 (Implementation Architecture), NEG-FERR-002, ADRS FD-001
 **Verification**: `V:TYPE`
 **Stage**: 0
 
@@ -2239,7 +2286,8 @@ it cannot be overridden by `#[allow(unsafe_code)]` on individual items.
 **Falsification**: Any crate in the Ferratomic workspace compiles successfully while
 containing an `unsafe` block, `unsafe fn`, `unsafe impl`, or `unsafe trait`. This
 would indicate that `#![forbid(unsafe_code)]` is missing from the crate root, or that
-the attribute was erroneously removed. Detection is mechanical: `grep -r "unsafe" crates/`
+the attribute was erroneously removed. Detection is mechanical:
+`rg -n "unsafe" ferratom ferratomic-core ferratomic-datalog ferratomic-verify`
 or `cargo clippy` with `unsafe_code` lint at forbid level.
 
 **proptest strategy**:
@@ -2280,7 +2328,8 @@ theorem no_unsafe : True := trivial
 
 ### INV-FERR-024: Substrate Agnosticism
 
-**Traces to**: C8 (Substrate Independence), INV-FOUNDATION-015
+**Traces to**: SEED.md §4 (Implementation Architecture), SEED.md §9.2 (Central Finding:
+Substrate Divergence), C8 (Substrate Independence), INV-FOUNDATION-015
 **Verification**: `V:TYPE`, `V:PROP`
 **Stage**: 0
 
@@ -2498,4 +2547,3 @@ theorem apply_backend_independent (s : DatomStore) (d : Datom) :
 ```
 
 ---
-

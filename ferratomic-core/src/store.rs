@@ -34,87 +34,8 @@ use ferratom::{
     ValueType,
 };
 
+use crate::indexes::Indexes;
 use crate::writer::{Committed, Transaction};
-
-// ---------------------------------------------------------------------------
-// Indexes
-// ---------------------------------------------------------------------------
-
-/// Secondary indexes over the datom set.
-///
-/// INV-FERR-005: every secondary index is a bijection with the primary set.
-/// In Phase 4a, all four indexes contain identical `im::OrdSet<Datom>` copies.
-/// True per-index sort ordering (EAVT, AEVT, VAET, AVET newtype keys) is
-/// deferred to Phase 4b.
-#[derive(Debug, Clone)]
-pub struct Indexes {
-    /// Entity-Attribute-Value-Tx index.
-    eavt: OrdSet<Datom>,
-    /// Attribute-Entity-Value-Tx index.
-    aevt: OrdSet<Datom>,
-    /// Value-Attribute-Entity-Tx index (reverse references).
-    vaet: OrdSet<Datom>,
-    /// Attribute-Value-Entity-Tx index (unique/lookup).
-    avet: OrdSet<Datom>,
-}
-
-impl Indexes {
-    /// Build indexes from a primary datom set.
-    ///
-    /// INV-FERR-005: all four indexes receive the same datom set,
-    /// ensuring bijection with the primary by construction.
-    fn from_primary(primary: &OrdSet<Datom>) -> Self {
-        Self {
-            eavt: primary.clone(),
-            aevt: primary.clone(),
-            vaet: primary.clone(),
-            avet: primary.clone(),
-        }
-    }
-
-    /// Insert a datom into all four indexes.
-    ///
-    /// INV-FERR-005: maintaining bijection requires every insert to
-    /// touch all indexes.
-    fn insert(&mut self, datom: Datom) {
-        self.eavt.insert(datom.clone());
-        self.aevt.insert(datom.clone());
-        self.vaet.insert(datom.clone());
-        self.avet.insert(datom);
-    }
-
-    /// Entity-Attribute-Value-Tx index.
-    ///
-    /// INV-FERR-005: returns a view bijective with the primary datom set.
-    #[must_use]
-    pub fn eavt(&self) -> &OrdSet<Datom> {
-        &self.eavt
-    }
-
-    /// Attribute-Entity-Value-Tx index.
-    ///
-    /// INV-FERR-005: returns a view bijective with the primary datom set.
-    #[must_use]
-    pub fn aevt(&self) -> &OrdSet<Datom> {
-        &self.aevt
-    }
-
-    /// Value-Attribute-Entity-Tx index (reverse reference lookups).
-    ///
-    /// INV-FERR-005: returns a view bijective with the primary datom set.
-    #[must_use]
-    pub fn vaet(&self) -> &OrdSet<Datom> {
-        &self.vaet
-    }
-
-    /// Attribute-Value-Entity-Tx index (unique attribute lookups).
-    ///
-    /// INV-FERR-005: returns a view bijective with the primary datom set.
-    #[must_use]
-    pub fn avet(&self) -> &OrdSet<Datom> {
-        &self.avet
-    }
-}
 
 // ---------------------------------------------------------------------------
 // TxReceipt
@@ -222,13 +143,40 @@ impl Store {
     #[must_use]
     pub fn from_datoms(datoms: BTreeSet<Datom>) -> Self {
         let ord_set: OrdSet<Datom> = datoms.into_iter().collect();
-        let indexes = Indexes::from_primary(&ord_set);
+        let indexes = Indexes::from_datoms(ord_set.iter());
         Self {
             datoms: ord_set,
             indexes,
             schema: Schema::empty(),
             epoch: 0,
             genesis_agent: AgentId::from_bytes([0u8; 16]),
+        }
+    }
+
+    /// Reconstruct a store from checkpoint data.
+    ///
+    /// INV-FERR-013: Used by `load_checkpoint` to rebuild the store from
+    /// serialized epoch, genesis agent, schema attributes, and datoms.
+    /// INV-FERR-005: indexes are rebuilt from the datom set by construction.
+    #[must_use]
+    pub fn from_checkpoint(
+        epoch: u64,
+        genesis_agent: AgentId,
+        schema_attrs: Vec<(String, AttributeDef)>,
+        datoms: Vec<Datom>,
+    ) -> Self {
+        let mut schema = Schema::empty();
+        for (name, def) in schema_attrs {
+            schema.define(Attribute::from(name.as_str()), def);
+        }
+        let ord_set: OrdSet<Datom> = datoms.into_iter().collect();
+        let indexes = Indexes::from_datoms(ord_set.iter());
+        Self {
+            datoms: ord_set,
+            indexes,
+            schema,
+            epoch,
+            genesis_agent,
         }
     }
 
@@ -243,7 +191,7 @@ impl Store {
     pub fn from_merge(a: &Store, b: &Store) -> Self {
         // im::OrdSet::union is O(n+m) with structural sharing.
         let datoms = a.datoms.clone().union(b.datoms.clone());
-        let indexes = Indexes::from_primary(&datoms);
+        let indexes = Indexes::from_datoms(datoms.iter());
 
         // Union schemas: all attributes from both stores.
         // INV-FERR-043: shared attributes must have identical definitions.
@@ -355,7 +303,7 @@ impl Store {
 
         Self {
             datoms: OrdSet::new(),
-            indexes: Indexes::from_primary(&OrdSet::new()),
+            indexes: Indexes::from_datoms(std::iter::empty()),
             schema,
             epoch: 0,
             genesis_agent: AgentId::from_bytes([0u8; 16]),
@@ -402,7 +350,7 @@ impl Store {
     ///
     /// Used by convergence tests that build stores by individual insertion.
     pub fn insert(&mut self, datom: Datom) {
-        self.indexes.insert(datom.clone());
+        self.indexes.insert(&datom);
         self.datoms.insert(datom);
     }
 
@@ -548,7 +496,7 @@ impl Store {
         // INV-FERR-004: insert every datom into primary and all indexes.
         // INV-FERR-005: bijection maintained by touching all structures.
         for datom in all_datoms {
-            self.indexes.insert(datom.clone());
+            self.indexes.insert(&datom);
             self.datoms.insert(datom);
         }
 
@@ -747,10 +695,10 @@ mod tests {
 
         let store = Store::from_datoms(set);
         let primary: BTreeSet<&Datom> = store.datoms().collect();
-        let eavt: BTreeSet<&Datom> = store.indexes().eavt().iter().collect();
-        let aevt: BTreeSet<&Datom> = store.indexes().aevt().iter().collect();
-        let vaet: BTreeSet<&Datom> = store.indexes().vaet().iter().collect();
-        let avet: BTreeSet<&Datom> = store.indexes().avet().iter().collect();
+        let eavt: BTreeSet<&Datom> = store.indexes().eavt_datoms().collect();
+        let aevt: BTreeSet<&Datom> = store.indexes().aevt_datoms().collect();
+        let vaet: BTreeSet<&Datom> = store.indexes().vaet_datoms().collect();
+        let avet: BTreeSet<&Datom> = store.indexes().avet_datoms().collect();
 
         assert_eq!(primary, eavt, "INV-FERR-005: EAVT must match primary");
         assert_eq!(primary, aevt, "INV-FERR-005: AEVT must match primary");
@@ -764,7 +712,7 @@ mod tests {
         store.insert(sample_datom("inserted"));
 
         let primary: BTreeSet<&Datom> = store.datoms().collect();
-        let eavt: BTreeSet<&Datom> = store.indexes().eavt().iter().collect();
+        let eavt: BTreeSet<&Datom> = store.indexes().eavt_datoms().collect();
         assert_eq!(primary, eavt, "INV-FERR-005: EAVT must match primary after insert");
         assert_eq!(primary.len(), 1);
     }

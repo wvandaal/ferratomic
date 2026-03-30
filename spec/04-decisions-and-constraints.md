@@ -134,6 +134,41 @@ referenced.
 
 **Source**: INV-FERR-006, INV-FERR-027, ADR-STORE-006
 
+**Phase 4a Amendment: Write Serialization via Mutex**
+
+Phase 4a uses `std::sync::Mutex<()>` for write serialization instead of the
+WriterActor/mpsc/group-commit pattern described in the architecture document
+(FERRATOMIC_ARCHITECTURE.md §4). Both patterns satisfy INV-FERR-007 (write
+linearizability) and INV-FERR-008 (WAL fsync ordering):
+
+| Aspect | Mutex (Phase 4a) | WriterActor (Phase 4b+) |
+|--------|-----------------|------------------------|
+| Concurrency | `Mutex<()>` under `Database::transact()` | mpsc channel → single writer task |
+| Fsync | One fsync per transaction | One fsync per batch (group commit) |
+| Throughput | ~1-5K txn/s (fsync-bound) | ~50-200K datoms/s (batched fsync) |
+| Complexity | Minimal — 20 LOC | Significant — channel, batch collection, timeout |
+| Async runtime | None required (`std::sync::Mutex`) | Requires asupersync (ADR-FERR-002) |
+
+**Why Mutex is correct for Phase 4a**: The Mutex pattern produces one WAL entry per
+transaction with one fsync, satisfying the two-fsync barrier (INV-FERR-008). Every
+invariant (INV-FERR-001..024) holds under Mutex serialization because it provides
+strictly stronger ordering than the WriterActor (sequential execution vs. batched).
+The throughput limitation (~1-5K txn/s) does not violate any Phase 4a invariant —
+the 50-200K datoms/s target is a performance goal, not an invariant.
+
+**When to upgrade to WriterActor**: When benchmarks (bd-85j.12) demonstrate that
+single-fsync-per-transaction throughput is insufficient for the application workload.
+The upgrade path is:
+1. Replace `Mutex<()>` with an mpsc channel accepting `Transaction<Committed>`.
+2. WriterActor task drains the channel, batches transactions, writes one WAL entry
+   per batch, calls fsync once, then applies all batched transactions to the Store.
+3. Partial batch failure: if one transaction in a batch fails schema validation, it
+   is rejected individually; the remaining transactions in the batch proceed. Each
+   transaction receives its own `Result<TxReceipt, TxApplyError>`. The batch shares
+   a single WAL fsync but transactions are logically independent.
+4. The WAL entry format does not change — each transaction is still a separate WAL
+   frame. The group commit batches the fsync call, not the WAL content.
+
 ---
 
 ### ADR-FERR-004: Observer Delivery Semantics

@@ -13,16 +13,20 @@
 //! Writer  ──→ Mutex::lock()   ──→ mutate Store ──→ ArcSwap::store()
 //! ```
 
-use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::{
+    path::Path,
+    sync::{Arc, Mutex},
+};
 
 use arc_swap::ArcSwap;
-
 use ferratom::{FerraError, Schema};
 
-use crate::store::{Snapshot, Store, TxReceipt};
-use crate::wal::Wal;
-use crate::writer::{Committed, Transaction};
+use crate::{
+    observer::{DatomObserver, ObserverBroadcast, DEFAULT_OBSERVER_BUFFER},
+    store::{Snapshot, Store, TxReceipt},
+    wal::Wal,
+    writer::{Committed, Transaction},
+};
 
 // ---------------------------------------------------------------------------
 // Database
@@ -51,6 +55,10 @@ pub struct Database {
     /// fsyncs the WAL before applying the transaction to the store.
     /// INV-FERR-008: `durable(WAL(T)) BEFORE visible(SNAP(e))`.
     wal: Mutex<Option<Wal>>,
+
+    /// Registered observers plus bounded history for catch-up.
+    /// INV-FERR-011: delivery is at-least-once with bounded replay.
+    observers: Mutex<ObserverBroadcast>,
 }
 
 impl Database {
@@ -68,6 +76,7 @@ impl Database {
             current: ArcSwap::from_pointee(Store::genesis()),
             write_lock: Mutex::new(()),
             wal: Mutex::new(None),
+            observers: Mutex::new(ObserverBroadcast::new(DEFAULT_OBSERVER_BUFFER)),
         }
     }
 
@@ -86,6 +95,7 @@ impl Database {
             current: ArcSwap::from_pointee(Store::genesis()),
             write_lock: Mutex::new(()),
             wal: Mutex::new(Some(wal)),
+            observers: Mutex::new(ObserverBroadcast::new(DEFAULT_OBSERVER_BUFFER)),
         })
     }
 
@@ -115,6 +125,44 @@ impl Database {
             current: ArcSwap::from_pointee(store),
             write_lock: Mutex::new(()),
             wal: Mutex::new(Some(wal)),
+            observers: Mutex::new(ObserverBroadcast::new(DEFAULT_OBSERVER_BUFFER)),
+        })
+    }
+
+    /// Recover a database from a checkpoint file plus WAL delta.
+    ///
+    /// INV-FERR-013: Loads the checkpoint as the base state.
+    /// INV-FERR-014: Replays only WAL entries with epoch > checkpoint epoch.
+    /// This is the full three-level recovery path: checkpoint → WAL delta → ready.
+    ///
+    /// # Errors
+    ///
+    /// Returns `FerraError::CheckpointCorrupted` if the checkpoint is invalid.
+    /// Returns `FerraError::WalRead` if WAL recovery fails.
+    pub fn recover(checkpoint_path: &Path, wal_path: &Path) -> Result<Self, FerraError> {
+        // Step 1: Load checkpoint (verified by BLAKE3).
+        let mut store = crate::checkpoint::load_checkpoint(checkpoint_path)?;
+        let checkpoint_epoch = store.epoch();
+
+        // Step 2: Replay WAL entries after the checkpoint epoch.
+        let mut wal = Wal::open(wal_path)?;
+        let entries = wal.recover()?;
+
+        for entry in &entries {
+            if entry.epoch > checkpoint_epoch {
+                let datoms: Vec<ferratom::Datom> = serde_json::from_slice(&entry.payload)
+                    .map_err(|e| FerraError::WalRead(e.to_string()))?;
+                for datom in datoms {
+                    store.insert(datom);
+                }
+            }
+        }
+
+        Ok(Self {
+            current: ArcSwap::from_pointee(store),
+            write_lock: Mutex::new(()),
+            wal: Mutex::new(Some(wal)),
+            observers: Mutex::new(ObserverBroadcast::new(DEFAULT_OBSERVER_BUFFER)),
         })
     }
 
@@ -128,7 +176,48 @@ impl Database {
             current: ArcSwap::from_pointee(store),
             write_lock: Mutex::new(()),
             wal: Mutex::new(None),
+            observers: Mutex::new(ObserverBroadcast::new(DEFAULT_OBSERVER_BUFFER)),
         }
+    }
+
+    /// Create a database from an existing store with a new WAL file.
+    ///
+    /// INV-FERR-006: the provided store becomes the initial snapshot state.
+    /// INV-FERR-008: subsequent transacts are durable via the WAL.
+    ///
+    /// # Errors
+    ///
+    /// Returns `FerraError::Io` if the WAL file cannot be created.
+    pub fn from_store_with_wal(store: Store, wal_path: &Path) -> Result<Self, FerraError> {
+        let wal = Wal::create(wal_path)?;
+        Ok(Self {
+            current: ArcSwap::from_pointee(store),
+            write_lock: Mutex::new(()),
+            wal: Mutex::new(Some(wal)),
+            observers: Mutex::new(ObserverBroadcast::new(DEFAULT_OBSERVER_BUFFER)),
+        })
+    }
+
+    /// Register a push-based datom observer.
+    ///
+    /// INV-FERR-011: the observer is caught up to the current store state
+    /// before future commit notifications are delivered.
+    ///
+    /// # Errors
+    ///
+    /// Returns `FerraError::InvariantViolation` if the observer registry
+    /// mutex is poisoned.
+    pub fn register_observer(&self, observer: Box<dyn DatomObserver>) -> Result<(), FerraError> {
+        let current = self.current.load();
+        let mut observers = self
+            .observers
+            .lock()
+            .map_err(|_| FerraError::InvariantViolation {
+                invariant: "INV-FERR-011".to_string(),
+                details: "observer registry mutex poisoned during register".to_string(),
+            })?;
+        observers.register(observer, current.as_ref());
+        Ok(())
     }
 
     /// Take an immutable point-in-time snapshot.
@@ -182,10 +271,7 @@ impl Database {
     /// (try-lock semantics — the caller should retry or shed load).
     /// Returns other `FerraError` variants if the transaction application
     /// itself fails (e.g., `EmptyTransaction`, `InvariantViolation`).
-    pub fn transact(
-        &self,
-        transaction: Transaction<Committed>,
-    ) -> Result<TxReceipt, FerraError> {
+    pub fn transact(&self, transaction: Transaction<Committed>) -> Result<TxReceipt, FerraError> {
         // INV-FERR-007: serialize writes. try_lock returns immediately
         // rather than blocking, so callers can shed load under contention.
         let _guard = self
@@ -198,21 +284,18 @@ impl Database {
         let current = self.current.load();
         let mut new_store = Store::clone(&current);
         let receipt = new_store.transact(transaction)?;
+        let diff = new_store
+            .datom_set()
+            .clone()
+            .difference(current.datom_set().clone());
+        let new_datoms: Vec<ferratom::Datom> = diff.into_iter().collect();
 
         // Step 2: INV-FERR-008: Write WAL with STAMPED datoms BEFORE publishing.
         // durable(WAL(T)) BEFORE visible(SNAP(e)).
         // The WAL contains post-stamp datoms so recovery produces identical state.
         {
-            let mut wal_guard = self
-                .wal
-                .lock()
-                .map_err(|_| FerraError::Backpressure)?;
+            let mut wal_guard = self.wal.lock().map_err(|_| FerraError::Backpressure)?;
             if let Some(ref mut wal) = *wal_guard {
-                // Compute the delta: datoms in new_store not in current.
-                // These are the stamped transaction datoms + tx metadata.
-                // im::OrdSet::difference returns OrdSet, convert to Vec
-                let diff = new_store.datom_set().clone().difference(current.datom_set().clone());
-                let new_datoms: Vec<ferratom::Datom> = diff.into_iter().collect();
                 let payload = serde_json::to_vec(&new_datoms)
                     .map_err(|e| FerraError::WalWrite(e.to_string()))?;
                 wal.append_raw(receipt.epoch(), &payload)?;
@@ -223,6 +306,15 @@ impl Database {
         // Step 3: Atomic swap — readers loading after this point see the new state.
         // INV-FERR-006 preserved: im::OrdSet nodes are reference-counted.
         self.current.store(Arc::new(new_store));
+        let published = self.current.load();
+        let mut observers = self
+            .observers
+            .lock()
+            .map_err(|_| FerraError::InvariantViolation {
+                invariant: "INV-FERR-011".to_string(),
+                details: "observer registry mutex poisoned during publish".to_string(),
+            })?;
+        observers.publish(receipt.epoch(), &new_datoms, published.as_ref());
 
         Ok(receipt)
     }
@@ -235,8 +327,55 @@ impl Database {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::sync::{Arc as StdArc, Mutex as StdMutex};
+
     use ferratom::{AgentId, Attribute, EntityId, Value};
+
+    use super::*;
+    use crate::observer::DatomObserver;
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    enum ObserverEvent {
+        Commit { epoch: u64, count: usize },
+        Catchup { from_epoch: u64, count: usize },
+    }
+
+    struct RecordingObserver {
+        name: &'static str,
+        events: StdArc<StdMutex<Vec<ObserverEvent>>>,
+    }
+
+    impl RecordingObserver {
+        fn new(name: &'static str, events: StdArc<StdMutex<Vec<ObserverEvent>>>) -> Self {
+            Self { name, events }
+        }
+    }
+
+    impl DatomObserver for RecordingObserver {
+        fn on_commit(&self, epoch: u64, datoms: &[ferratom::Datom]) {
+            self.events
+                .lock()
+                .expect("observer commit events lock")
+                .push(ObserverEvent::Commit {
+                    epoch,
+                    count: datoms.len(),
+                });
+        }
+
+        fn on_catchup(&self, from_epoch: u64, datoms: &[ferratom::Datom]) {
+            self.events
+                .lock()
+                .expect("observer catchup events lock")
+                .push(ObserverEvent::Catchup {
+                    from_epoch,
+                    count: datoms.len(),
+                });
+        }
+
+        fn name(&self) -> &str {
+            self.name
+        }
+    }
 
     /// INV-FERR-031: genesis produces a deterministic database.
     #[test]
@@ -355,6 +494,66 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_inv_ferr_011_register_observer_delivers_catchup() {
+        let db = Database::genesis();
+        let agent = AgentId::from_bytes([7u8; 16]);
+        let schema = db.schema();
+
+        for i in 0..2i64 {
+            let tx = Transaction::new(agent)
+                .assert_datom(
+                    EntityId::from_content(format!("catchup-{i}").as_bytes()),
+                    Attribute::from("db/doc"),
+                    Value::String(format!("doc-{i}").into()),
+                )
+                .commit(&schema)
+                .expect("valid tx");
+            db.transact(tx).expect("transact succeeds");
+        }
+
+        let events = StdArc::new(StdMutex::new(Vec::new()));
+        let observer = Box::new(RecordingObserver::new("catchup", StdArc::clone(&events)));
+        db.register_observer(observer)
+            .expect("observer registration succeeds");
+
+        let recorded = events.lock().expect("events lock");
+        assert!(
+            matches!(recorded.as_slice(), [ObserverEvent::Catchup { from_epoch: 0, count }] if *count > 0),
+            "register_observer must catch up existing state, got {:?}",
+            *recorded
+        );
+    }
+
+    #[test]
+    fn test_inv_ferr_011_transact_notifies_registered_observer() {
+        let db = Database::genesis();
+        let events = StdArc::new(StdMutex::new(Vec::new()));
+        let observer = Box::new(RecordingObserver::new("commit", StdArc::clone(&events)));
+        db.register_observer(observer)
+            .expect("observer registration succeeds");
+
+        let schema = db.schema();
+        let tx = Transaction::new(AgentId::from_bytes([8u8; 16]))
+            .assert_datom(
+                EntityId::from_content(b"observer-commit"),
+                Attribute::from("db/doc"),
+                Value::String("observed".into()),
+            )
+            .commit(&schema)
+            .expect("valid tx");
+        db.transact(tx).expect("transact succeeds");
+
+        let recorded = events.lock().expect("events lock");
+        assert!(
+            recorded.iter().any(|event| {
+                matches!(event, ObserverEvent::Commit { epoch: 1, count } if *count > 0)
+            }),
+            "registered observer must receive commit notification, got {:?}",
+            *recorded
+        );
+    }
+
     // -- Regression tests for cleanroom review defects -------------------------
 
     /// Regression: bd-2w9 — Database with WAL writes WAL before epoch advance.
@@ -386,10 +585,7 @@ mod tests {
             1,
             "bd-2w9: WAL must contain 1 entry after 1 transact"
         );
-        assert_eq!(
-            entries[0].epoch, 1,
-            "bd-2w9: WAL entry epoch must be 1"
-        );
+        assert_eq!(entries[0].epoch, 1, "bd-2w9: WAL entry epoch must be 1");
     }
 
     /// Regression: bd-2w9 — recover_from_wal restores state.

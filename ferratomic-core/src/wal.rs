@@ -160,7 +160,7 @@ impl Wal {
     ///
     /// INV-FERR-008: Like [`append`](Self::append), the frame is written but NOT
     /// fsynced. Used by [`Database::transact`](crate::db::Database::transact) to
-    /// write post-stamp datoms (with real TxIds and tx metadata).
+    /// write post-stamp datoms (with real `TxId`s and tx metadata).
     ///
     /// # Errors
     ///
