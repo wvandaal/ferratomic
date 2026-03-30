@@ -23,7 +23,7 @@ import Ferratomic.Decisions  -- reuses filter_union_comm
 /-- Two-store federated query. -/
 theorem federated_query_two (s1 s2 : DatomStore) (p : Datom → Prop) [DecidablePred p] :
     (s1 ∪ s2).filter p = s1.filter p ∪ s2.filter p :=
-  Finset.filter_union s1 s2
+  Finset.filter_union p s1 s2
 
 /-- N-store federated query (same as filter_biUnion_comm from Decisions). -/
 theorem federated_query_n {ι : Type*} [DecidableEq ι] (stores : Finset ι)
@@ -61,7 +61,7 @@ theorem selective_merge_bounded (local_ remote : DatomStore) (p : Datom → Prop
     [DecidablePred p] :
     selective_merge local_ remote p ⊆ local_ ∪ remote := by
   unfold selective_merge
-  exact Finset.union_subset_union_right _ (Finset.filter_subset p remote)
+  exact Finset.union_subset_union_right (Finset.filter_subset p remote)
 
 /-- filter = True reduces to full merge. -/
 theorem selective_merge_all (local_ remote : DatomStore) :
@@ -74,7 +74,7 @@ theorem selective_merge_all (local_ remote : DatomStore) :
 theorem selective_merge_none (local_ remote : DatomStore) :
     selective_merge local_ remote (fun _ => False) = local_ := by
   unfold selective_merge
-  have : remote.filter (fun _ => False) = ∅ := by ext; simp [Finset.mem_filter]
+  have : remote.filter (fun _ => False) = ∅ := by ext; simp
   rw [this, Finset.union_empty]
 
 /-! ## INV-FERR-040: Merge Provenance Preservation
@@ -90,7 +90,7 @@ theorem merge_provenance (a b : DatomStore) (d : Datom) (h : d ∈ merge a b) :
 /-- Union does not invent elements: result is bounded by inputs. -/
 theorem merge_no_invention (a b : DatomStore) :
     ∀ d ∈ merge a b, d ∈ a ∨ d ∈ b :=
-  fun d hd => Finset.mem_union.mp hd
+  fun _d hd => Finset.mem_union.mp hd
 
 /-! ## INV-FERR-043: Schema Compatibility Check
 

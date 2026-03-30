@@ -18,8 +18,7 @@ import Ferratomic.Store
   Deduplication is structural — storing the same content twice is a no-op. -/
 
 /-- Abstract hash type (BLAKE3 output modeled as Nat for simplicity). -/
-def ChunkHash := Nat
-  deriving DecidableEq, Repr
+abbrev ChunkHash := Nat
 
 /-- Content-addressing: a deterministic function from content to hash. -/
 def chunk_addr (data : List Nat) : ChunkHash := data.foldl (· + ·) 0
@@ -33,7 +32,7 @@ theorem chunk_content_identity (d1 d2 : List Nat) (h : d1 = d2) :
 theorem chunk_store_idempotent (s : Finset (ChunkHash × List Nat)) (data : List Nat) :
     let entry := (chunk_addr data, data)
     s ∪ {entry} ∪ {entry} = s ∪ {entry} := by
-  rw [Finset.union_assoc, Finset.union_self]
+  simp
 
 /-! ## INV-FERR-046: Prolly Tree History Independence
 
@@ -44,7 +43,7 @@ theorem chunk_store_idempotent (s : Finset (ChunkHash × List Nat)) (data : List
   Modeled as: sorting a Finset is deterministic (Finset has a canonical order). -/
 
 /-- Key-value store modeled as Finset of pairs. -/
-def KVStore := Finset (Nat × Nat)
+abbrev KVStore := Finset (Nat × Nat)
 
 /-- The sorted representation of a key-value store is deterministic.
     Since Finset has no insertion order, the sort is unique. -/

@@ -15,7 +15,9 @@
 -/
 
 import Mathlib.Data.Finset.Basic
-import Mathlib.Data.Finset.Lattice
+import Mathlib.Data.Finset.Card
+import Mathlib.Data.Finset.Lattice.Basic
+import Mathlib.Data.Finset.Lattice.Lemmas
 
 /-! ### Foundation Model (§23.0.4) -/
 
@@ -31,14 +33,17 @@ structure Datom where
   op : Bool
   deriving DecidableEq, Repr
 
-/-- A datom store is a finite set of datoms. -/
-def DatomStore := Finset Datom
+/-- A datom store is a finite set of datoms.
+    Using abbrev so Finset type class instances (Union, Membership, etc.)
+    are inherited transparently. -/
+abbrev DatomStore := Finset Datom
 
-/-- Merge is set union — the ONLY merge operation. -/
-def merge (a b : DatomStore) : DatomStore := a ∪ b
+/-- Merge is set union — the ONLY merge operation.
+    abbrev makes this definitionally transparent so Finset lemmas apply. -/
+abbrev merge (a b : DatomStore) : DatomStore := a ∪ b
 
 /-- Transact: add a datom to the store. -/
-def apply_tx (s : DatomStore) (d : Datom) : DatomStore := s ∪ {d}
+abbrev apply_tx (s : DatomStore) (d : Datom) : DatomStore := s ∪ {d}
 
 /-! ## INV-FERR-001: Merge Commutativity
 
@@ -104,7 +109,7 @@ theorem convergence_from_empty (updates : DatomStore) :
 /-- Two replicas starting from empty converge regardless of merge order. -/
 theorem convergence_symmetric (a b : DatomStore) :
     merge (merge ∅ a) b = merge (merge ∅ b) a := by
-  simp only [merge, Finset.empty_union]
+  simp only [Finset.empty_union]
   exact Finset.union_comm a b
 
 /-! ## INV-FERR-012: Content-Addressed Identity
@@ -123,7 +128,7 @@ theorem content_identity (d1 d2 : Datom) :
 /-- Adding a datom already present does not change the store. -/
 theorem merge_dedup (a : DatomStore) (d : Datom) (h : d ∈ a) :
     merge a {d} = a := by
-  unfold merge; ext x
+  ext x
   simp only [Finset.mem_union, Finset.mem_singleton]
   constructor
   · rintro (hx | rfl)

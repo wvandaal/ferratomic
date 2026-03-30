@@ -28,13 +28,13 @@ import Ferratomic.Store
 axiom CryptoHash : Type
 /-- Hashes have decidable equality. -/
 axiom CryptoHash.instDecidableEq : DecidableEq CryptoHash
-instance : DecidableEq CryptoHash := CryptoHash.instDecidableEq
+noncomputable instance : DecidableEq CryptoHash := CryptoHash.instDecidableEq
 
 /-- Ed25519 signing key. -/
 axiom SigningKey : Type
 /-- Ed25519 verifying (public) key. -/
 axiom VerifyingKey : Type
-instance : DecidableEq VerifyingKey := Classical.dec _
+noncomputable instance : DecidableEq VerifyingKey := Classical.decEq VerifyingKey
 
 /-- Derive public key from signing key. -/
 axiom public_key : SigningKey → VerifyingKey
@@ -69,13 +69,13 @@ structure SignedTx where
   signer_vk : VerifyingKey
 
 /-- Create a signed transaction. -/
-def sign_tx (sk : SigningKey) (msg : CryptoHash) : SignedTx :=
+noncomputable def sign_tx (sk : SigningKey) (msg : CryptoHash) : SignedTx :=
   { msg_hash := msg
   , signature := ed25519_sign sk msg
   , signer_vk := public_key sk }
 
 /-- Verify a signed transaction. -/
-def verify_tx (stx : SignedTx) : Bool :=
+noncomputable def verify_tx (stx : SignedTx) : Bool :=
   ed25519_verify stx.signer_vk stx.msg_hash stx.signature
 
 /-- Sign-then-verify roundtrip succeeds. -/
@@ -118,7 +118,7 @@ axiom inclusion_proof_complete : ∀ (s : DatomStore) (d : Datom),
   d ∈ s → ∃ (p : InclusionProof), verify_inclusion p = true
 
 /-- Proof determinism: same store + same datom → same proof. -/
-axiom inclusion_proof_deterministic : ∀ (s : DatomStore) (d : Datom)
+axiom inclusion_proof_deterministic : ∀ (_s : DatomStore) (_d : Datom)
   (p1 p2 : InclusionProof),
   verify_inclusion p1 = true → verify_inclusion p2 = true →
   p1.root = p2.root → p1 = p2
@@ -192,7 +192,7 @@ structure VKC where
   calibration_root : CryptoHash
 
 /-- VKC verification checks all three components. -/
-def verify_vkc (vkc : VKC) : Bool :=
+noncomputable def verify_vkc (vkc : VKC) : Bool :=
   verify_tx vkc.signed_tx
 
 /-- VKC soundness: verification implies authenticity. -/

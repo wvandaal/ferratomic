@@ -58,15 +58,13 @@ def live_view_model (datoms : List Datom) : Finset (Nat × Nat × Nat) :=
 theorem retraction_removes (live : Finset (Nat × Nat × Nat)) (e a v : Nat) :
     (e, a, v) ∉ apply_op live ⟨e, a, v, 0, false⟩ := by
   unfold apply_op
-  simp only [ite_false, Finset.mem_sdiff, Finset.mem_singleton, not_and, not_not]
-  intro _; rfl
+  simp
 
 /-- Assertion adds the triple to the live set. -/
 theorem assertion_adds (live : Finset (Nat × Nat × Nat)) (e a v : Nat) :
     (e, a, v) ∈ apply_op live ⟨e, a, v, 0, true⟩ := by
   unfold apply_op
-  simp only [ite_true, Finset.mem_union, Finset.mem_singleton]
-  exact Or.inr rfl
+  simp
 
 /-! ## INV-FERR-032: LIVE Resolution Correctness
 
