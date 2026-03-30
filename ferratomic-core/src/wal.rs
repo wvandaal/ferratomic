@@ -563,4 +563,33 @@ mod tests {
             );
         }
     }
+
+    /// Regression: bd-32t — WAL payload roundtrip preserves datom content.
+    #[test]
+    fn test_bug_bd_32t_payload_content_roundtrip() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("test.wal");
+
+        {
+            let mut wal = Wal::create(&path).unwrap();
+            wal.append(1, &sample_tx()).unwrap();
+            wal.fsync().unwrap();
+        }
+
+        {
+            let mut wal = Wal::open(&path).unwrap();
+            let entries = wal.recover().unwrap();
+            assert_eq!(entries.len(), 1);
+
+            // Deserialize and verify datom content survives roundtrip.
+            let datoms: Vec<ferratom::Datom> =
+                serde_json::from_slice(&entries[0].payload).unwrap();
+            assert!(!datoms.is_empty(), "bd-32t: payload must contain datoms");
+            assert_eq!(
+                datoms[0].attribute().as_str(),
+                "db/doc",
+                "bd-32t: datom attribute must survive WAL roundtrip"
+            );
+        }
+    }
 }

@@ -13,6 +13,7 @@
 //! Writer  ──→ Mutex::lock()   ──→ mutate Store ──→ ArcSwap::store()
 //! ```
 
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use arc_swap::ArcSwap;
@@ -20,6 +21,7 @@ use arc_swap::ArcSwap;
 use ferratom::{FerraError, Schema};
 
 use crate::store::{Snapshot, Store, TxReceipt};
+use crate::wal::Wal;
 use crate::writer::{Committed, Transaction};
 
 // ---------------------------------------------------------------------------
@@ -33,6 +35,9 @@ use crate::writer::{Committed, Transaction};
 ///
 /// INV-FERR-007: write linearizability. The internal `Mutex` ensures that
 /// exactly one writer operates at a time, producing strictly ordered epochs.
+///
+/// INV-FERR-008: when a WAL is attached, `transact()` writes and fsyncs the
+/// WAL BEFORE advancing the epoch and swapping the pointer.
 pub struct Database {
     /// The current store state. Readers load atomically. Writers swap after mutation.
     /// `ArcSwap` provides wait-free reads (~1ns) per ADR-FERR-003.
@@ -41,23 +46,79 @@ pub struct Database {
     /// Write serialization lock. Only one writer at a time.
     /// INV-FERR-007: ensures epoch ordering is strict.
     write_lock: Mutex<()>,
+
+    /// Optional WAL for durability. When `Some`, `transact()` writes and
+    /// fsyncs the WAL before applying the transaction to the store.
+    /// INV-FERR-008: `durable(WAL(T)) BEFORE visible(SNAP(e))`.
+    wal: Mutex<Option<Wal>>,
 }
 
 impl Database {
-    /// Create a new database from a genesis store.
+    /// Create a new database from a genesis store (no WAL).
     ///
     /// INV-FERR-031: The initial store is deterministic — identical on
-    /// every call. The genesis store contains the 4 core meta-schema
+    /// every call. The genesis store contains the 19 axiomatic meta-schema
     /// attributes and no datoms.
+    ///
+    /// Without a WAL, transactions are not durable across crashes. Use
+    /// [`genesis_with_wal`](Self::genesis_with_wal) for durability.
     #[must_use]
     pub fn genesis() -> Self {
         Self {
             current: ArcSwap::from_pointee(Store::genesis()),
             write_lock: Mutex::new(()),
+            wal: Mutex::new(None),
         }
     }
 
-    /// Create a database from an existing store.
+    /// Create a genesis database backed by a WAL file.
+    ///
+    /// INV-FERR-008: All subsequent `transact()` calls write and fsync
+    /// the WAL before advancing the epoch.
+    /// INV-FERR-031: The initial store is deterministic.
+    ///
+    /// # Errors
+    ///
+    /// Returns `FerraError::Io` if the WAL file cannot be created.
+    pub fn genesis_with_wal(wal_path: &Path) -> Result<Self, FerraError> {
+        let wal = Wal::create(wal_path)?;
+        Ok(Self {
+            current: ArcSwap::from_pointee(Store::genesis()),
+            write_lock: Mutex::new(()),
+            wal: Mutex::new(Some(wal)),
+        })
+    }
+
+    /// Recover a database from a WAL file.
+    ///
+    /// INV-FERR-014: Recovery replays all complete WAL entries into a
+    /// genesis store, producing the last committed state.
+    ///
+    /// # Errors
+    ///
+    /// Returns `FerraError` if the WAL cannot be opened or recovery fails.
+    pub fn recover_from_wal(wal_path: &Path) -> Result<Self, FerraError> {
+        let mut wal = Wal::open(wal_path)?;
+        let entries = wal.recover()?;
+
+        let mut store = Store::genesis();
+        for entry in &entries {
+            let datoms: Vec<ferratom::Datom> = serde_json::from_slice(&entry.payload)
+                .map_err(|e| FerraError::WalRead(e.to_string()))?;
+            // Re-insert recovered datoms directly (they already have real TxIds).
+            for datom in datoms {
+                store.insert(datom);
+            }
+        }
+
+        Ok(Self {
+            current: ArcSwap::from_pointee(store),
+            write_lock: Mutex::new(()),
+            wal: Mutex::new(Some(wal)),
+        })
+    }
+
+    /// Create a database from an existing store (no WAL).
     ///
     /// INV-FERR-006: the provided store becomes the initial snapshot state.
     /// INV-FERR-007: epoch ordering continues from the store's current epoch.
@@ -66,6 +127,7 @@ impl Database {
         Self {
             current: ArcSwap::from_pointee(store),
             write_lock: Mutex::new(()),
+            wal: Mutex::new(None),
         }
     }
 
@@ -130,6 +192,23 @@ impl Database {
             .write_lock
             .try_lock()
             .map_err(|_| FerraError::Backpressure)?;
+
+        // INV-FERR-008: Write WAL BEFORE applying to store.
+        // durable(WAL(T)) BEFORE visible(SNAP(e)).
+        let next_epoch = {
+            let current = self.current.load();
+            current.epoch() + 1
+        };
+        {
+            let mut wal_guard = self
+                .wal
+                .lock()
+                .map_err(|_| FerraError::Backpressure)?;
+            if let Some(ref mut wal) = *wal_guard {
+                wal.append(next_epoch, &transaction)?;
+                wal.fsync()?;
+            }
+        }
 
         // Load the current store, clone it (O(1) via im::OrdSet structural
         // sharing — ADR-FERR-001), apply the transaction to the clone,
@@ -272,6 +351,79 @@ mod tests {
             db.epoch(),
             epoch,
             "INV-FERR-006: from_store must preserve epoch"
+        );
+    }
+
+    // -- Regression tests for cleanroom review defects -------------------------
+
+    /// Regression: bd-2w9 — Database with WAL writes WAL before epoch advance.
+    #[test]
+    fn test_bug_bd_2w9_wal_written_on_transact() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let wal_path = dir.path().join("test.wal");
+
+        let db = Database::genesis_with_wal(&wal_path).unwrap();
+        let agent = AgentId::from_bytes([1u8; 16]);
+        let schema = db.schema();
+
+        let tx = Transaction::new(agent)
+            .assert_datom(
+                EntityId::from_content(b"e1"),
+                Attribute::from("db/doc"),
+                Value::String("hello from wal".into()),
+            )
+            .commit(&schema)
+            .expect("valid tx");
+
+        db.transact(tx).expect("transact should succeed");
+
+        // Verify WAL was written: open and recover
+        let mut wal = Wal::open(&wal_path).expect("WAL must exist");
+        let entries = wal.recover().expect("recovery must succeed");
+        assert_eq!(
+            entries.len(),
+            1,
+            "bd-2w9: WAL must contain 1 entry after 1 transact"
+        );
+        assert_eq!(
+            entries[0].epoch, 1,
+            "bd-2w9: WAL entry epoch must be 1"
+        );
+    }
+
+    /// Regression: bd-2w9 — recover_from_wal restores state.
+    #[test]
+    fn test_bug_bd_2w9_recover_from_wal() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let wal_path = dir.path().join("test.wal");
+
+        // Write via WAL-backed database
+        {
+            let db = Database::genesis_with_wal(&wal_path).unwrap();
+            let agent = AgentId::from_bytes([1u8; 16]);
+            let schema = db.schema();
+
+            for i in 0..3i64 {
+                let tx = Transaction::new(agent)
+                    .assert_datom(
+                        EntityId::from_content(format!("e{i}").as_bytes()),
+                        Attribute::from("db/doc"),
+                        Value::String(format!("doc-{i}").into()),
+                    )
+                    .commit(&schema)
+                    .expect("valid tx");
+                db.transact(tx).expect("transact ok");
+            }
+        }
+
+        // Recover from WAL alone (simulating crash + restart)
+        let recovered = Database::recover_from_wal(&wal_path).expect("recovery must succeed");
+        let snap = recovered.snapshot();
+
+        // Must have datoms from all 3 transactions (user datoms + tx metadata)
+        assert!(
+            snap.datoms().count() > 0,
+            "bd-2w9: recovered database must have datoms"
         );
     }
 }
