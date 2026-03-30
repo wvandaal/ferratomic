@@ -278,6 +278,13 @@ impl Datom {
     }
 }
 
+/// INV-FERR-012: Datom identity is determined by content hash.
+impl crate::traits::ContentAddressed for Datom {
+    fn content_hash(&self) -> [u8; 32] {
+        Datom::content_hash(self)
+    }
+}
+
 /// Hash a discriminant tag followed by length-prefixed variable-length bytes.
 fn hash_tagged_bytes(hasher: &mut blake3::Hasher, tag: u8, data: &[u8]) {
     hasher.update(&[tag]);

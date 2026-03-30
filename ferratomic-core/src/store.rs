@@ -442,6 +442,21 @@ impl Store {
 
 }
 
+// ---------------------------------------------------------------------------
+// Trait implementations
+// ---------------------------------------------------------------------------
+
+/// INV-FERR-001..003: Store is a join-semilattice under set union.
+/// The merge operation is commutative, associative, and idempotent.
+impl ferratom::traits::Semilattice for Store {
+    fn merge(&self, other: &Self) -> Self {
+        Store::from_merge(self, other)
+    }
+}
+
+// Note: ContentAddressed for Datom must be impl'd in ferratom crate
+// (orphan rule). See ferratom/src/datom.rs — Datom::content_hash()
+// already provides the INV-FERR-012 contract.
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -810,5 +825,34 @@ mod tests {
             ba.schema(),
             "bd-3n6: merge(A,B).schema must equal merge(B,A).schema"
         );
+    }
+
+    /// bd-20j: Semilattice trait is usable via generic bounds.
+    #[test]
+    fn test_semilattice_trait_bound() {
+        use ferratom::traits::Semilattice;
+
+        fn requires_semilattice<T: Semilattice>(a: &T, b: &T) -> T {
+            a.merge(b)
+        }
+
+        let a = Store::genesis();
+        let b = Store::genesis();
+        let merged = requires_semilattice(&a, &b);
+        assert_eq!(merged.epoch(), 0, "bd-20j: Semilattice merge of genesis stores");
+    }
+
+    /// bd-20j: ContentAddressed trait is usable via generic bounds.
+    #[test]
+    fn test_content_addressed_trait_bound() {
+        use ferratom::traits::ContentAddressed;
+
+        fn requires_content_addressed<T: ContentAddressed>(x: &T) -> [u8; 32] {
+            x.content_hash()
+        }
+
+        let datom = sample_datom("trait-test");
+        let hash = requires_content_addressed(&datom);
+        assert_ne!(hash, [0u8; 32], "bd-20j: ContentAddressed must produce non-zero hash");
     }
 }
