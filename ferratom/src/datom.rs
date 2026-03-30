@@ -39,8 +39,13 @@ impl EntityId {
 
     /// Create an `EntityId` from raw bytes. **Testing only.**
     ///
-    /// Bypasses the BLAKE3 derivation. Used by proptest generators to cover
-    /// the full 256-bit ID space without manufacturing content for each case.
+    /// Bypasses the BLAKE3 derivation (INV-FERR-012). Used by proptest
+    /// generators to cover the full 256-bit ID space without manufacturing
+    /// content for each case.
+    ///
+    /// Gated behind `test-utils` feature or `#[cfg(test)]` to prevent
+    /// accidental use in production code.
+    #[cfg(any(test, feature = "test-utils"))]
     #[must_use]
     pub fn from_bytes(bytes: [u8; 32]) -> Self {
         Self(bytes)

@@ -53,6 +53,7 @@ impl AgentId {
     ///
     /// Intended for tests and generators where a compact seed is more
     /// convenient than a full 16-byte array.
+    #[cfg(any(test, feature = "test-utils"))]
     #[must_use]
     pub fn from_seed(seed: u16) -> Self {
         let mut bytes = [0u8; 16];
@@ -90,7 +91,7 @@ pub struct TxId {
 }
 
 impl TxId {
-    /// Create a `TxId` from compact components.
+    /// Create a `TxId` from compact components. **Testing only.**
     ///
     /// INV-FERR-015: The triple `(physical, logical, agent)` forms a
     /// totally ordered HLC timestamp.
@@ -98,6 +99,7 @@ impl TxId {
     /// The `agent_seed` is zero-extended into a 16-byte `AgentId`. This
     /// constructor exists for ergonomic use in tests and generators; prefer
     /// [`TxId::with_agent`] in production code.
+    #[cfg(any(test, feature = "test-utils"))]
     #[must_use]
     pub fn new(physical: u64, logical: u32, agent_seed: u16) -> Self {
         Self {
@@ -213,11 +215,23 @@ impl HybridClock {
         if now > self.physical {
             self.physical = now;
             self.logical = 0;
-        } else {
+        } else if let Some(next_logical) = self.logical.checked_add(1) {
             // Wall clock did not advance — increment logical.
-            // Saturating add prevents overflow; in practice u32::MAX
-            // ticks at the same millisecond is unreachable.
-            self.logical = self.logical.saturating_add(1);
+            self.logical = next_logical;
+        } else {
+            // INV-FERR-015 / INV-FERR-021: logical counter overflow.
+            // Backpressure: busy-wait until wall clock advances.
+            // This caps throughput at u32::MAX events per millisecond
+            // (~4.3 billion/ms) — physically unreachable.
+            loop {
+                std::thread::yield_now();
+                let updated = Self::wall_clock();
+                if updated > self.physical {
+                    self.physical = updated;
+                    self.logical = 0;
+                    break;
+                }
+            }
         }
 
         TxId::with_agent(self.physical, self.logical, self.agent)

@@ -210,8 +210,9 @@ impl Store {
     /// ensuring bijection by construction. The schema is empty and
     /// epoch starts at 0.
     ///
-    /// Used by generators, merge, and tests that need to construct
-    /// stores from arbitrary datom collections.
+    /// Used by generators and tests that need to construct stores
+    /// from arbitrary datom collections. For merge, use [`from_merge`]
+    /// which preserves schema and epoch.
     #[must_use]
     pub fn from_datoms(datoms: BTreeSet<Datom>) -> Self {
         let indexes = Indexes::from_primary(&datoms);
@@ -221,6 +222,40 @@ impl Store {
             schema: Schema::empty(),
             epoch: 0,
             genesis_agent: AgentId::from_bytes([0u8; 16]),
+        }
+    }
+
+    /// Construct a store from merging two stores: union datoms, union schemas,
+    /// take max epoch.
+    ///
+    /// INV-FERR-001..003: datoms are the set union.
+    /// INV-FERR-009: schema is the union of both schemas (all attributes from both).
+    /// INV-FERR-007: epoch is `max(a.epoch, b.epoch)` — the merged store is at
+    /// least as current as either input.
+    #[must_use]
+    pub fn from_merge(a: &Store, b: &Store) -> Self {
+        let mut datoms = a.datoms.clone();
+        for datom in &b.datoms {
+            datoms.insert(datom.clone());
+        }
+        let indexes = Indexes::from_primary(&datoms);
+
+        // Union schemas: all attributes from both stores.
+        let mut schema = a.schema.clone();
+        for (attr, def) in b.schema.iter() {
+            if !schema.contains(attr) {
+                schema.define(attr.clone(), def.clone());
+            }
+        }
+
+        let epoch = a.epoch.max(b.epoch);
+
+        Self {
+            datoms,
+            indexes,
+            schema,
+            epoch,
+            genesis_agent: a.genesis_agent,
         }
     }
 
@@ -413,12 +448,35 @@ impl Store {
             }
         })?;
 
+        // INV-FERR-015: Generate a real TxId from the new epoch and
+        // the transaction's agent identity. Replaces the placeholder
+        // TxId(0,0,0) that datoms carry from the Transaction builder.
+        let real_tx_id = ferratom::TxId::with_agent(
+            self.epoch,
+            0,
+            transaction.agent(),
+        );
+
+        // Re-stamp datoms with the real TxId.
+        let stamped: Vec<Datom> = datoms
+            .into_iter()
+            .map(|d| {
+                Datom::new(
+                    d.entity(),
+                    d.attribute().clone(),
+                    d.value().clone(),
+                    real_tx_id,
+                    d.op(),
+                )
+            })
+            .collect();
+
         // INV-FERR-009: scan for schema-defining datoms and evolve the schema.
-        self.evolve_schema(&datoms);
+        self.evolve_schema(&stamped);
 
         // INV-FERR-004: insert every datom into primary and all indexes.
         // INV-FERR-005: bijection maintained by touching all structures.
-        for datom in datoms {
+        for datom in stamped {
             self.indexes.insert(datom.clone());
             self.datoms.insert(datom);
         }
@@ -457,7 +515,7 @@ impl Store {
             for datom in entity_datoms {
                 if datom.attribute() == &db_ident {
                     if let ferratom::Value::Keyword(kw) = datom.value() {
-                        ident = Some(leak_arc_str(kw));
+                        ident = Some(kw.as_ref());
                     }
                 } else if datom.attribute() == &db_value_type {
                     if let ferratom::Value::Keyword(kw) = datom.value() {
@@ -489,22 +547,6 @@ impl Store {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-/// Extract a `&str` from an `Arc<str>` by reborrowing.
-///
-/// This is safe because we only use the reference within the scope of
-/// `evolve_schema` where the `Arc<str>` is still alive. We return a
-/// `&str` with an artificially extended lifetime to avoid cloning
-/// the string for the `Attribute::from` call. In practice the
-/// attribute is constructed before the reference is dropped.
-///
-/// # Safety
-///
-/// No unsafe code. The `&str` borrows from the `Arc<str>` which
-/// lives for the duration of the `evolve_schema` call.
-fn leak_arc_str(arc: &Arc<str>) -> &str {
-    arc.as_ref()
-}
 
 /// Parse a `db.type/*` keyword into a `ValueType`.
 ///
@@ -657,15 +699,17 @@ mod tests {
         store.insert(sample_datom("before"));
 
         let snap = store.snapshot();
-        let count_before = snap.datoms().count();
+        let snap_set_before: BTreeSet<&Datom> = snap.datoms().collect();
 
         store.insert(sample_datom("after"));
 
-        let count_after = snap.datoms().count();
+        // bd-3bg regression: compare datom SETS, not counts.
+        let snap_set_after: BTreeSet<&Datom> = snap.datoms().collect();
         assert_eq!(
-            count_before, count_after,
-            "INV-FERR-006: snapshot must not see later inserts"
+            snap_set_before, snap_set_after,
+            "INV-FERR-006: snapshot datom set must not change after later inserts"
         );
+        assert_eq!(snap_set_before.len(), 1, "snapshot should have exactly 1 datom");
     }
 
     #[test]
@@ -689,5 +733,103 @@ mod tests {
         assert_eq!(parse_cardinality("db.cardinality/one"), Some(Cardinality::One));
         assert_eq!(parse_cardinality("db.cardinality/many"), Some(Cardinality::Many));
         assert_eq!(parse_cardinality("db.cardinality/unknown"), None);
+    }
+
+    // -- Regression tests for cleanroom review defects -------------------------
+
+    /// Regression: bd-10p — merge() must preserve schema from both stores.
+    #[test]
+    fn test_bug_bd_10p_merge_preserves_schema() {
+        use crate::merge::merge;
+
+        let a = Store::genesis(); // has 4 schema attributes
+        let b = Store::genesis();
+
+        let merged = merge(&a, &b);
+        assert_eq!(
+            merged.schema().len(),
+            4,
+            "bd-10p: merge must preserve schema — expected 4 genesis attributes, got {}",
+            merged.schema().len()
+        );
+        assert!(
+            merged.schema().get(&Attribute::from("db/ident")).is_some(),
+            "bd-10p: merge lost db/ident"
+        );
+    }
+
+    /// Regression: bd-10p — merge() must take max epoch.
+    #[test]
+    fn test_bug_bd_10p_merge_preserves_epoch() {
+        use crate::merge::merge;
+        use crate::writer::Transaction;
+
+        let mut a = Store::genesis();
+        // Transact to advance epoch to 1
+        let tx = Transaction::new(AgentId::from_bytes([1u8; 16]))
+            .assert_datom(
+                EntityId::from_content(b"e1"),
+                Attribute::from("db/doc"),
+                Value::String(Arc::from("test")),
+            )
+            .commit(a.schema())
+            .expect("valid tx");
+        a.transact(tx).expect("transact ok");
+        assert_eq!(a.epoch(), 1);
+
+        let b = Store::genesis(); // epoch 0
+
+        let merged = merge(&a, &b);
+        assert_eq!(
+            merged.epoch(),
+            1,
+            "bd-10p: merge must take max(epoch_a, epoch_b) = max(1, 0) = 1"
+        );
+    }
+
+    /// Regression: bd-1n6 — transact() must stamp real TxId, not placeholder.
+    #[test]
+    fn test_bug_bd_1n6_transact_stamps_real_tx_id() {
+        use crate::writer::Transaction;
+
+        let mut store = Store::genesis();
+        let agent = AgentId::from_bytes([42u8; 16]);
+        let tx = Transaction::new(agent)
+            .assert_datom(
+                EntityId::from_content(b"e1"),
+                Attribute::from("db/doc"),
+                Value::String(Arc::from("test")),
+            )
+            .commit(store.schema())
+            .expect("valid tx");
+
+        store.transact(tx).expect("transact ok");
+
+        // Every datom in the store should have a non-placeholder TxId.
+        let placeholder = TxId::new(0, 0, 0);
+        for datom in store.datoms() {
+            assert_ne!(
+                datom.tx(),
+                placeholder,
+                "bd-1n6: datom has placeholder TxId(0,0,0) — transact must stamp real TxId. \
+                 datom={:?}",
+                datom
+            );
+        }
+
+        // The tx should carry the agent we specified.
+        let last_datom = store.datoms().last().expect("store not empty");
+        assert_eq!(
+            last_datom.tx().agent(),
+            agent,
+            "bd-1n6: TxId agent must match transaction agent"
+        );
+
+        // Epoch should be in the TxId physical component.
+        assert_eq!(
+            last_datom.tx().physical(),
+            1, // epoch 1 after first transact
+            "bd-1n6: TxId physical must equal epoch"
+        );
     }
 }

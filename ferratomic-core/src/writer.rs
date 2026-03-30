@@ -98,6 +98,30 @@ impl std::fmt::Display for TxValidationError {
 
 impl std::error::Error for TxValidationError {}
 
+impl From<TxValidationError> for ferratom::FerraError {
+    fn from(e: TxValidationError) -> Self {
+        match e {
+            TxValidationError::UnknownAttribute(attr) => {
+                Self::UnknownAttribute { attribute: attr }
+            }
+            TxValidationError::SchemaViolation {
+                attribute,
+                expected,
+                got,
+            } => Self::SchemaViolation {
+                attribute,
+                expected,
+                got,
+            },
+            TxValidationError::CardinalityViolation { attribute } => Self::SchemaViolation {
+                attribute,
+                expected: "correct cardinality".to_string(),
+                got: "cardinality violation".to_string(),
+            },
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Transaction<S>
 // ---------------------------------------------------------------------------
@@ -148,6 +172,24 @@ impl Transaction<Building> {
     pub fn assert_datom(mut self, entity: EntityId, attribute: Attribute, value: Value) -> Self {
         let placeholder_tx = TxId::new(0, 0, 0);
         let datom = Datom::new(entity, attribute, value, placeholder_tx, Op::Assert);
+        self.datoms.push(datom);
+        self
+    }
+
+    /// Add a retract datom to this transaction.
+    ///
+    /// INV-FERR-018: Retractions are new datoms with `Op::Retract`. The
+    /// store is append-only — a retraction does not delete, it records that
+    /// a prior assertion no longer holds as of this transaction.
+    ///
+    /// INV-FERR-029: The LIVE view uses assert/retract pairs to compute
+    /// the current state of each entity-attribute pair.
+    ///
+    /// Consumes and returns `self` for builder-style chaining.
+    #[must_use]
+    pub fn retract_datom(mut self, entity: EntityId, attribute: Attribute, value: Value) -> Self {
+        let placeholder_tx = TxId::new(0, 0, 0);
+        let datom = Datom::new(entity, attribute, value, placeholder_tx, Op::Retract);
         self.datoms.push(datom);
         self
     }
@@ -455,6 +497,7 @@ mod tests {
             (Value::Keyword(Arc::from("k")), ValueType::Keyword),
             (Value::String(Arc::from("s")), ValueType::String),
             (Value::Long(0), ValueType::Long),
+            (Value::Double(::ordered_float::OrderedFloat(1.0)), ValueType::Double),
             (Value::Bool(true), ValueType::Boolean),
             (Value::Instant(0), ValueType::Instant),
             (Value::Uuid([0; 16]), ValueType::Uuid),
@@ -473,10 +516,7 @@ mod tests {
             );
         }
 
-        // Note: Value::Double is omitted here because constructing OrderedFloat
-        // requires ordered-float as a direct dependency, which ferratomic-core
-        // does not carry. The match arm is trivially correct and covered by
-        // test_value_matches_type_rejects_mismatches (cross-variant rejection).
+        // All 11 variants covered (bd-326 regression: Double was previously omitted).
     }
 
     #[test]

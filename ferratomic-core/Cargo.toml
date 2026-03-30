@@ -8,7 +8,7 @@ description = "Storage and concurrency engine for Ferratomic: Store, MVCC snapsh
 
 # Algebraic role: ALGEBRAS (operations over types from ferratom)
 [dependencies]
-ferratom = { path = "../ferratom" }
+ferratom = { path = "../ferratom", features = ["test-utils"] }
 im = { workspace = true }
 arc-swap = { workspace = true }
 blake3 = { workspace = true }
@@ -23,3 +23,4 @@ tokio = { workspace = true, optional = true }
 [dev-dependencies]
 proptest = { workspace = true }
 tempfile = "3"
+ordered-float = { workspace = true }

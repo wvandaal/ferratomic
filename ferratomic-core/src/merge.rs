@@ -15,13 +15,12 @@ use crate::store::Store;
 /// idempotent (INV-FERR-003). Both input stores are preserved
 /// (INV-FERR-004: monotonic growth).
 ///
+/// INV-FERR-009: schemas are unioned (all attributes from both stores).
+/// INV-FERR-007: epoch is `max(a.epoch, b.epoch)`.
+///
 /// Merge does NOT validate schema (C4). Datoms with unknown
 /// attributes are preserved in the union.
 #[must_use]
 pub fn merge(a: &Store, b: &Store) -> Store {
-    let mut datoms = a.datom_set().clone();
-    for datom in b.datom_set() {
-        datoms.insert(datom.clone());
-    }
-    Store::from_datoms(datoms)
+    Store::from_merge(a, b)
 }
