@@ -286,61 +286,72 @@ impl Store {
         }
     }
 
-    /// Deterministic genesis store with the 4 core meta-schema attributes.
+    /// Deterministic genesis store with the 19 axiomatic meta-schema attributes.
     ///
     /// INV-FERR-031: every call to `genesis()` produces an identical store.
-    /// The schema contains:
-    /// - `db/ident` (Keyword, One) — attribute identity
-    /// - `db/valueType` (Keyword, One) — declared value type
-    /// - `db/cardinality` (Keyword, One) — one or many
-    /// - `db/doc` (String, One) — documentation string
-    ///
-    /// The store contains no datoms. Genesis datoms are Phase 4a-SCHEMA
-    /// (bd-85j.11); for now, these 4 attribute definitions are sufficient
-    /// for schema validation tests.
+    /// The 19 attributes are the ONLY hardcoded elements in the engine.
+    /// Every other attribute is defined by transacting datoms that reference
+    /// these 19. This is the schema-as-data bootstrap (C3, C7).
     #[must_use]
+    #[allow(clippy::too_many_lines)] // 19 attribute definitions are inherently verbose
     pub fn genesis() -> Self {
         let mut schema = Schema::empty();
 
-        schema.define(
-            Attribute::from("db/ident"),
-            AttributeDef {
-                value_type: ValueType::Keyword,
-                cardinality: Cardinality::One,
-                resolution_mode: ResolutionMode::Lww,
-                doc: Some(Arc::from("Attribute identity keyword")),
-            },
-        );
+        let lww_kw = |doc: &str| AttributeDef {
+            value_type: ValueType::Keyword,
+            cardinality: Cardinality::One,
+            resolution_mode: ResolutionMode::Lww,
+            doc: Some(Arc::from(doc)),
+        };
+        let lww_str = |doc: &str| AttributeDef {
+            value_type: ValueType::String,
+            cardinality: Cardinality::One,
+            resolution_mode: ResolutionMode::Lww,
+            doc: Some(Arc::from(doc)),
+        };
+        let lww_bool = |doc: &str| AttributeDef {
+            value_type: ValueType::Boolean,
+            cardinality: Cardinality::One,
+            resolution_mode: ResolutionMode::Lww,
+            doc: Some(Arc::from(doc)),
+        };
+        let lww_ref = |doc: &str| AttributeDef {
+            value_type: ValueType::Ref,
+            cardinality: Cardinality::One,
+            resolution_mode: ResolutionMode::Lww,
+            doc: Some(Arc::from(doc)),
+        };
+        let lww_instant = |doc: &str| AttributeDef {
+            value_type: ValueType::Instant,
+            cardinality: Cardinality::One,
+            resolution_mode: ResolutionMode::Lww,
+            doc: Some(Arc::from(doc)),
+        };
 
-        schema.define(
-            Attribute::from("db/valueType"),
-            AttributeDef {
-                value_type: ValueType::Keyword,
-                cardinality: Cardinality::One,
-                resolution_mode: ResolutionMode::Lww,
-                doc: Some(Arc::from("Declared value type for an attribute")),
-            },
-        );
+        // 1-9: db/* attributes (meta-schema)
+        schema.define(Attribute::from("db/ident"), lww_kw("Attribute identity keyword"));
+        schema.define(Attribute::from("db/valueType"), lww_kw("Declared value type"));
+        schema.define(Attribute::from("db/cardinality"), lww_kw("Cardinality: one or many"));
+        schema.define(Attribute::from("db/doc"), lww_str("Documentation string"));
+        schema.define(Attribute::from("db/unique"), lww_kw("Uniqueness constraint"));
+        schema.define(Attribute::from("db/isComponent"), lww_bool("Component ownership"));
+        schema.define(Attribute::from("db/resolutionMode"), lww_kw("CRDT conflict resolution mode"));
+        schema.define(Attribute::from("db/latticeOrder"), lww_ref("Reference to lattice definition"));
+        schema.define(Attribute::from("db/lwwClock"), lww_kw("LWW clock source"));
 
-        schema.define(
-            Attribute::from("db/cardinality"),
-            AttributeDef {
-                value_type: ValueType::Keyword,
-                cardinality: Cardinality::One,
-                resolution_mode: ResolutionMode::Lww,
-                doc: Some(Arc::from("Cardinality: one or many")),
-            },
-        );
+        // 10-14: lattice/* attributes (lattice definitions)
+        schema.define(Attribute::from("lattice/ident"), lww_kw("Lattice name"));
+        schema.define(Attribute::from("lattice/elements"), lww_str("Ordered element list"));
+        schema.define(Attribute::from("lattice/comparator"), lww_str("Comparison function"));
+        schema.define(Attribute::from("lattice/bottom"), lww_kw("Least element"));
+        schema.define(Attribute::from("lattice/top"), lww_kw("Greatest element"));
 
-        schema.define(
-            Attribute::from("db/doc"),
-            AttributeDef {
-                value_type: ValueType::String,
-                cardinality: Cardinality::One,
-                resolution_mode: ResolutionMode::Lww,
-                doc: Some(Arc::from("Documentation string")),
-            },
-        );
+        // 15-19: tx/* attributes (transaction metadata)
+        schema.define(Attribute::from("tx/time"), lww_instant("Transaction wall-clock time"));
+        schema.define(Attribute::from("tx/agent"), lww_ref("Agent that created transaction"));
+        schema.define(Attribute::from("tx/provenance"), lww_str("Provenance description"));
+        schema.define(Attribute::from("tx/rationale"), lww_str("Why this transaction exists"));
+        schema.define(Attribute::from("tx/coherence-override"), lww_str("Manual coherence exemption"));
 
         Self {
             datoms: OrdSet::new(),
@@ -462,6 +473,7 @@ impl Store {
     /// carries no datoms (should not happen for validly committed
     /// transactions, but defended against per NEG-FERR-001).
     #[allow(clippy::needless_pass_by_value)] // Transaction consumed semantically — applied once
+    #[allow(clippy::too_many_lines)] // tx metadata datom creation adds necessary lines
     pub fn transact(&mut self, transaction: Transaction<Committed>) -> Result<TxReceipt, FerraError> {
         let datoms: Vec<Datom> = transaction.datoms().to_vec();
 
@@ -500,12 +512,42 @@ impl Store {
             })
             .collect();
 
+        // INV-FERR-004: Create tx metadata datoms to guarantee strict growth.
+        // Every transaction adds at least :tx/time and :tx/agent datoms,
+        // so |transact(S, T)| > |S| even if T contains only duplicates.
+        let tx_entity = ferratom::EntityId::from_content(
+            &format!("tx-{}-{}", self.epoch, transaction.agent().as_bytes()[0]).into_bytes(),
+        );
+        #[allow(clippy::cast_possible_truncation)] // i64 millis covers 292 million years
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as i64;
+
+        let mut all_datoms = stamped;
+        all_datoms.push(Datom::new(
+            tx_entity,
+            Attribute::from("tx/time"),
+            ferratom::Value::Instant(now_ms),
+            real_tx_id,
+            ferratom::Op::Assert,
+        ));
+        all_datoms.push(Datom::new(
+            tx_entity,
+            Attribute::from("tx/agent"),
+            ferratom::Value::Ref(ferratom::EntityId::from_content(
+                transaction.agent().as_bytes(),
+            )),
+            real_tx_id,
+            ferratom::Op::Assert,
+        ));
+
         // INV-FERR-009: scan for schema-defining datoms and evolve the schema.
-        self.evolve_schema(&stamped);
+        self.evolve_schema(&all_datoms);
 
         // INV-FERR-004: insert every datom into primary and all indexes.
         // INV-FERR-005: bijection maintained by touching all structures.
-        for datom in stamped {
+        for datom in all_datoms {
             self.indexes.insert(datom.clone());
             self.datoms.insert(datom);
         }
@@ -665,17 +707,35 @@ mod tests {
     }
 
     #[test]
-    fn test_inv_ferr_031_genesis_schema_has_four_attributes() {
+    fn test_inv_ferr_031_genesis_schema_has_19_attributes() {
         let store = Store::genesis();
         assert_eq!(
             store.schema().len(),
-            4,
-            "INV-FERR-031: genesis schema must have exactly 4 core attributes"
+            19,
+            "INV-FERR-031: genesis schema must have exactly 19 axiomatic attributes"
         );
+        // Core meta-schema (1-9)
         assert!(store.schema().get(&Attribute::from("db/ident")).is_some());
         assert!(store.schema().get(&Attribute::from("db/valueType")).is_some());
         assert!(store.schema().get(&Attribute::from("db/cardinality")).is_some());
         assert!(store.schema().get(&Attribute::from("db/doc")).is_some());
+        assert!(store.schema().get(&Attribute::from("db/unique")).is_some());
+        assert!(store.schema().get(&Attribute::from("db/isComponent")).is_some());
+        assert!(store.schema().get(&Attribute::from("db/resolutionMode")).is_some());
+        assert!(store.schema().get(&Attribute::from("db/latticeOrder")).is_some());
+        assert!(store.schema().get(&Attribute::from("db/lwwClock")).is_some());
+        // Lattice (10-14)
+        assert!(store.schema().get(&Attribute::from("lattice/ident")).is_some());
+        assert!(store.schema().get(&Attribute::from("lattice/elements")).is_some());
+        assert!(store.schema().get(&Attribute::from("lattice/comparator")).is_some());
+        assert!(store.schema().get(&Attribute::from("lattice/bottom")).is_some());
+        assert!(store.schema().get(&Attribute::from("lattice/top")).is_some());
+        // Transaction metadata (15-19)
+        assert!(store.schema().get(&Attribute::from("tx/time")).is_some());
+        assert!(store.schema().get(&Attribute::from("tx/agent")).is_some());
+        assert!(store.schema().get(&Attribute::from("tx/provenance")).is_some());
+        assert!(store.schema().get(&Attribute::from("tx/rationale")).is_some());
+        assert!(store.schema().get(&Attribute::from("tx/coherence-override")).is_some());
     }
 
     #[test]
@@ -773,14 +833,14 @@ mod tests {
     fn test_bug_bd_10p_merge_preserves_schema() {
         use crate::merge::merge;
 
-        let a = Store::genesis(); // has 4 schema attributes
+        let a = Store::genesis(); // has 19 schema attributes
         let b = Store::genesis();
 
         let merged = merge(&a, &b);
         assert_eq!(
             merged.schema().len(),
-            4,
-            "bd-10p: merge must preserve schema — expected 4 genesis attributes, got {}",
+            19,
+            "bd-10p: merge must preserve schema — expected 19 genesis attributes, got {}",
             merged.schema().len()
         );
         assert!(
@@ -921,12 +981,12 @@ mod tests {
 
         let merged = merge(&a, &b);
 
-        // Merged must have genesis 4 + user/name + user/age = 6
+        // Merged must have genesis 19 + user/name + user/age = 21
         assert_eq!(
             merged.schema().len(),
-            6,
+            21,
             "bd-3n6: disjoint schema merge must union all attributes. \
-             Expected 6 (4 genesis + user/name + user/age), got {}",
+             Expected 21 (19 genesis + user/name + user/age), got {}",
             merged.schema().len()
         );
         assert!(merged.schema().get(&Attribute::from("user/name")).is_some());
