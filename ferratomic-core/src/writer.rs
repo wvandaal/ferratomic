@@ -566,4 +566,52 @@ mod tests {
         let committed = tx.commit_unchecked();
         assert_eq!(committed.datoms().len(), 5);
     }
+
+    // -- Regression tests for cleanroom review defects -------------------------
+
+    /// Regression: bd-79n — retract_datom creates Op::Retract datoms.
+    #[test]
+    fn test_bug_bd_79n_retract_datom() {
+        let agent = AgentId::from_bytes([0u8; 16]);
+        let entity = EntityId::from_content(b"e1");
+
+        let committed = Transaction::new(agent)
+            .retract_datom(
+                entity,
+                Attribute::from("user/name"),
+                Value::String("old_value".into()),
+            )
+            .commit_unchecked();
+
+        assert_eq!(committed.datoms().len(), 1, "should have 1 datom");
+        assert_eq!(
+            committed.datoms()[0].op(),
+            Op::Retract,
+            "bd-79n: retract_datom must produce Op::Retract"
+        );
+    }
+
+    /// Regression: bd-79n — mixed assert + retract transaction.
+    #[test]
+    fn test_bug_bd_79n_mixed_assert_retract() {
+        let agent = AgentId::from_bytes([0u8; 16]);
+        let entity = EntityId::from_content(b"e1");
+
+        let committed = Transaction::new(agent)
+            .assert_datom(
+                entity,
+                Attribute::from("user/name"),
+                Value::String("new_value".into()),
+            )
+            .retract_datom(
+                entity,
+                Attribute::from("user/name"),
+                Value::String("old_value".into()),
+            )
+            .commit_unchecked();
+
+        assert_eq!(committed.datoms().len(), 2, "should have assert + retract");
+        assert_eq!(committed.datoms()[0].op(), Op::Assert);
+        assert_eq!(committed.datoms()[1].op(), Op::Retract);
+    }
 }

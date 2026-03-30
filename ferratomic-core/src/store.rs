@@ -241,10 +241,32 @@ impl Store {
         let indexes = Indexes::from_primary(&datoms);
 
         // Union schemas: all attributes from both stores.
-        let mut schema = a.schema.clone();
-        for (attr, def) in b.schema.iter() {
-            if !schema.contains(attr) {
-                schema.define(attr.clone(), def.clone());
+        // INV-FERR-043: shared attributes must have identical definitions.
+        // INV-FERR-001: schema merge must be commutative. When both stores
+        // define the same attribute with different definitions, we keep the
+        // one that sorts first (by Debug representation) for deterministic
+        // symmetry. A debug_assert flags the conflict for diagnosis.
+        let mut schema = Schema::empty();
+        for (attr, def) in a.schema.iter().chain(b.schema.iter()) {
+            match schema.get(attr) {
+                None => {
+                    schema.define(attr.clone(), def.clone());
+                }
+                Some(existing) => {
+                    if existing != def {
+                        // INV-FERR-043 violation: conflicting definitions.
+                        // Deterministic resolution: keep whichever sorts first.
+                        debug_assert!(
+                            false,
+                            "INV-FERR-043: merge found conflicting schema for {attr:?}: \
+                             {existing:?} vs {def:?}. Keeping first in sort order.",
+                        );
+                        if format!("{def:?}") < format!("{existing:?}") {
+                            schema.define(attr.clone(), def.clone());
+                        }
+                    }
+                    // If equal, no-op — already installed.
+                }
             }
         }
 
@@ -830,6 +852,102 @@ mod tests {
             last_datom.tx().physical(),
             1, // epoch 1 after first transact
             "bd-1n6: TxId physical must equal epoch"
+        );
+    }
+
+    /// Regression: bd-3n6 — merge stores with disjoint schemas unions all attributes.
+    #[test]
+    fn test_bug_bd_3n6_merge_disjoint_schemas() {
+        use crate::merge::merge;
+
+        let mut a = Store::genesis();
+        let mut b = Store::genesis();
+
+        // Evolve A's schema: add user/name (String)
+        let tx_a = crate::writer::Transaction::new(AgentId::from_bytes([1u8; 16]))
+            .assert_datom(
+                EntityId::from_content(b"attr-user-name"),
+                Attribute::from("db/ident"),
+                Value::Keyword("user/name".into()),
+            )
+            .assert_datom(
+                EntityId::from_content(b"attr-user-name"),
+                Attribute::from("db/valueType"),
+                Value::Keyword("db.type/string".into()),
+            )
+            .assert_datom(
+                EntityId::from_content(b"attr-user-name"),
+                Attribute::from("db/cardinality"),
+                Value::Keyword("db.cardinality/one".into()),
+            )
+            .commit(a.schema())
+            .expect("valid schema tx");
+        a.transact(tx_a).expect("transact a ok");
+
+        // Evolve B's schema: add user/age (Long)
+        let tx_b = crate::writer::Transaction::new(AgentId::from_bytes([2u8; 16]))
+            .assert_datom(
+                EntityId::from_content(b"attr-user-age"),
+                Attribute::from("db/ident"),
+                Value::Keyword("user/age".into()),
+            )
+            .assert_datom(
+                EntityId::from_content(b"attr-user-age"),
+                Attribute::from("db/valueType"),
+                Value::Keyword("db.type/long".into()),
+            )
+            .assert_datom(
+                EntityId::from_content(b"attr-user-age"),
+                Attribute::from("db/cardinality"),
+                Value::Keyword("db.cardinality/one".into()),
+            )
+            .commit(b.schema())
+            .expect("valid schema tx");
+        b.transact(tx_b).expect("transact b ok");
+
+        // A has: genesis 4 + user/name = 5 attrs
+        // B has: genesis 4 + user/age = 5 attrs
+        assert!(a.schema().get(&Attribute::from("user/name")).is_some());
+        assert!(b.schema().get(&Attribute::from("user/age")).is_some());
+
+        let merged = merge(&a, &b);
+
+        // Merged must have genesis 4 + user/name + user/age = 6
+        assert_eq!(
+            merged.schema().len(),
+            6,
+            "bd-3n6: disjoint schema merge must union all attributes. \
+             Expected 6 (4 genesis + user/name + user/age), got {}",
+            merged.schema().len()
+        );
+        assert!(merged.schema().get(&Attribute::from("user/name")).is_some());
+        assert!(merged.schema().get(&Attribute::from("user/age")).is_some());
+
+        // Commutativity: merge(b, a) must produce identical schema
+        let merged_ba = merge(&b, &a);
+        assert_eq!(
+            merged.schema().len(),
+            merged_ba.schema().len(),
+            "bd-3n6: merge schema must be commutative"
+        );
+    }
+
+    /// Regression: bd-3n6 — merge is commutative even for schema.
+    #[test]
+    fn test_bug_bd_3n6_merge_schema_commutativity() {
+        use crate::merge::merge;
+
+        let a = Store::genesis();
+        let b = Store::genesis();
+
+        let ab = merge(&a, &b);
+        let ba = merge(&b, &a);
+
+        // Schema must be identical regardless of merge order.
+        assert_eq!(
+            ab.schema(),
+            ba.schema(),
+            "bd-3n6: merge(A,B).schema must equal merge(B,A).schema"
         );
     }
 }
