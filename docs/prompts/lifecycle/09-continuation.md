@@ -1,0 +1,189 @@
+# 09 Session Continuation & Handoff
+
+> **Purpose**: End a session cleanly. Generate a self-contained continuation prompt.
+> **DoF**: Low. Structured output, precise format.
+> **Cognitive mode**: Summarization and handoff.
+
+---
+
+## End-of-Session Protocol
+
+Execute these steps IN ORDER. Do not skip any step.
+
+### Step 1: File Issues for Remaining Work
+
+Any unfinished work, discovered bugs, or deferred decisions become beads issues.
+Do not carry uncommitted knowledge in your head -- crystallize it.
+Follow the format in [08-task-creation.md](08-task-creation.md).
+
+```bash
+# For each piece of remaining work:
+br create --title "..." --type task --priority N --label "phase-Na" \
+  --description "..."
+
+# Wire any dependency edges
+br dep add <new-id> <existing-id>
+```
+
+### Step 2: Update Issue Status
+
+```bash
+# Close completed work
+br close <id> --reason "Done: <one-line summary>"
+
+# Mark in-progress work (if stopping mid-task)
+br update <id> --status in_progress
+
+# Export to JSONL (no git operations)
+br sync --flush-only
+```
+
+### Step 3: Quality Gates (if code changed)
+
+```bash
+CARGO_TARGET_DIR=/data/cargo-target cargo check --workspace
+CARGO_TARGET_DIR=/data/cargo-target cargo clippy --workspace -- -D warnings
+CARGO_TARGET_DIR=/data/cargo-target cargo fmt --check
+CARGO_TARGET_DIR=/data/cargo-target cargo test --workspace
+```
+
+All four must pass. If any fails, fix before continuing.
+
+### Step 4: Commit and Push
+
+```bash
+git add -A
+git commit -m "feat: <summary of session work>"
+git push origin main
+git push origin main:master    # Keep master synchronized
+```
+
+Work is NOT done until `git push` succeeds.
+
+### Step 5: Generate Continuation Prompt
+
+Write the continuation prompt to stdout (or a file if requested).
+This is the ONLY artifact the successor agent needs beyond `QUICKSTART.md`.
+
+---
+
+## Continuation Prompt Format
+
+The continuation prompt must follow this exact structure:
+
+```markdown
+# Ferratomic Continuation -- Session NNN
+
+> Generated: YYYY-MM-DD
+> Last commit: <hash> "<message>"
+> Branch: main
+
+## Read First
+
+1. `QUICKSTART.md` -- project orientation
+2. `AGENTS.md` -- guidelines and constraints
+3. `spec/README.md` -- load only the spec modules you need
+
+## Session Summary
+
+### Completed
+- <what was done, with issue IDs if applicable>
+
+### Decisions Made
+- <any ADR-level decisions, with rationale>
+
+### Bugs Found
+- <discovered defects, with issue IDs>
+
+### Stopping Point
+<Exactly where you stopped. Which file, which function, which line.
+What was the last thing you verified working? What was the next
+thing you were about to do?>
+
+## Next Execution Scope
+
+### Primary Task
+<The single most important thing the successor should do.
+Include the beads issue ID and the specific acceptance criteria.>
+
+### Ready Queue
+```bash
+br ready          # Show unblocked issues
+bv --robot-next   # Top pick with reasoning
+```
+
+### Dependency Context
+<Which tasks block which. What must finish before what.
+Only include if the dependency graph is non-obvious.>
+
+## Hard Constraints
+
+- `#![forbid(unsafe_code)]` in all crates
+- No `unwrap()` in production code
+- `CARGO_TARGET_DIR=/data/cargo-target`
+- Phase N+1 cannot start until Phase N passes isomorphism check
+- <any session-specific constraints discovered during work>
+
+## Stop Conditions
+
+Stop and escalate to the user if:
+- <condition 1>
+- <condition 2>
+- <any session-specific escalation triggers>
+```
+
+---
+
+## Demonstration: Full Handoff
+
+```bash
+# Step 1: File remaining work
+br create \
+  --title "Implement WAL chain hash verification on recovery" \
+  --type task --priority 2 --label "phase-4a" \
+  --description "$(cat <<'BODY'
+**What**: WAL recovery verifies chain hash continuity.
+**Why**: INV-FERR-008 (WAL ordering).
+**Acceptance**:
+1. Recovery detects and rejects tampered WAL frames.
+2. Chain hash break at frame N discards frames N+ and logs warning.
+**File(s)**: ferratomic-core/src/wal.rs
+**Depends on**: br-30 (WAL append implementation).
+BODY
+)"
+
+# Step 2: Update status
+br close br-28 --reason "Done: Snapshot struct with Arc<StoreInner>"
+br close br-29 --reason "Done: WriterActor mpsc serialization"
+br update br-30 --status in_progress
+br sync --flush-only
+
+# Step 3: Quality gates
+CARGO_TARGET_DIR=/data/cargo-target cargo check --workspace && \
+CARGO_TARGET_DIR=/data/cargo-target cargo clippy --workspace -- -D warnings && \
+CARGO_TARGET_DIR=/data/cargo-target cargo fmt --check && \
+CARGO_TARGET_DIR=/data/cargo-target cargo test --workspace
+
+# Step 4: Commit and push
+git add -A
+git commit -m "feat: snapshot isolation + writer serialization (br-28, br-29)"
+git push origin main && git push origin main:master
+
+# Step 5: Output the continuation prompt (to stdout)
+```
+
+The successor agent receives the continuation prompt + `QUICKSTART.md` and is
+productive within 5 minutes. No Slack messages. No "where did you leave off?"
+The continuation prompt IS the handoff.
+
+---
+
+## Common Mistakes
+
+- **Forgetting `br sync --flush-only`**: Beads state exists only in memory until flushed.
+- **Pushing code that doesn't compile**: Always run quality gates BEFORE commit.
+- **Vague stopping points**: "I was working on store.rs" is useless. "I finished
+  `apply_datoms` and verified all 4 indexes update. Next: implement `merge` starting
+  from the `Semilattice` trait impl on line 142" is useful.
+- **Not pushing**: Local commits are invisible. Push is mandatory.
+- **Leaving in-progress tasks unmarked**: The successor won't know what's mid-flight.
