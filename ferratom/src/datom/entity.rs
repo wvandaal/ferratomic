@@ -3,15 +3,19 @@
 //! INV-FERR-012: `EntityId = BLAKE3(content)`. Two entities with identical
 //! content produce identical identifiers.
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 /// Content-addressed entity identifier: BLAKE3 hash of content bytes.
 ///
 /// INV-FERR-012: `EntityId = BLAKE3(content)`. Two entities with identical
 /// content produce identical identifiers. The inner field is private to
-/// enforce construction only through `from_content` (production) or
-/// `from_bytes` (testing).
-#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Debug, Serialize, Deserialize)]
+/// enforce construction only through `from_content` (production),
+/// `from_trusted_bytes` (integrity-verified storage), or `from_bytes` (testing).
+///
+/// ADR-FERR-010: `Deserialize` is intentionally NOT derived. All
+/// deserialization goes through `WireEntityId` in the `wire` module.
+/// This prevents unverified bytes from entering the store as `EntityId`.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Debug, Serialize)]
 pub struct EntityId([u8; 32]);
 
 impl EntityId {
@@ -23,6 +27,20 @@ impl EntityId {
     #[must_use]
     pub fn from_content(content: &[u8]) -> Self {
         Self(*blake3::hash(content).as_bytes())
+    }
+
+    /// Reconstruct an `EntityId` from integrity-verified storage bytes.
+    ///
+    /// ADR-FERR-010: Caller MUST have verified source integrity (CRC for
+    /// WAL, BLAKE3 for checkpoint) before calling this. For network-received
+    /// data (Phase 4c), use `WireEntityId::into_verified()` instead.
+    ///
+    /// This is `pub(crate)` — only the `wire` module can call it.
+    /// External crates (including the future federation crate) cannot
+    /// bypass the trust boundary.
+    #[must_use]
+    pub(crate) fn from_trusted_bytes(bytes: [u8; 32]) -> Self {
+        Self(bytes)
     }
 
     /// Create an `EntityId` from raw bytes. **Testing only.**

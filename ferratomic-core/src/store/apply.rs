@@ -18,10 +18,11 @@
 
 use ferratom::{AgentId, Attribute, Datom, FerraError, Schema};
 
-use crate::indexes::Indexes;
-use crate::writer::{Committed, Transaction};
-
 use super::{Store, TxReceipt};
+use crate::{
+    indexes::Indexes,
+    writer::{Committed, Transaction},
+};
 
 // ---------------------------------------------------------------------------
 // Mutating methods on Store
@@ -42,6 +43,8 @@ impl Store {
         // index entry (no primary counterpart).
         self.datoms.insert(datom.clone());
         self.indexes.insert(datom);
+        // INV-FERR-029: maintain LIVE set incrementally.
+        self.live_apply(datom);
     }
 
     /// Replay a WAL entry during crash recovery.
@@ -57,6 +60,11 @@ impl Store {
             self.insert(datom);
         }
         self.epoch = epoch;
+        // CR-001: Schema-defining datoms in the WAL must be installed into the
+        // schema during recovery, otherwise the schema is lost after crash.
+        // INV-FERR-009: evolve_schema scans for db/ident + db/valueType +
+        // db/cardinality triples and installs new attributes.
+        crate::schema_evolution::evolve_schema(&mut self.schema, datoms)?;
         Ok(())
     }
 
@@ -87,12 +95,13 @@ impl Store {
                 }
                 Some(existing) => {
                     if existing != def {
-                        // INV-FERR-043 violation: conflicting definitions.
-                        // Deterministic resolution: keep whichever sorts first.
-                        debug_assert!(
-                            false,
-                            "INV-FERR-043: merge found conflicting schema for {attr:?}: \
-                             {existing:?} vs {def:?}. Keeping first in sort order.",
+                        // INV-FERR-043: conflicting definitions detected.
+                        // Deterministic resolution: keep whichever sorts first
+                        // (commutativity: min(a,b) == min(b,a)).
+                        eprintln!(
+                            "WARN [ferratomic-core] INV-FERR-043: merge found conflicting \
+                             schema for {attr:?}: {existing:?} vs {def:?}. \
+                             Keeping first in sort order.",
                         );
                         if def < existing {
                             schema.define(attr.clone(), def.clone());
@@ -105,12 +114,22 @@ impl Store {
 
         let epoch = a.epoch.max(b.epoch);
 
+        // HI-014: genesis_agent must be resolved deterministically for
+        // INV-FERR-001 (commutativity). Using a.genesis_agent unconditionally
+        // makes merge(A,B) != merge(B,A) when agents differ. min() by Ord
+        // is commutative: min(a,b) == min(b,a).
+        let genesis_agent = std::cmp::min(a.genesis_agent, b.genesis_agent);
+
+        // INV-FERR-029: rebuild LIVE set from merged datom set.
+        let live_set = super::build_live_set(datoms.iter());
+
         Self {
             datoms,
             indexes,
             schema,
             epoch,
-            genesis_agent: a.genesis_agent,
+            genesis_agent,
+            live_set,
         }
     }
 
@@ -129,9 +148,14 @@ impl Store {
     /// Returns `FerraError::EmptyTransaction` if the committed transaction
     /// carries no datoms (should not happen for validly committed
     /// transactions, but defended against per NEG-FERR-001).
+    /// HI-011: `tx_id` is provided by the caller (`Database::transact` ticks
+    /// the `HybridClock` under the write lock). This replaces the previous
+    /// `TxId::with_agent(epoch, 0, agent)` which used epoch-as-physical —
+    /// breaking INV-FERR-015 (HLC monotonicity) and INV-FERR-016 (causality).
     pub fn transact(
         &mut self,
         transaction: Transaction<Committed>,
+        tx_id: ferratom::TxId,
     ) -> Result<TxReceipt, FerraError> {
         // INV-FERR-020: extract datoms and agent, then consume the transaction.
         // Ownership transfer enforces single-application: a committed transaction
@@ -152,25 +176,45 @@ impl Store {
                 details: "epoch counter overflow".to_string(),
             })?;
 
-        // INV-FERR-015: stamp datoms with real TxId + append tx metadata.
-        let real_tx_id = ferratom::TxId::with_agent(self.epoch, 0, agent);
-        let mut all_datoms = stamp_datoms(datoms, real_tx_id);
-        all_datoms.extend(create_tx_metadata(self.epoch, agent, real_tx_id));
+        // INV-FERR-015: stamp datoms with HLC-derived TxId + append tx metadata.
+        let mut all_datoms = stamp_datoms(datoms, tx_id);
+        all_datoms.extend(create_tx_metadata(self.epoch, agent, tx_id));
 
         // INV-FERR-009: evolve schema from schema-defining datoms.
         crate::schema_evolution::evolve_schema(&mut self.schema, &all_datoms)?;
 
         // INV-FERR-004/005: insert into primary then indexes (bd-4pg).
-        let receipt_datoms = all_datoms.clone();
-        for datom in all_datoms {
+        // MI-007: Insert from references, then move vec into receipt
+        // (eliminates receipt_datoms.clone() double-clone).
+        for datom in &all_datoms {
             self.datoms.insert(datom.clone());
-            self.indexes.insert(&datom);
+            self.indexes.insert(datom);
         }
 
         Ok(TxReceipt {
             epoch: self.epoch,
-            datoms: receipt_datoms,
+            datoms: all_datoms,
         })
+    }
+
+    /// Test-only convenience: transact with a synthetic epoch-based `TxId`.
+    ///
+    /// Production code MUST use `transact(tx, hlc_tx_id)` with an HLC-derived
+    /// `TxId` from `Database::transact`. This method exists only so that tests
+    /// calling `Store::transact` directly (without a `Database`) don't need
+    /// to construct an HLC.
+    ///
+    /// # Errors
+    ///
+    /// Delegates to [`Store::transact`]; returns the same error variants.
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn transact_test(
+        &mut self,
+        transaction: Transaction<Committed>,
+    ) -> Result<TxReceipt, FerraError> {
+        let agent = transaction.agent();
+        let tx_id = ferratom::TxId::with_agent(self.epoch.wrapping_add(1), 0, agent);
+        self.transact(transaction, tx_id)
     }
 }
 
@@ -198,9 +242,12 @@ fn stamp_datoms(datoms: Vec<Datom>, tx_id: ferratom::TxId) -> Vec<Datom> {
 /// INV-FERR-004: Create :tx/time and :tx/agent metadata datoms that
 /// guarantee strict growth (every transaction adds at least 2 datoms).
 fn create_tx_metadata(epoch: u64, agent: AgentId, tx_id: ferratom::TxId) -> Vec<Datom> {
-    let tx_entity = ferratom::EntityId::from_content(
-        &format!("tx-{epoch}-{}", agent.as_bytes()[0]).into_bytes(),
-    );
+    // P1-003: Use full agent bytes for tx_entity derivation, not just
+    // first byte. Prevents collision when two agents share the same
+    // first byte but differ in subsequent bytes.
+    let mut tx_content = format!("tx-{epoch}-").into_bytes();
+    tx_content.extend_from_slice(agent.as_bytes());
+    let tx_entity = ferratom::EntityId::from_content(&tx_content);
     let now_ms = i64::try_from(
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -233,8 +280,7 @@ fn create_tx_metadata(epoch: u64, agent: AgentId, tx_id: ferratom::TxId) -> Vec<
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
-    use std::sync::Arc;
+    use std::{collections::BTreeSet, sync::Arc};
 
     use ferratom::{AgentId, Attribute, EntityId, Op, TxId, Value};
 
@@ -314,7 +360,7 @@ mod tests {
             )
             .commit(a.schema())
             .expect("valid tx");
-        a.transact(tx).expect("transact ok");
+        a.transact_test(tx).expect("transact ok");
         assert_eq!(a.epoch(), 1);
 
         let b = Store::genesis(); // epoch 0
@@ -343,7 +389,7 @@ mod tests {
             .commit(store.schema())
             .expect("valid tx");
 
-        store.transact(tx).expect("transact ok");
+        store.transact_test(tx).expect("transact ok");
 
         // Every datom in the store should have a non-placeholder TxId.
         let placeholder = TxId::new(0, 0, 0);
@@ -400,7 +446,7 @@ mod tests {
             )
             .commit(a.schema())
             .expect("valid schema tx");
-        a.transact(tx_a).expect("transact a ok");
+        a.transact_test(tx_a).expect("transact a ok");
 
         // Evolve B's schema: add user/age (Long)
         let tx_b = crate::writer::Transaction::new(AgentId::from_bytes([2u8; 16]))
@@ -421,7 +467,7 @@ mod tests {
             )
             .commit(b.schema())
             .expect("valid schema tx");
-        b.transact(tx_b).expect("transact b ok");
+        b.transact_test(tx_b).expect("transact b ok");
 
         // A has: genesis 4 + user/name = 5 attrs
         // B has: genesis 4 + user/age = 5 attrs

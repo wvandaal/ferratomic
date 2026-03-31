@@ -2,7 +2,10 @@ fn kani_sources() -> [(&'static str, &'static str); 5] {
     [
         ("clock.rs", include_str!("../kani/clock.rs")),
         ("durability.rs", include_str!("../kani/durability.rs")),
-        ("schema_identity.rs", include_str!("../kani/schema_identity.rs")),
+        (
+            "schema_identity.rs",
+            include_str!("../kani/schema_identity.rs"),
+        ),
         ("sharding.rs", include_str!("../kani/sharding.rs")),
         ("store_views.rs", include_str!("../kani/store_views.rs")),
     ]

@@ -8,7 +8,10 @@
 use std::{fmt, sync::Arc};
 
 use ordered_float::OrderedFloat;
-use serde::{Deserialize, Serialize};
+use serde::{
+    de::{Deserializer, Unexpected},
+    Deserialize, Serialize,
+};
 
 use super::EntityId;
 
@@ -16,12 +19,11 @@ use super::EntityId;
 // Attribute
 // ---------------------------------------------------------------------------
 
-/// Interned attribute name backed by `Arc<str>` for O(1) clone and
-/// amortized O(1) equality (pointer comparison when the same allocation).
+/// Interned attribute name backed by `Arc<str>` for O(1) clone.
 ///
-/// INV-FERR-026: Attribute names are interned strings. Comparison cost
-/// is proportional to the shorter string length, and cloning is a
-/// reference-count increment.
+/// INV-FERR-026: Attribute names are interned strings. Cloning is a
+/// reference-count increment. Equality comparison is O(n) in the string
+/// length (derived `PartialEq` compares by content, not pointer).
 #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug, Serialize, Deserialize)]
 pub struct Attribute(Arc<str>);
 
@@ -57,7 +59,11 @@ impl fmt::Display for Attribute {
 ///
 /// Wraps `OrderedFloat<f64>` for total ordering (-0 < +0).
 /// Serde-transparent: serializes identically to `OrderedFloat<f64>`.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Debug, Serialize, Deserialize)]
+/// CR-003: Manual `Deserialize` impl rejects NaN. Derived `Deserialize`
+/// delegated to `OrderedFloat<f64>` which accepts NaN, bypassing the
+/// `new()` constructor gate. INV-FERR-012 requires deterministic hashing;
+/// NaN has multiple bit representations that break this.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Debug, Serialize)]
 pub struct NonNanFloat(OrderedFloat<f64>);
 
 impl NonNanFloat {
@@ -67,13 +73,36 @@ impl NonNanFloat {
     /// once constructed, the inner `f64` is guaranteed non-NaN.
     #[must_use]
     pub fn new(f: f64) -> Option<Self> {
-        if f.is_nan() { None } else { Some(Self(OrderedFloat(f))) }
+        if f.is_nan() {
+            None
+        } else {
+            Some(Self(OrderedFloat(f)))
+        }
     }
 
     /// The inner `f64` value, guaranteed non-NaN (INV-FERR-012).
     #[must_use]
     pub fn into_inner(self) -> f64 {
         self.0.into_inner()
+    }
+}
+
+/// CR-003: Custom `Deserialize` that rejects NaN during deserialization.
+///
+/// INV-FERR-012: Content-addressed identity requires deterministic hashing.
+/// `OrderedFloat<f64>::deserialize` accepts NaN, bypassing the `new()`
+/// constructor gate. This impl deserializes the f64, then validates.
+impl<'de> Deserialize<'de> for NonNanFloat {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let f = OrderedFloat::<f64>::deserialize(deserializer)?;
+        if f.into_inner().is_nan() {
+            Err(serde::de::Error::invalid_value(
+                Unexpected::Float(f64::NAN),
+                &"a finite float (NaN rejected per INV-FERR-012)",
+            ))
+        } else {
+            Ok(NonNanFloat(f))
+        }
     }
 }
 
@@ -88,7 +117,10 @@ impl NonNanFloat {
 ///
 /// The `Double` variant wraps [`NonNanFloat`], which rejects NaN at
 /// construction and provides total ordering via `OrderedFloat<f64>`.
-#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug, Serialize, Deserialize)]
+/// ADR-FERR-010: `Deserialize` is intentionally NOT derived. `Value` contains
+/// `EntityId` via the `Ref` variant, so deserialization must go through
+/// `WireValue` in the `wire` module to enforce the trust boundary.
+#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug, Serialize)]
 pub enum Value {
     /// Namespaced keyword (e.g. `"db.type/string"`).
     Keyword(Arc<str>),
@@ -108,9 +140,12 @@ pub enum Value {
     Bytes(Arc<[u8]>),
     /// Reference to another entity (foreign key).
     Ref(EntityId),
-    /// Arbitrary-precision integer (stored as i128).
+    /// Large integer stored as i128 (ME-015: not truly arbitrary precision;
+    /// covers ±170 undecillion, sufficient for Phase 4a).
     BigInt(i128),
-    /// Arbitrary-precision decimal (stored as i128; scale defined by schema).
+    /// Large decimal stored as i128 with scale defined by schema (MI-003:
+    /// scale is NOT encoded in the type — two `BigDec` values with the same
+    /// i128 but different schema-defined scales compare as equal).
     BigDec(i128),
 }
 

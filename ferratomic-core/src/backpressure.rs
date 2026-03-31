@@ -127,7 +127,9 @@ mod tests {
 
     #[test]
     fn test_inv_ferr_021_acquire_and_release() {
-        let policy = BackpressurePolicy { max_concurrent_writes: 2 };
+        let policy = BackpressurePolicy {
+            max_concurrent_writes: 2,
+        };
         let limiter = WriteLimiter::new(&policy);
 
         assert_eq!(limiter.active_count(), 0);
@@ -156,14 +158,19 @@ mod tests {
 
     #[test]
     fn test_inv_ferr_021_single_slot_limiter() {
-        let policy = BackpressurePolicy { max_concurrent_writes: 1 };
+        let policy = BackpressurePolicy {
+            max_concurrent_writes: 1,
+        };
         let limiter = WriteLimiter::new(&policy);
 
         let g1 = limiter.try_acquire();
         assert!(g1.is_some());
 
         let g2 = limiter.try_acquire();
-        assert!(g2.is_none(), "INV-FERR-021: limit=1 must reject second attempt");
+        assert!(
+            g2.is_none(),
+            "INV-FERR-021: limit=1 must reject second attempt"
+        );
 
         drop(g1);
         let g3 = limiter.try_acquire();

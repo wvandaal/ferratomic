@@ -34,11 +34,11 @@ impl Datom {
     /// Value and tx are fixed (identity in a G-Set is the full 5-tuple).
     pub const fn from_seed(seed: u64) -> Self {
         Self {
-            e: seed >> 2,           // entity: independent of op and attr
-            a: (seed >> 1) & 1,     // attribute: 2 values, independent of entity
-            v: 0,                   // fixed value — identity comes from (e, a, op)
-            tx: 0,                  // fixed tx — G-Set identity is content, not time
-            op: seed & 1 == 0,      // op: assert (even) / retract (odd)
+            e: seed >> 2,       // entity: independent of op and attr
+            a: (seed >> 1) & 1, // attribute: 2 values, independent of entity
+            v: 0,               // fixed value — identity comes from (e, a, op)
+            tx: 0,              // fixed tx — G-Set identity is content, not time
+            op: seed & 1 == 0,  // op: assert (even) / retract (odd)
         }
     }
 }

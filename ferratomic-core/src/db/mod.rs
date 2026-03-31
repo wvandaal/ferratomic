@@ -33,14 +33,11 @@ mod transact;
 
 use std::{
     marker::PhantomData,
-    sync::{
-        atomic::AtomicU64,
-        Mutex,
-    },
+    sync::{atomic::AtomicU64, Mutex},
 };
 
 use arc_swap::ArcSwap;
-use ferratom::{FerraError, Schema};
+use ferratom::{FerraError, HybridClock, Schema};
 
 use crate::{
     observer::{DatomObserver, ObserverBroadcast, DEFAULT_OBSERVER_BUFFER},
@@ -115,6 +112,12 @@ pub struct Database<S = Ready> {
     /// transaction triggers `SecondaryIndexes::verify_bijection()`.
     transaction_count: AtomicU64,
 
+    /// HI-011: HLC providing causally-ordered `TxId` values for transactions.
+    /// `INV-FERR-015`: `tick()` produces strictly monotonic timestamps.
+    /// `INV-FERR-016`: `receive()` merges remote timestamps for causality.
+    /// Ticked under the write lock so `TxId` ordering matches commit order.
+    clock: Mutex<HybridClock>,
+
     /// Typestate marker. Zero-size, erased at compile time.
     _state: PhantomData<S>,
 }
@@ -134,13 +137,18 @@ impl Database<Ready> {
     /// [`genesis_with_wal`](Self::genesis_with_wal) for durability.
     #[must_use]
     pub fn genesis() -> Self {
+        let store = Store::genesis();
+        let agent = store.genesis_agent();
         Self {
-            current: ArcSwap::from_pointee(Store::genesis()),
+            current: ArcSwap::from_pointee(store),
             write_lock: Mutex::new(()),
             wal: Mutex::new(None),
             observers: Mutex::new(ObserverBroadcast::new(DEFAULT_OBSERVER_BUFFER)),
-            write_limiter: crate::backpressure::WriteLimiter::new(&crate::backpressure::BackpressurePolicy::default()),
+            write_limiter: crate::backpressure::WriteLimiter::new(
+                &crate::backpressure::BackpressurePolicy::default(),
+            ),
             transaction_count: AtomicU64::new(0),
+            clock: Mutex::new(HybridClock::new(agent)),
             _state: PhantomData,
         }
     }
@@ -151,13 +159,17 @@ impl Database<Ready> {
     /// INV-FERR-007: epoch ordering continues from the store's current epoch.
     #[must_use]
     pub fn from_store(store: Store) -> Self {
+        let agent = store.genesis_agent();
         Self {
             current: ArcSwap::from_pointee(store),
             write_lock: Mutex::new(()),
             wal: Mutex::new(None),
             observers: Mutex::new(ObserverBroadcast::new(DEFAULT_OBSERVER_BUFFER)),
-            write_limiter: crate::backpressure::WriteLimiter::new(&crate::backpressure::BackpressurePolicy::default()),
+            write_limiter: crate::backpressure::WriteLimiter::new(
+                &crate::backpressure::BackpressurePolicy::default(),
+            ),
             transaction_count: AtomicU64::new(0),
+            clock: Mutex::new(HybridClock::new(agent)),
             _state: PhantomData,
         }
     }
@@ -178,7 +190,9 @@ impl Database<Ready> {
     /// Returns `FerraError::InvariantViolation` if the observer registry
     /// mutex is poisoned.
     pub fn register_observer(&self, observer: Box<dyn DatomObserver>) -> Result<(), FerraError> {
-        let current = self.current.load();
+        // HI-016: Acquire the observer mutex BEFORE loading the current store.
+        // Previously, a concurrent transact() between load() and lock() could
+        // commit an epoch that the new observer would permanently miss.
         let mut observers = self
             .observers
             .lock()
@@ -186,6 +200,7 @@ impl Database<Ready> {
                 invariant: "INV-FERR-011".to_string(),
                 details: "observer registry mutex poisoned during register".to_string(),
             })?;
+        let current = self.current.load();
         observers.register(observer, current.as_ref());
         Ok(())
     }
@@ -239,9 +254,7 @@ mod tests {
     use ferratom::{AgentId, Attribute, EntityId, Value};
 
     use super::*;
-    use crate::observer::DatomObserver;
-    use crate::wal::Wal;
-    use crate::writer::Transaction;
+    use crate::{observer::DatomObserver, wal::Wal, writer::Transaction};
 
     #[derive(Debug, Clone, PartialEq, Eq)]
     enum ObserverEvent {

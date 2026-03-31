@@ -51,7 +51,7 @@ fn snapshot_isolation() {
         )
         .commit(store.schema())
         .expect("INV-FERR-006: harness transaction should validate");
-    let _ = store.transact(tx);
+    let _ = store.transact_test(tx);
 
     let snapshot_datoms_after: BTreeSet<Datom> = snapshot.datoms().cloned().collect();
     assert_eq!(snapshot_datoms, snapshot_datoms_after);
@@ -76,7 +76,7 @@ fn write_linearizability() {
             .commit(store.schema())
             .expect("INV-FERR-007: harness transaction should validate");
 
-        if let Ok(receipt) = store.transact(tx) {
+        if let Ok(receipt) = store.transact_test(tx) {
             epochs.push(receipt.epoch());
         }
     }

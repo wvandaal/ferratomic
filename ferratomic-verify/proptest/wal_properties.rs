@@ -6,11 +6,14 @@
 //!
 //! Phase 4a: all tests passing against ferratomic-core implementation.
 
-use ferratomic_core::backpressure::{BackpressurePolicy, WriteLimiter};
-use ferratomic_core::wal::Wal;
+use std::io::Write;
+
+use ferratomic_core::{
+    backpressure::{BackpressurePolicy, WriteLimiter},
+    wal::Wal,
+};
 use ferratomic_verify::generators::*;
 use proptest::prelude::*;
-use std::io::Write;
 use tempfile::TempDir;
 
 // bincode: used by INV-FERR-026 to compute logical payload size.
@@ -48,9 +51,13 @@ proptest! {
         );
 
         for (orig, recov) in txns.iter().zip(recovered.iter()) {
+            // CR-006: WAL uses bincode serialization, not JSON.
+            // ADR-FERR-010: Deserialize as wire types, convert through trust boundary.
+            let wire_datoms: Vec<ferratom::wire::WireDatom> =
+                bincode::deserialize(&recov.payload)
+                    .expect("deserialize WAL payload as WireDatom (bincode)");
             let recovered_datoms: Vec<ferratom::Datom> =
-                serde_json::from_slice(&recov.payload)
-                    .expect("deserialize WAL payload");
+                wire_datoms.into_iter().map(ferratom::wire::WireDatom::into_trusted).collect();
             prop_assert_eq!(
                 orig.datoms(),
                 recovered_datoms.as_slice(),
@@ -119,7 +126,7 @@ proptest! {
         let mut store = ferratomic_core::store::Store::genesis();
         for tx in txns {
             let pre_len = store.len();
-            let receipt = store.transact(tx)
+            let receipt = store.transact_test(tx)
                 .expect("INV-FERR-020: transact must succeed");
             let epoch = receipt.epoch();
 

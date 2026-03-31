@@ -10,15 +10,18 @@
 //! INV-FERR-029/032 tests exercise the spec's resolution algebra directly
 //! (Store does not yet expose a live_view/live_resolve API).
 
+use std::collections::BTreeSet;
+
 use ferratom::Datom;
-use ferratomic_core::anti_entropy::{AntiEntropy, NullAntiEntropy};
-use ferratomic_core::observer::Observer;
-use ferratomic_core::store::Store;
-use ferratomic_core::topology::{AcceptAll, ReplicaFilter};
-use ferratomic_core::writer::{Transaction, TxValidationError};
+use ferratomic_core::{
+    anti_entropy::{AntiEntropy, NullAntiEntropy},
+    observer::Observer,
+    store::Store,
+    topology::{AcceptAll, ReplicaFilter},
+    writer::{Transaction, TxValidationError},
+};
 use ferratomic_verify::generators::*;
 use proptest::prelude::*;
-use std::collections::BTreeSet;
 
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(10_000))]
@@ -92,7 +95,7 @@ proptest! {
         let mut prev_datoms: Option<BTreeSet<Datom>> = None;
 
         for (i, tx) in txns.into_iter().enumerate() {
-            store.transact(tx)
+            store.transact_test(tx)
                 .expect("INV-FERR-011: transact must succeed for committed tx");
 
             if observe_points.contains(&i) {
@@ -561,7 +564,10 @@ fn inv_ferr_023_no_unsafe_code() {
     let lib_files = [
         concat!(env!("CARGO_MANIFEST_DIR"), "/../ferratom/src/lib.rs"),
         concat!(env!("CARGO_MANIFEST_DIR"), "/../ferratomic-core/src/lib.rs"),
-        concat!(env!("CARGO_MANIFEST_DIR"), "/../ferratomic-datalog/src/lib.rs"),
+        concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../ferratomic-datalog/src/lib.rs"
+        ),
         concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs"),
     ];
 

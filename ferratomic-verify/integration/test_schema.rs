@@ -4,8 +4,10 @@
 //! Phase 4a: all tests passing against ferratomic-core implementation.
 
 use ferratom::{AgentId, Attribute, EntityId, Value};
-use ferratomic_core::store::Store;
-use ferratomic_core::writer::{Transaction, TxValidationError};
+use ferratomic_core::{
+    store::Store,
+    writer::{Transaction, TxValidationError},
+};
 
 /// INV-FERR-009 + INV-FERR-031: Genesis schema has axiomatic meta-schema attributes.
 /// All genesis() calls produce identical schemas.
@@ -108,7 +110,9 @@ fn inv_ferr_009_schema_evolution() {
     let committed = define_tx
         .commit(store.schema())
         .expect("define tx should succeed");
-    store.transact(committed).expect("transact should succeed");
+    store
+        .transact_test(committed)
+        .expect("transact should succeed");
 
     // Second transaction: use the newly defined attribute
     let use_tx = Transaction::new(agent).assert_datom(
@@ -120,7 +124,9 @@ fn inv_ferr_009_schema_evolution() {
     let committed = use_tx
         .commit(store.schema())
         .expect("use tx should succeed");
-    store.transact(committed).expect("transact should succeed");
+    store
+        .transact_test(committed)
+        .expect("transact should succeed");
 
     // Verify the datom is in the store
     let snap = store.snapshot();
@@ -214,13 +220,13 @@ fn test_inv_ferr_019_error_exhaustiveness() {
                 assert!(!msg.is_empty(), "WalRead message should not be empty");
             }
             FerraError::CheckpointCorrupted { expected, actual } => {
-                assert_ne!(
-                    expected, actual,
-                    "CheckpointCorrupted expected != actual"
-                );
+                assert_ne!(expected, actual, "CheckpointCorrupted expected != actual");
             }
             FerraError::CheckpointWrite(msg) => {
-                assert!(!msg.is_empty(), "CheckpointWrite message should not be empty");
+                assert!(
+                    !msg.is_empty(),
+                    "CheckpointWrite message should not be empty"
+                );
             }
             FerraError::Io(msg) => {
                 assert!(!msg.is_empty(), "Io message should not be empty");
@@ -236,11 +242,11 @@ fn test_inv_ferr_019_error_exhaustiveness() {
                 expected,
                 got,
             } => {
-                assert!(!attribute.is_empty(), "SchemaViolation attribute should not be empty");
-                assert_ne!(
-                    expected, got,
-                    "SchemaViolation expected != got"
+                assert!(
+                    !attribute.is_empty(),
+                    "SchemaViolation attribute should not be empty"
                 );
+                assert_ne!(expected, got, "SchemaViolation expected != got");
             }
             FerraError::EmptyTransaction => {
                 // Unit variant — construction is sufficient proof.
@@ -250,25 +256,31 @@ fn test_inv_ferr_019_error_exhaustiveness() {
                 left,
                 right,
             } => {
-                assert!(!attribute.is_empty(), "SchemaIncompatible attribute should not be empty");
-                assert_ne!(
-                    left, right,
-                    "SchemaIncompatible left != right"
+                assert!(
+                    !attribute.is_empty(),
+                    "SchemaIncompatible attribute should not be empty"
                 );
+                assert_ne!(left, right, "SchemaIncompatible left != right");
             }
             FerraError::Backpressure => {
                 // Unit variant — construction is sufficient proof.
             }
             FerraError::PeerUnreachable { addr, reason } => {
                 assert!(!addr.is_empty(), "PeerUnreachable addr should not be empty");
-                assert!(!reason.is_empty(), "PeerUnreachable reason should not be empty");
+                assert!(
+                    !reason.is_empty(),
+                    "PeerUnreachable reason should not be empty"
+                );
             }
             FerraError::InvariantViolation { invariant, details } => {
                 assert!(
                     invariant.starts_with("INV-FERR-"),
                     "InvariantViolation invariant should follow naming convention"
                 );
-                assert!(!details.is_empty(), "InvariantViolation details should not be empty");
+                assert!(
+                    !details.is_empty(),
+                    "InvariantViolation details should not be empty"
+                );
             }
         }
     }

@@ -342,9 +342,7 @@ impl StorageBackend for InMemoryBackend {
     }
 
     fn checkpoint_exists(&self) -> bool {
-        self.checkpoint
-            .lock()
-            .is_ok_and(|guard| !guard.is_empty())
+        self.checkpoint.lock().is_ok_and(|guard| !guard.is_empty())
     }
 
     fn open_wal_writer(&self) -> Result<Self::WalWriter, FerraError> {
@@ -354,8 +352,10 @@ impl StorageBackend for InMemoryBackend {
             .map_err(|_| FerraError::Io("WAL mutex poisoned".to_string()))?;
         let existing = guard.clone();
         let mut cursor = Cursor::new(existing);
-        // Seek to end so appends land after existing data.
-        let _ = cursor.seek(std::io::SeekFrom::End(0));
+        // ME-022: Propagate seek error instead of discarding it.
+        cursor
+            .seek(std::io::SeekFrom::End(0))
+            .map_err(|e| FerraError::Io(format!("WAL seek to end failed: {e}")))?;
         Ok(SharedBufferSeekWriter {
             target: Arc::clone(&self.wal),
             cursor,
@@ -371,9 +371,7 @@ impl StorageBackend for InMemoryBackend {
     }
 
     fn wal_exists(&self) -> bool {
-        self.wal
-            .lock()
-            .is_ok_and(|guard| !guard.is_empty())
+        self.wal.lock().is_ok_and(|guard| !guard.is_empty())
     }
 
     fn create_dirs(&self) -> Result<(), FerraError> {
@@ -449,23 +447,38 @@ pub fn cold_start_with_backend<B: StorageBackend>(
     let has_wal = backend.wal_exists();
 
     // Level 1: checkpoint + WAL (fastest path).
+    // HI-008: Only fallthrough to lower levels on corruption errors.
+    // I/O errors (NotFound aside) are propagated — silent genesis on
+    // transient I/O failure causes data loss.
     if has_checkpoint && has_wal {
-        if let Ok(result) = recover_checkpoint_plus_wal(backend) {
-            return Ok(result);
+        match recover_checkpoint_plus_wal(backend) {
+            Ok(result) => return Ok(result),
+            Err(FerraError::CheckpointCorrupted { .. } | FerraError::WalRead(_)) => {
+                // Corruption: fall through to lower recovery level.
+            }
+            Err(e) => return Err(e),
         }
     }
 
     // Level 1b: checkpoint only (no WAL file).
     if has_checkpoint && !has_wal {
-        if let Ok(result) = recover_checkpoint_only(backend) {
-            return Ok(result);
+        match recover_checkpoint_only(backend) {
+            Ok(result) => return Ok(result),
+            Err(FerraError::CheckpointCorrupted { .. }) => {
+                // Corruption: fall through.
+            }
+            Err(e) => return Err(e),
         }
     }
 
     // Level 2: WAL-only (no checkpoint).
     if has_wal {
-        if let Ok(result) = recover_wal_only(backend) {
-            return Ok(result);
+        match recover_wal_only(backend) {
+            Ok(result) => return Ok(result),
+            Err(FerraError::WalRead(_)) => {
+                // Corruption: fall through to genesis.
+            }
+            Err(e) => return Err(e),
         }
     }
 
@@ -493,11 +506,17 @@ fn recover_checkpoint_plus_wal<B: StorageBackend>(
     let mut db_store = store;
     for entry in &entries {
         if entry.epoch > checkpoint_epoch {
-            let datoms: Vec<ferratom::Datom> = bincode::deserialize(&entry.payload)
+            // ADR-FERR-010: Deserialize as wire types, convert through trust boundary.
+            let wire_datoms: Vec<ferratom::wire::WireDatom> = bincode::deserialize(&entry.payload)
                 .map_err(|e| FerraError::WalRead(e.to_string()))?;
-            for datom in datoms {
-                db_store.insert(&datom);
-            }
+            let datoms: Vec<ferratom::Datom> = wire_datoms
+                .into_iter()
+                .map(ferratom::wire::WireDatom::into_trusted)
+                .collect();
+            // CR-002: Use replay_entry instead of raw insert. replay_entry
+            // advances epoch and calls evolve_schema (CR-001), matching the
+            // filesystem-specific Database::recover path.
+            db_store.replay_entry(entry.epoch, &datoms)?;
         }
     }
 
@@ -529,11 +548,16 @@ fn recover_wal_only<B: StorageBackend>(backend: &B) -> Result<ColdStartResult, F
 
     let mut store = crate::store::Store::genesis();
     for entry in &entries {
-        let datoms: Vec<ferratom::Datom> =
+        // ADR-FERR-010: Deserialize as wire types, convert through trust boundary.
+        let wire_datoms: Vec<ferratom::wire::WireDatom> =
             bincode::deserialize(&entry.payload).map_err(|e| FerraError::WalRead(e.to_string()))?;
-        for datom in datoms {
-            store.insert(&datom);
-        }
+        let datoms: Vec<ferratom::Datom> = wire_datoms
+            .into_iter()
+            .map(ferratom::wire::WireDatom::into_trusted)
+            .collect();
+        // CR-002: Use replay_entry instead of raw insert. Advances epoch
+        // and evolves schema, matching Database::recover_from_wal.
+        store.replay_entry(entry.epoch, &datoms)?;
     }
 
     Ok(ColdStartResult {
@@ -610,10 +634,7 @@ pub fn cold_start(data_dir: &Path) -> Result<ColdStartResult, FerraError> {
 /// INV-FERR-013, INV-FERR-014: Load checkpoint then replay WAL entries
 /// after the checkpoint epoch. Returns `None` if recovery fails (corrupt
 /// data), allowing the caller to fall back to a lower level.
-fn try_checkpoint_plus_wal(
-    checkpoint_path: &Path,
-    wal_path: &Path,
-) -> Option<ColdStartResult> {
+fn try_checkpoint_plus_wal(checkpoint_path: &Path, wal_path: &Path) -> Option<ColdStartResult> {
     let db = Database::recover(checkpoint_path, wal_path).ok()?;
     Some(ColdStartResult {
         database: db,
@@ -625,10 +646,7 @@ fn try_checkpoint_plus_wal(
 ///
 /// INV-FERR-013: Load checkpoint as complete state.
 /// INV-FERR-008: Attach a fresh WAL so post-recovery transactions are durable.
-fn try_checkpoint_only(
-    checkpoint_path: &Path,
-    wal_path: &Path,
-) -> Option<ColdStartResult> {
+fn try_checkpoint_only(checkpoint_path: &Path, wal_path: &Path) -> Option<ColdStartResult> {
     let store = crate::checkpoint::load_checkpoint(checkpoint_path).ok()?;
     let db = match Database::from_store_with_wal(store.clone(), wal_path) {
         Ok(db) => db,
@@ -814,7 +832,7 @@ mod tests {
                     Value::String(Arc::from("in-memory")),
                 )
                 .commit_unchecked();
-            store.transact(tx).unwrap();
+            store.transact_test(tx).unwrap();
 
             let mut writer = backend.open_checkpoint_writer().unwrap();
             crate::checkpoint::write_checkpoint_to_writer(&store, &mut writer).unwrap();

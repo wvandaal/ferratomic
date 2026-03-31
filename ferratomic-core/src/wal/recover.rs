@@ -9,7 +9,14 @@ use std::io::{Read as IoRead, Seek, SeekFrom};
 
 use ferratom::FerraError;
 
-use super::{crc32_ieee, Wal, WalEntry, CRC_SIZE, HEADER_SIZE, MIN_FRAME_SIZE, WAL_MAGIC, WAL_VERSION};
+use super::{
+    crc32_ieee, Wal, WalEntry, CRC_SIZE, HEADER_SIZE, MIN_FRAME_SIZE, WAL_MAGIC, WAL_VERSION,
+};
+
+/// HI-006: Maximum WAL payload size (256 MiB). Prevents OOM on crafted
+/// frames with spoofed u32 length fields. A single transaction producing
+/// >256 MiB of bincode-serialized datoms is pathological.
+const MAX_PAYLOAD_SIZE: usize = 256 * 1024 * 1024;
 
 impl Wal {
     /// Recover all complete WAL entries, truncating incomplete or corrupt ones.
@@ -50,7 +57,16 @@ impl Wal {
             self.file
                 .set_len(last_valid_pos as u64)
                 .map_err(|e| FerraError::WalWrite(e.to_string()))?;
+            // ME-013: fsync after truncation to ensure the truncated state
+            // is durable. Without this, a crash after set_len could leave
+            // the WAL with inconsistent length.
+            self.file
+                .sync_all()
+                .map_err(|e| FerraError::WalWrite(e.to_string()))?;
         }
+
+        // ME-012: Update pending_epoch to match recovered state.
+        self.pending_epoch = self.last_synced_epoch;
 
         // Seek to end so subsequent appends land after the last valid frame.
         self.file
@@ -131,6 +147,12 @@ fn try_parse_frame(buf: &[u8], pos: usize) -> Option<(WalEntry, usize)> {
     let len_bytes: [u8; 4] = buf[pos + 14..pos + 18].try_into().ok()?;
     let payload_len = u32::from_le_bytes(len_bytes) as usize;
 
+    // HI-006: Reject frames with payload exceeding MAX_PAYLOAD_SIZE to
+    // prevent OOM on crafted frames with spoofed length fields.
+    if payload_len > MAX_PAYLOAD_SIZE {
+        return None;
+    }
+
     // Frame completeness
     let frame_end = pos + HEADER_SIZE + payload_len + CRC_SIZE;
     if frame_end > buf.len() {
@@ -139,8 +161,9 @@ fn try_parse_frame(buf: &[u8], pos: usize) -> Option<(WalEntry, usize)> {
 
     // CRC32 verification
     let frame_data = &buf[pos..pos + HEADER_SIZE + payload_len];
-    let stored_crc_bytes: [u8; 4] =
-        buf[pos + HEADER_SIZE + payload_len..frame_end].try_into().ok()?;
+    let stored_crc_bytes: [u8; 4] = buf[pos + HEADER_SIZE + payload_len..frame_end]
+        .try_into()
+        .ok()?;
     let stored_crc = u32::from_le_bytes(stored_crc_bytes);
     let computed_crc = crc32_ieee(frame_data);
 
@@ -164,8 +187,10 @@ mod tests {
     use ferratom::{AgentId, Attribute, EntityId, Value};
     use tempfile::TempDir;
 
-    use crate::wal::{Wal, WAL_MAGIC, WAL_VERSION};
-    use crate::writer::Transaction;
+    use crate::{
+        wal::{Wal, WAL_MAGIC, WAL_VERSION},
+        writer::Transaction,
+    };
 
     /// Build a minimal committed transaction for testing.
     fn sample_tx() -> Transaction<crate::writer::Committed> {

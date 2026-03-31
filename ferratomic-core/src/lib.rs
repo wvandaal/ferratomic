@@ -110,7 +110,7 @@
 //!
 //! ## Architecture — Phase 4a (current)
 //!
-//! - `Store`: `im::OrdMap` persistent indexes (EAVT, entity, attribute, VAET, AVET, LIVE)
+//! - `Store`: `im::OrdMap` persistent indexes (EAVT, AEVT, VAET, AVET). Entity and LIVE indexes planned (HI-018).
 //! - `Database`: typestate (`Opening` -> `Ready`), MVCC snapshots via `ArcSwap`, `Mutex`-serialized single writer (ADR-FERR-003)
 //! - `Snapshot`: lock-free read handle (~1ns load, zero contention)
 //! - `Transaction`: typestate builder (`Building` -> `Committed`), schema validation
@@ -166,24 +166,27 @@
 // INV-FERR-023: No unsafe code permitted. Compiler-enforced.
 #![forbid(unsafe_code)]
 #![deny(clippy::all, missing_docs)]
+// ME-016 / NEG-FERR-001: No panics in production code.
 #![deny(clippy::unwrap_used)]
+#![deny(clippy::expect_used)]
+#![deny(clippy::panic)]
 #![warn(clippy::pedantic)]
 
-pub mod indexes;
-pub(crate) mod schema_evolution;
-pub mod store;
-pub mod db;
-pub(crate) mod snapshot;
-pub mod writer;
-pub mod wal;
-pub mod checkpoint;
-pub mod storage;
-pub mod observer;
-pub mod merge;
-pub(crate) mod transport;
-pub mod topology;
-pub mod backpressure;
 pub mod anti_entropy;
+pub mod backpressure;
+pub mod checkpoint;
+pub mod db;
+pub mod indexes;
+pub mod merge;
+pub mod observer;
+pub(crate) mod schema_evolution;
+pub(crate) mod snapshot;
+pub mod storage;
+pub mod store;
+pub mod topology;
+pub(crate) mod transport;
+pub mod wal;
+pub mod writer;
 
 // Phase 4b+
 // pub mod federation;

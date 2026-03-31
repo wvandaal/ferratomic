@@ -70,9 +70,7 @@ fn monotonic_growth() {
 #[kani::proof]
 #[kani::unwind(8)]
 fn convergence_two_replicas() {
-    let datoms: Vec<Datom> = (0..kani::any::<u8>().min(4))
-        .map(|_| kani::any())
-        .collect();
+    let datoms: Vec<Datom> = (0..kani::any::<u8>().min(4)).map(|_| kani::any()).collect();
 
     let mut r1 = BTreeSet::new();
     let mut r2 = BTreeSet::new();
@@ -125,7 +123,7 @@ fn store_transact_monotonic_growth() {
         )
         .commit(store.schema())
         .expect("INV-FERR-004: first tx should validate");
-    let _ = store.transact(tx1);
+    let _ = store.transact_test(tx1);
     let len_1 = store.len();
     assert!(
         len_1 >= len_0,
@@ -141,7 +139,7 @@ fn store_transact_monotonic_growth() {
         )
         .commit(store.schema())
         .expect("INV-FERR-004: second tx should validate");
-    let _ = store.transact(tx2);
+    let _ = store.transact_test(tx2);
     let len_2 = store.len();
     assert!(
         len_2 >= len_1,

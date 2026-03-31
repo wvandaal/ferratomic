@@ -46,7 +46,7 @@ algebraic properties using `BTreeSet`. Implementation uses `im::OrdSet`/`im::Ord
 
 The canonical specification lives in `spec/` in THIS repository.
 
-- **Formal spec**: `spec/` (55 INV, 9 ADR, 5 NEG) — modular files, see `spec/README.md`
+- **Formal spec**: `spec/` (55 INV, 10 ADR, 5 NEG) — modular files, see `spec/README.md`
 - **Architecture**: `docs/design/FERRATOMIC_ARCHITECTURE.md`
 - **Design decisions**: `docs/design/`
 

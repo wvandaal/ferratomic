@@ -80,11 +80,7 @@ pub struct BackpressureModel {
 
 impl BackpressureModel {
     /// Constructs a bounded backpressure model.
-    pub const fn new(
-        queue_capacity: u8,
-        max_submissions: usize,
-        datom_domain: u64,
-    ) -> Self {
+    pub const fn new(queue_capacity: u8, max_submissions: usize, datom_domain: u64) -> Self {
         Self {
             queue_capacity,
             max_submissions,
@@ -183,9 +179,7 @@ impl Model for BackpressureModel {
                     // INV-FERR-021: the conservation law. If this fails, a
                     // datom was silently lost.
                     state.total_submitted
-                        == state.committed_count
-                            + state.rejected_count
-                            + state.queue.len()
+                        == state.committed_count + state.rejected_count + state.queue.len()
                 },
             ),
             // INV-FERR-021 / NEG-FERR-005 Safety (bounded queue): the queue
@@ -251,8 +245,7 @@ impl Model for BackpressureModel {
 mod tests {
     use stateright::{Checker, Model};
 
-    use super::super::crdt_model::Datom;
-    use super::{BackpressureAction, BackpressureModel};
+    use super::{super::crdt_model::Datom, BackpressureAction, BackpressureModel};
 
     fn datom(seed: u64) -> Datom {
         Datom::from_seed(seed)
@@ -298,11 +291,7 @@ mod tests {
             .next_state(&s1, BackpressureAction::Submit(datom(1)))
             .unwrap();
 
-        assert_eq!(
-            s2.queue.len(),
-            2,
-            "INV-FERR-021: queue must be at capacity"
-        );
+        assert_eq!(s2.queue.len(), 2, "INV-FERR-021: queue must be at capacity");
 
         // Third submit must be rejected.
         let s3 = model
@@ -398,9 +387,7 @@ mod tests {
         );
 
         // Process one.
-        let s4 = model
-            .next_state(&s3, BackpressureAction::Process)
-            .unwrap();
+        let s4 = model.next_state(&s3, BackpressureAction::Process).unwrap();
 
         assert_eq!(
             s4.total_submitted,
@@ -437,9 +424,7 @@ mod tests {
         assert_eq!(s2.rejected_count, 1);
 
         // Process frees the slot.
-        let s3 = model
-            .next_state(&s2, BackpressureAction::Process)
-            .unwrap();
+        let s3 = model.next_state(&s2, BackpressureAction::Process).unwrap();
         assert_eq!(s3.queue.len(), 0);
 
         // Now a new submit succeeds.
@@ -564,9 +549,7 @@ mod tests {
         let s2 = model
             .next_state(&s1, BackpressureAction::Submit(datom(1)))
             .unwrap();
-        let s3 = model
-            .next_state(&s2, BackpressureAction::Process)
-            .unwrap();
+        let s3 = model.next_state(&s2, BackpressureAction::Process).unwrap();
 
         // s3: queue=[datom(1)], committed=1, rejected=0, submitted=2
         assert_eq!(s3.queue.len(), 1);
@@ -583,15 +566,10 @@ mod tests {
         let s5 = model
             .next_state(&s4, BackpressureAction::Submit(datom(0)))
             .unwrap();
-        assert_eq!(
-            s5.rejected_count, 1,
-            "INV-FERR-021: must reject when full"
-        );
+        assert_eq!(s5.rejected_count, 1, "INV-FERR-021: must reject when full");
 
         // Process.
-        let s6 = model
-            .next_state(&s5, BackpressureAction::Process)
-            .unwrap();
+        let s6 = model.next_state(&s5, BackpressureAction::Process).unwrap();
 
         // Submit succeeds again.
         let s7 = model

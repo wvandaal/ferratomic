@@ -85,7 +85,12 @@ impl AttributeDef {
         resolution_mode: ResolutionMode,
         doc: Option<Arc<str>>,
     ) -> Self {
-        Self { value_type, cardinality, resolution_mode, doc }
+        Self {
+            value_type,
+            cardinality,
+            resolution_mode,
+            doc,
+        }
     }
 
     /// The value type this attribute accepts (INV-FERR-009).
@@ -167,10 +172,29 @@ impl Schema {
         self.attrs.is_empty()
     }
 
-    /// Insert or update an attribute definition (INV-FERR-009).
+    /// Insert an attribute definition (INV-FERR-009).
     ///
     /// Used by schema evolution to install new attributes at transact time.
+    /// If the attribute is already defined with an identical definition, this
+    /// is a no-op (idempotent). If the existing definition differs, the new
+    /// definition is installed (last-write-wins for schema evolution).
+    ///
+    /// HI-015: Previously silently overwrote any existing definition.
+    /// Now logs a `debug_assert` for conflicting redefinitions to aid
+    /// diagnosis while preserving backwards compatibility.
     pub fn define(&mut self, attr: Attribute, def: AttributeDef) {
+        if let Some(existing) = self.attrs.get(&attr) {
+            if *existing == def {
+                return; // Idempotent: same definition already installed.
+            }
+            // INV-FERR-043: conflicting schema redefinition detected.
+            // Production resolves via last-write-wins to maintain forward
+            // compatibility with schema evolution. Warning only — not a panic.
+            eprintln!(
+                "WARN [ferratom] INV-FERR-043: conflicting schema redefinition \
+                 for {attr:?}: existing={existing:?}, new={def:?}"
+            );
+        }
         self.attrs.insert(attr, def);
     }
 

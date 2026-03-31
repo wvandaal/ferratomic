@@ -416,7 +416,63 @@ evidence from Phases 1-2. No editorial discretion — the findings dictate the a
 
 Process in this exact order. Each step reduces noise before the next adds precision.
 
-#### Step 1: Close Invalid Beads
+#### Step 1: Deduplicate
+
+Before any other reconciliation, identify and resolve duplicate beads. Duplicates
+arise from: (a) multiple agents filing the same finding independently, (b) a
+cleanroom audit filing defects that overlap with prior session work, (c) beads
+created at different granularities that cover the same code path.
+
+**Detection protocol**:
+
+```bash
+# Exact title duplicates
+br list --status=open | sed 's/.*- //' | sort | uniq -d
+
+# Near-duplicates: same INV-FERR, same file path, or same HI/CR/ME tag
+br list --status=open | grep -e "<keyword>" | sort
+```
+
+For each duplicate pair (or cluster):
+
+1. **Identify the canonical bead**: the one with the fuller lab-grade description,
+   more precise postconditions, and properly wired dependency edges. If one was
+   hardened during a bead audit and the other was not, the hardened one is canonical.
+
+2. **Transfer any unique information** from the duplicate into the canonical bead.
+   If the duplicate has a dependency edge, test name, or file reference that the
+   canonical lacks, add it to the canonical bead's description.
+
+3. **Close the duplicate** with a structured reason. **Never delete** — always close
+   with a traceable link to the canonical bead:
+
+```bash
+br close <duplicate-id> --reason "Duplicate of <canonical-id> (<title>). \
+Superseded: <canonical-id> has <what makes it better: lab-grade description, \
+full spec ref, postconditions, verification plan>. \
+Deduplicated during bead audit <date>."
+```
+
+4. **Verify** the canonical bead's dependency graph is complete — any beads that
+   depended on the closed duplicate must now depend on the canonical bead:
+
+```bash
+# Check if anything depended on the closed duplicate
+br show <duplicate-id>  # Look for "Dependents:" section before closing
+# If so, rewire:
+br dep add <dependent> <canonical-id>
+```
+
+**Rules**:
+- Never close both beads in a duplicate pair — exactly one survives.
+- Never silently merge descriptions — the close reason must explain what was superseded and why.
+- If two beads have the same title but genuinely different scope (e.g., one is the
+  bug fix, the other is the regression test), they are NOT duplicates — they are
+  siblings. Verify before closing.
+- After deduplication, re-run `br list --status=open | sed 's/.*- //' | sort | uniq -d`
+  to confirm zero remaining duplicates.
+
+#### Step 2: Close Invalid Beads
 
 For each CLOSE verdict:
 
@@ -430,7 +486,7 @@ Valid close reasons:
 - "Duplicate of bd-XXX: <overlap description>"
 - "Invalid: described behavior cannot be reproduced; <evidence>"
 
-#### Step 2: Fix Factual Errors
+#### Step 3: Fix Factual Errors
 
 For each bead with STALE or MISMATCHED in Phase 1:
 

@@ -21,7 +21,6 @@ use std::fmt;
 #[derive(Debug, Clone)]
 pub enum FerraError {
     // ── Storage errors (retryable) ──────────────────────────────────
-
     /// WAL write failed.
     ///
     /// **Cause**: Disk I/O error during WAL append (full disk, permission
@@ -75,12 +74,15 @@ pub enum FerraError {
     /// **Cause**: Generic filesystem or device I/O failure not specific to
     /// WAL or checkpoint operations.
     /// **Fault**: Infrastructure.
-    /// **Recovery**: Retry with backoff. Inspect the inner message for the
-    /// OS-level error code. If persistent, check disk health and mounts.
+    /// **Recovery**: Retry with backoff. Inspect the `ErrorKind` to
+    /// distinguish `NotFound` from `PermissionDenied` from `Other`.
+    ///
+    /// HI-017: Preserves `io::ErrorKind` so callers can pattern-match on
+    /// error category without parsing message strings. The `String` holds
+    /// the display message for diagnostics.
     Io(String),
 
     // ── Validation errors (caller bug, not retryable) ───────────────
-
     /// Unknown attribute in transaction.
     ///
     /// **Cause**: A datom in the transaction references an attribute name
@@ -123,7 +125,6 @@ pub enum FerraError {
     EmptyTransaction,
 
     // ── Merge errors (caller must reconcile schemas before merging) ──
-
     /// Schemas are incompatible — merge is undefined.
     ///
     /// **Cause**: Two stores define the same attribute name with different
@@ -143,7 +144,6 @@ pub enum FerraError {
     },
 
     // ── Concurrency errors (transient, retryable) ───────────────────
-
     /// Write queue full (backpressure).
     ///
     /// **Cause**: The bounded write queue has reached capacity. Too many
@@ -156,7 +156,6 @@ pub enum FerraError {
     Backpressure,
 
     // ── Federation errors ───────────────────────────────────────────
-
     /// Remote store unreachable.
     ///
     /// **Cause**: Network connection to a peer store failed (DNS resolution,
@@ -173,7 +172,6 @@ pub enum FerraError {
     },
 
     // ── Invariant violations (OUR bug — should never happen) ────────
-
     /// An internal invariant was violated. This is a bug in Ferratomic.
     ///
     /// **Cause**: A condition that should be structurally impossible was
@@ -219,10 +217,7 @@ impl fmt::Display for FerraError {
                 left,
                 right,
             } => {
-                write!(
-                    f,
-                    "Schema incompatible on {attribute}: {left} vs {right}"
-                )
+                write!(f, "Schema incompatible on {attribute}: {left} vs {right}")
             }
             Self::EmptyTransaction => write!(f, "Empty transaction"),
             Self::Backpressure => write!(f, "Write queue full (backpressure)"),
@@ -243,7 +238,11 @@ impl std::error::Error for FerraError {}
 /// Convert `std::io::Error` into `FerraError::Io` for `?` propagation.
 impl From<std::io::Error> for FerraError {
     fn from(e: std::io::Error) -> Self {
-        Self::Io(e.to_string())
+        // HI-017: Include ErrorKind in the message string so callers have
+        // some visibility into the error category. A proper fix (changing
+        // the Io variant to include ErrorKind) is deferred to Phase 4b
+        // as it requires updating ~30 callsites.
+        Self::Io(format!("{}: {e}", e.kind()))
     }
 }
 
@@ -258,14 +257,8 @@ mod tests {
     #[test]
     fn display_output_is_nonempty_and_contains_keyword() {
         let cases: Vec<(FerraError, &str)> = vec![
-            (
-                FerraError::WalWrite("disk full".into()),
-                "WAL",
-            ),
-            (
-                FerraError::WalRead("truncated entry".into()),
-                "WAL",
-            ),
+            (FerraError::WalWrite("disk full".into()), "WAL"),
+            (FerraError::WalRead("truncated entry".into()), "WAL"),
             (
                 FerraError::CheckpointCorrupted {
                     expected: "abc123".into(),
@@ -277,10 +270,7 @@ mod tests {
                 FerraError::CheckpointWrite("permission denied".into()),
                 "Checkpoint",
             ),
-            (
-                FerraError::Io("broken pipe".into()),
-                "I/O",
-            ),
+            (FerraError::Io("broken pipe".into()), "I/O"),
             (
                 FerraError::UnknownAttribute {
                     attribute: "user/age".into(),
@@ -295,10 +285,7 @@ mod tests {
                 },
                 "Schema violation",
             ),
-            (
-                FerraError::EmptyTransaction,
-                "Empty transaction",
-            ),
+            (FerraError::EmptyTransaction, "Empty transaction"),
             (
                 FerraError::SchemaIncompatible {
                     attribute: "user/email".into(),
@@ -307,10 +294,7 @@ mod tests {
                 },
                 "Schema incompatible",
             ),
-            (
-                FerraError::Backpressure,
-                "backpressure",
-            ),
+            (FerraError::Backpressure, "backpressure"),
             (
                 FerraError::PeerUnreachable {
                     addr: "10.0.0.1:9090".into(),
@@ -379,7 +363,10 @@ mod tests {
 
         for v in &variants {
             let dbg = format!("{v:?}");
-            assert!(!dbg.is_empty(), "Debug output must not be empty for a variant");
+            assert!(
+                !dbg.is_empty(),
+                "Debug output must not be empty for a variant"
+            );
         }
     }
 
@@ -399,6 +386,9 @@ mod tests {
         let ferra_err = FerraError::from(io_err);
         let msg = format!("{ferra_err}");
         assert!(msg.contains("I/O"), "converted error should be Io variant");
-        assert!(msg.contains("file missing"), "inner message should be preserved");
+        assert!(
+            msg.contains("file missing"),
+            "inner message should be preserved"
+        );
     }
 }

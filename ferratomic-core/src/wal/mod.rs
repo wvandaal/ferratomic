@@ -31,14 +31,13 @@
 mod recover;
 mod writer;
 
-pub(crate) use recover::recover_wal_from_reader;
-
 use std::{
     fs::{File, OpenOptions},
     path::{Path, PathBuf},
 };
 
 use ferratom::FerraError;
+pub(crate) use recover::recover_wal_from_reader;
 
 /// WAL frame magic bytes: ASCII "FERR" (0x46455252).
 pub(crate) const WAL_MAGIC: [u8; 4] = *b"FERR";
@@ -79,12 +78,17 @@ pub struct Wal {
     pub(crate) file: File,
     /// The epoch of the last entry confirmed durable via fsync.
     pub(crate) last_synced_epoch: u64,
+    /// ME-012: The highest epoch written since last fsync. Updated to
+    /// `last_synced_epoch` on successful `fsync()`.
+    pub(crate) pending_epoch: u64,
 }
 
 impl Wal {
     /// Create a new WAL file at `path`. Fails if the file already exists.
     ///
     /// INV-FERR-008: A fresh WAL starts empty with no durable entries.
+    /// HI-002: Parent directory is fsynced after file creation to ensure
+    /// the directory entry is durable on ext4/XFS.
     ///
     /// # Errors
     ///
@@ -96,10 +100,21 @@ impl Wal {
             .read(true)
             .open(path)
             .map_err(|e| FerraError::Io(e.to_string()))?;
+
+        // HI-002: fsync parent directory so the WAL file's directory entry
+        // is durable. Without this, a crash after create but before the first
+        // append could lose the WAL file entirely on ext4/XFS.
+        if let Some(parent) = path.parent() {
+            if let Ok(dir) = File::open(parent) {
+                let _ = dir.sync_all();
+            }
+        }
+
         Ok(Self {
             path: path.to_path_buf(),
             file,
             last_synced_epoch: 0,
+            pending_epoch: 0,
         })
     }
 
@@ -121,6 +136,7 @@ impl Wal {
             path: path.to_path_buf(),
             file,
             last_synced_epoch: 0,
+            pending_epoch: 0,
         })
     }
 

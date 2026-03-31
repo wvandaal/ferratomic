@@ -209,7 +209,26 @@ Observers must be idempotent (which they are, since they process datoms via merg
 The anti-entropy protocol (INV-FERR-022) serves as a fallback: even if observer delivery
 fails permanently, anti-entropy eventually synchronizes all nodes.
 
-**Source**: INV-FERR-003, INV-FERR-010, PD-004
+**Phase 4a Amendment: Advisory-Only Error Propagation**
+
+Phase 4a observer delivery errors are advisory-only and do not propagate as transact
+failures. The transaction is committed when WAL fsync completes (INV-FERR-008); observer
+delivery is a post-commit side effect. If delivery fails, the error is logged but the
+caller receives `Ok(TxReceipt)`, not `Err`. This prevents a committed-but-reported-as-failed
+scenario where callers retry an already-committed transaction.
+
+Rationale: the write path ordering is WAL fsync (step 2) → ArcSwap store (step 3) →
+observer delivery (step 4). By step 4, the transaction is durable and visible. Observer
+failure cannot un-commit a transaction, so propagating the error to the caller is
+misleading. Anti-entropy (INV-FERR-022) is the convergence mechanism that ensures
+observers eventually catch up, regardless of individual delivery failures.
+
+For Phase 4c cross-process observers, the same principle applies: delivery is best-effort
+with anti-entropy as the convergence guarantee. No synchronous retry loop blocks the
+writer. Observer implementations that require guaranteed delivery should poll via
+anti-entropy rather than relying on push delivery.
+
+**Source**: INV-FERR-003, INV-FERR-010, PD-004, Cleanroom Audit HI-004
 
 ---
 
@@ -346,6 +365,76 @@ rather than `BTreeSet`) to capture the algebraic properties without mirroring
 implementation details.
 
 **Source**: §23.0.4, SEED.md §10
+
+---
+
+### ADR-FERR-010: Deserialization Trust Boundary (Two-Tier Type System)
+
+**Traces to**: INV-FERR-012 (Content-Addressed Identity), INV-FERR-054 (Trust Gradient Query), CI-FERR-002 (Type-Level Refinement)
+**Stage**: 0
+
+**Problem**: Core types (`EntityId`, `Value`, `Datom`) derive `Deserialize`, which accepts
+arbitrary bytes as valid instances. For `EntityId`, this means any 32 bytes are accepted
+as a "BLAKE3 hash" without proof — a `sorry` axiom in Curry-Howard terms. In Phase 4a
+(single node, trusted storage), this is mitigated by CRC/BLAKE3 integrity checks on WAL
+and checkpoint files. In Phase 4c (federation with adversarial peers), a Byzantine peer
+can forge `EntityId` values that are not BLAKE3 of any content, poisoning the Merkle tree
+and anti-entropy protocol.
+
+**Options**:
+
+| Option | Description | Pros | Cons |
+|--------|-------------|------|------|
+| A: Manual Deserialize impls | Custom `impl Deserialize` for `EntityId` and `NonNanFloat` | Targeted fix for the two known bypass types. | Does not generalize. `Datom` and `Value` still accept arbitrary `EntityId` via `Ref` variant. No structural guarantee. |
+| B: Newtype with From | `TrustedEntityId(EntityId)` wrapper pattern | Adds a trust layer. | Every function taking `EntityId` must decide which newtype to accept. Viral signature changes. |
+| C: Two-tier wire/core types | Separate `WireDatom`/`WireEntityId`/`WireValue` types for deserialization. Core types (`Datom`/`EntityId`/`Value`) have NO `Deserialize`. Trust boundary conversion via `into_trusted()`. | Complete structural guarantee: no path from bytes to core types without explicit trust decision. Zero performance cost (identity function). Forward-compatible with Phase 4c `into_verified()`. | 4 new types. ~10 deserialization callsite changes. |
+
+**Decision**: **Option C: Two-Tier Type System (Architecture C)**
+
+Architecture C provides the strongest Curry-Howard guarantee: every `EntityId` in the
+system has known provenance. The type system enforces this structurally — there is no
+code path that can accidentally construct an unverified `EntityId` from network bytes.
+
+The design introduces a functor from the **Wire** category (types with `Deserialize`) to
+the **Core** category (types with store operations). The functor `into_trusted()` is an
+identity function on the bytes (zero cost) but a trust boundary in the type system.
+`into_trusted()` is `pub(crate)` to `ferratomic-core` — the federation crate cannot call
+it and must use `into_verified()` (which requires cryptographic proof).
+
+**New types** (in `ferratom::wire` module):
+- `WireEntityId([u8; 32])` — `Deserialize`, converts via `into_trusted()` or `into_verified(proof)`
+- `WireValue` — 11 variants matching `Value`, with `WireEntityId` for `Ref`
+- `WireDatom` — all wire-type fields
+- `WireCheckpointPayload` — schema + genesis_agent + `Vec<WireDatom>`
+
+**Modified core types**:
+- `EntityId`: remove `Deserialize`, add `from_trusted_bytes(pub(crate))`
+- `Value`: remove `Deserialize` (contains `EntityId` via `Ref`)
+- `Datom`: remove `Deserialize` (contains `EntityId`)
+- `NonNanFloat`: custom `Deserialize` impl that rejects NaN
+
+**Unchanged types**: `TxId`, `AgentId`, `Op`, `Attribute` retain `Deserialize` (no
+`EntityId` content, no invariants that deserialization could violate).
+
+**Trust provenance model** (every EntityId has exactly one provenance):
+- `from_content(bytes)` — I computed the BLAKE3 hash myself
+- `into_trusted()` — I read it from my own integrity-verified storage (CRC/BLAKE3 checked)
+- `into_verified(signature)` — A trusted agent signed it (Phase 4c, Ed25519)
+- `into_merkle_verified(proof, root)` — It is included in a verified Merkle tree (Phase 4c)
+
+This provenance model is the type-level encoding of INV-FERR-054 (trust gradient).
+
+**Performance**: Zero overhead. `into_trusted()` is a field-by-field move. The optimizer
+inlines and erases the conversion. Benchmarks show no regression.
+
+**Rejected**:
+- Option A: Fixes `EntityId` and `NonNanFloat` but leaves `Datom` and `Value` with
+  derived `Deserialize` that can inject unverified `EntityId` via `Value::Ref`. Not
+  structurally sound.
+- Option B: Creates a viral type parameter problem. Every function signature must choose
+  between `EntityId` and `TrustedEntityId`, and the boundary is never fully enforced.
+
+**Source**: Cleanroom Audit 2026-03-31 (Section 14: Architecture C), DEFECT-P3-001, DEFECT-P3-002
 
 ---
 

@@ -125,6 +125,15 @@ fn checkpoint_roundtrip() {
 }
 ```
 
+**Serialization codec**: The checkpoint payload uses **bincode** (the same binary codec
+as the WAL). JSON serialization was used in the Phase 4a prototype but violates
+INV-FERR-028 (cold start < 5s at 100M datoms) due to ~2.5x size overhead and text
+parsing cost. At 100M datoms, bincode produces ~20GB checkpoints (parseable in <5s on
+NVMe); JSON produces ~50GB (unparseable in the time budget). The `datom.serialize_into()`
+and `Datom::deserialize_from()` calls in the Level 2 contract use bincode encoding.
+Per ADR-FERR-010, deserialization produces wire types (`WireDatom`) which are converted
+to core types via `into_trusted()` after BLAKE3 checksum verification.
+
 **Falsification**: A store `S` where `load(checkpoint(S)).datom_set() != S.datom_set()`.
 Specific failure modes:
 - **Datom loss**: a datom present in `S` is absent after round-trip (serialization drops it).
@@ -489,7 +498,7 @@ theorem recovery_no_loss (s uncommitted : DatomStore) (d : Datom)
 
 #### Level 0 (Algebraic Law)
 ```
-Let HLC = (physical : u64, logical : u16, agent : AgentId) be a hybrid logical clock.
+Let HLC = (physical : u64, logical : u32, agent : AgentId) be a hybrid logical clock.
 Let tick : Agent → HLC be the clock advance function.
 
 ∀ agent α:
@@ -535,10 +544,12 @@ The HLC is also updated on message receipt: when agent `α` receives a message f
 wall_clock())` and adjusts logical accordingly. This ensures that causal ordering is
 preserved even across agents with clock skew (INV-FERR-016).
 
-The logical counter is a `u16` (65536 values). If 65536 events occur within the same
-physical millisecond on the same agent, the HLC blocks until the physical clock advances.
-This provides natural backpressure: at 65536 events/ms = 65M events/second per agent,
-the system self-limits rather than overflowing.
+The logical counter is a `u32` (~4.3 billion values). Operational backpressure is
+provided by the WriteLimiter (INV-FERR-021), not by HLC overflow. The u32::MAX
+busy-wait in `tick()` is a theoretical safety valve that should never fire in practice
+— at ~4.3 billion events per millisecond per agent, the counter cannot overflow on
+any physical hardware. If it ever did fire, the HLC blocks until the physical clock
+advances, preventing counter wrap-around.
 
 #### Level 2 (Implementation Contract)
 ```rust
@@ -554,7 +565,7 @@ pub struct AgentId([u8; 16]);  // Lexicographic byte order via derived Ord
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub struct Hlc {
     physical: u64,   // milliseconds since epoch
-    logical: u16,    // counter within same millisecond
+    logical: u32,    // counter within same millisecond
     agent: AgentId,  // tie-breaker across agents
 }
 
@@ -566,7 +577,7 @@ impl Hlc {
         if now > self.physical {
             self.physical = now;
             self.logical = 0;
-        } else if self.logical < u16::MAX {
+        } else if self.logical < u32::MAX {
             self.logical += 1;
         } else {
             // Backpressure: wait for physical clock to advance
@@ -620,7 +631,7 @@ fn hlc_monotonicity() {
 under the total order. Specific failure modes:
 - **Physical regression**: `h₂.physical < h₁.physical` (clock went backward without
   logical compensation).
-- **Logical overflow**: `h₁.logical == u16::MAX` and the next tick produces `logical == 0`
+- **Logical overflow**: `h₁.logical == u32::MAX` and the next tick produces `logical == 0`
   without advancing physical (wrap-around instead of backpressure).
 - **Receive regression**: after receiving a remote HLC, the local HLC is less than or
   equal to both the previous local HLC and the remote HLC (merge logic bug).
@@ -653,7 +664,7 @@ proptest! {
     fn hlc_receive_advances(
         local_ticks in 1u8..10,
         remote_physical in 0u64..1_000_000,
-        remote_logical in 0u16..1000,
+        remote_logical in 0u32..1000,
     ) {
         let mut hlc = Hlc::new(AgentId::from("local"));
         for _ in 0..local_ticks {

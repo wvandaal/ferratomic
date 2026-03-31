@@ -3,11 +3,10 @@
 //! INV-FERR-008, INV-FERR-014, INV-FERR-024 (in-memory backend).
 //! Phase 4a: all tests passing against ferratomic-core implementation.
 
-use ferratom::{AgentId, Attribute, EntityId, Value};
-use ferratomic_core::db::Database;
-use ferratomic_core::wal::Wal;
-use ferratomic_core::writer::Transaction;
 use std::io::Write;
+
+use ferratom::{AgentId, Attribute, EntityId, Value};
+use ferratomic_core::{db::Database, wal::Wal, writer::Transaction};
 use tempfile::TempDir;
 
 /// INV-FERR-008: Basic WAL write and recovery.
@@ -44,10 +43,13 @@ fn inv_ferr_008_wal_write_and_recover() {
         );
 
         // CR-027: Deserialize the recovered payload and verify datom content.
-        // WAL uses bincode for payload serialization (see wal.rs append()).
-        let datoms: Vec<ferratom::Datom> =
-            bincode::deserialize(&entries[0].payload)
-                .expect("INV-FERR-008: recovered payload must deserialize as Vec<Datom>");
+        // ADR-FERR-010: Deserialize as wire types, convert through trust boundary.
+        let wire_datoms: Vec<ferratom::wire::WireDatom> = bincode::deserialize(&entries[0].payload)
+            .expect("INV-FERR-008: recovered payload must deserialize as Vec<WireDatom>");
+        let datoms: Vec<ferratom::Datom> = wire_datoms
+            .into_iter()
+            .map(ferratom::wire::WireDatom::into_trusted)
+            .collect();
         assert_eq!(
             datoms.len(),
             1,
@@ -133,8 +135,7 @@ fn test_inv_ferr_014_crash_then_transact() {
 
     // -- Phase 1: genesis + transact 3 user datoms ----------------------------
     let (pre_crash_datoms, pre_crash_epoch, pre_crash_schema) = {
-        let db = Database::genesis_with_wal(&wal_path)
-            .expect("genesis_with_wal must succeed");
+        let db = Database::genesis_with_wal(&wal_path).expect("genesis_with_wal must succeed");
 
         for i in 0..3i64 {
             let tx = Transaction::new(agent)
@@ -180,7 +181,8 @@ fn test_inv_ferr_014_crash_then_transact() {
         "INV-FERR-014: recovered schema must be identical to pre-crash schema"
     );
     assert_eq!(
-        recovered_datoms, pre_crash_datoms,
+        recovered_datoms,
+        pre_crash_datoms,
         "INV-FERR-014: recovered datoms must be identical to pre-crash datoms. \
          recovered={}, pre_crash={}",
         recovered_datoms.len(),
@@ -212,8 +214,7 @@ fn test_inv_ferr_014_crash_then_transact() {
     );
 
     let final_snap = recovered_db.snapshot();
-    let final_datoms: std::collections::BTreeSet<_> =
-        final_snap.datoms().cloned().collect();
+    let final_datoms: std::collections::BTreeSet<_> = final_snap.datoms().cloned().collect();
 
     // All 5 user datoms must be findable by entity ID.
     for i in 0..5i64 {
@@ -243,8 +244,7 @@ fn inv_ferr_008_wal_entry_precedes_snapshot() {
     let dir = TempDir::new().expect("failed to create temp dir");
     let wal_path = dir.path().join("test.wal");
 
-    let db =
-        Database::genesis_with_wal(&wal_path).expect("failed to create store with WAL");
+    let db = Database::genesis_with_wal(&wal_path).expect("failed to create store with WAL");
 
     let agent = AgentId::from_bytes([1u8; 16]);
     for i in 0..5i64 {
@@ -259,8 +259,7 @@ fn inv_ferr_008_wal_entry_precedes_snapshot() {
         db.transact(tx).expect("transact failed");
     }
 
-    let snapshot_datoms: std::collections::BTreeSet<_> =
-        db.snapshot().datoms().cloned().collect();
+    let snapshot_datoms: std::collections::BTreeSet<_> = db.snapshot().datoms().cloned().collect();
     let expected_epoch = db.epoch();
     let expected_schema = db.schema();
 
@@ -271,7 +270,8 @@ fn inv_ferr_008_wal_entry_precedes_snapshot() {
 
     // INV-FERR-008: exact state equality -- datoms, epoch, schema.
     assert_eq!(
-        snapshot_datoms, recovered_datoms,
+        snapshot_datoms,
+        recovered_datoms,
         "INV-FERR-008: WAL recovery produced different datom set. \
          pre-crash={}, recovered={}",
         snapshot_datoms.len(),
@@ -329,7 +329,7 @@ fn test_inv_ferr_024_in_memory_backend() {
             )
             .commit_unchecked();
         store
-            .transact(tx)
+            .transact_test(tx)
             .expect("INV-FERR-024: transact into store for checkpoint");
 
         let mut writer = backend

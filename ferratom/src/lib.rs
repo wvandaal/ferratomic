@@ -23,12 +23,17 @@
 #![deny(missing_docs)]
 #![deny(clippy::all)]
 #![warn(clippy::pedantic)]
+// ME-016 / NEG-FERR-001: No panics in production code.
+#![deny(clippy::unwrap_used)]
+#![deny(clippy::expect_used)]
+#![deny(clippy::panic)]
 
 pub mod clock;
 pub mod datom;
 pub mod error;
 pub mod schema;
 pub mod traits;
+pub mod wire;
 
 pub use clock::{AgentId, Frontier, HybridClock, TxId};
 pub use datom::{Attribute, Datom, EntityId, NonNanFloat, Op, Value};

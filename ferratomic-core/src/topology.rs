@@ -55,18 +55,9 @@ mod tests {
         let d2 = sample_datom("beta");
         let d3 = sample_datom("gamma");
 
-        assert!(
-            filter.accepts(&d1),
-            "AcceptAll must accept every datom"
-        );
-        assert!(
-            filter.accepts(&d2),
-            "AcceptAll must accept every datom"
-        );
-        assert!(
-            filter.accepts(&d3),
-            "AcceptAll must accept every datom"
-        );
+        assert!(filter.accepts(&d1), "AcceptAll must accept every datom");
+        assert!(filter.accepts(&d2), "AcceptAll must accept every datom");
+        assert!(filter.accepts(&d3), "AcceptAll must accept every datom");
     }
 
     #[test]

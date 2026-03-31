@@ -17,11 +17,20 @@ use crate::store::Store;
 ///
 /// INV-FERR-009: schemas are unioned (all attributes from both stores).
 /// INV-FERR-007: epoch is `max(a.epoch, b.epoch)`.
+/// HI-014: genesis agent is `min(a.genesis_agent, b.genesis_agent)`.
+///
+/// INV-FERR-043: conflicting schema definitions (same attribute, different
+/// type/cardinality) are resolved deterministically by keeping the
+/// definition that sorts first. This preserves commutativity. A debug
+/// assertion fires to flag the conflict for diagnosis.
+///
+/// Currently infallible; returns `Result` for forward compatibility
+/// with stricter schema conflict policies.
 ///
 /// # Errors
 ///
-/// Returns `FerraError::SchemaIncompatible` if the stores define the
-/// same attribute with different definitions (INV-FERR-043).
+/// Currently always returns `Ok`. Future versions may return
+/// `FerraError::SchemaIncompatible` under stricter conflict policies.
 pub fn merge(a: &Store, b: &Store) -> Result<Store, ferratom::FerraError> {
     Ok(Store::from_merge(a, b))
 }

@@ -5,16 +5,16 @@
 //! These tests exercise the real checkpoint and WAL implementation
 //! with 10,000+ random inputs per property.
 
-use std::collections::BTreeSet;
-use std::sync::Arc;
+use std::{collections::BTreeSet, sync::Arc};
 
 use ferratom::{AgentId, Attribute, EntityId, Value};
-use ferratomic_core::checkpoint::{load_checkpoint, write_checkpoint, write_checkpoint_to_writer};
-use ferratomic_core::db::Database;
-use ferratomic_core::storage::{cold_start_with_backend, InMemoryBackend, StorageBackend};
-use ferratomic_core::store::Store;
-use ferratomic_core::writer::Transaction;
-
+use ferratomic_core::{
+    checkpoint::{load_checkpoint, write_checkpoint, write_checkpoint_to_writer},
+    db::Database,
+    storage::{cold_start_with_backend, InMemoryBackend, StorageBackend},
+    store::Store,
+    writer::Transaction,
+};
 use proptest::prelude::*;
 
 /// Generate a schema-valid datom (uses genesis meta-schema attributes).
@@ -26,10 +26,7 @@ fn arb_genesis_datom() -> impl Strategy<Value = (EntityId, Attribute, Value)> {
 
 /// Generate a vector of transactions (each with 1-5 datoms).
 fn arb_transactions(count: usize) -> impl Strategy<Value = Vec<Vec<(EntityId, Attribute, Value)>>> {
-    prop::collection::vec(
-        prop::collection::vec(arb_genesis_datom(), 1..=5),
-        1..=count,
-    )
+    prop::collection::vec(prop::collection::vec(arb_genesis_datom(), 1..=5), 1..=count)
 }
 
 proptest! {
@@ -49,7 +46,7 @@ proptest! {
                 tx = tx.assert_datom(*entity, attr.clone(), val.clone());
             }
             let committed = tx.commit_unchecked();
-            let _ = store.transact(committed);
+            let _ = store.transact_test(committed);
         }
 
         let dir = tempfile::TempDir::new().unwrap();
@@ -252,7 +249,7 @@ proptest! {
                 tx = tx.assert_datom(*entity, attr.clone(), val.clone());
             }
             let committed = tx.commit_unchecked();
-            let _ = store.transact(committed);
+            let _ = store.transact_test(committed);
         }
 
         // Write checkpoint to in-memory backend.
@@ -306,7 +303,7 @@ proptest! {
                 tx = tx.assert_datom(*entity, attr.clone(), val.clone());
             }
             let committed = tx.commit_unchecked();
-            let _ = store.transact(committed);
+            let _ = store.transact_test(committed);
         }
 
         // Checkpoint to disk.

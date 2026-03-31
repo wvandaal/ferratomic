@@ -18,6 +18,9 @@ Optimized prompts for driving every phase of ferratomic development with AI agen
 | 10 | [Benchmarking](10-benchmarking.md) | 4b | Mixed | Performance measurement and optimization |
 | 11 | [Federation Testing](11-federation-testing.md) | 4c | Mixed | Cross-store and distributed verification |
 | 12 | [Deep Analysis](12-deep-analysis.md) | Any | Very High | First-principles problem decomposition |
+| 13 | [Progress Review](13-progress-review.md) | Any | Varies | Holistic project assessment with scored vectors |
+| 14 | [Bead Audit](14-bead-audit.md) | Any | Varies | Audit and harden all open beads to lab-grade |
+| 15 | [Prompt Forge](15-prompt-forge.md) | Any | Varies | Design new lifecycle prompts from first principles |
 
 ## Usage Pattern
 
@@ -29,6 +32,10 @@ Phase work → 02/03/04/05 (depending on current phase)
 Review → 06-cleanroom-review.md
   ↓
 Issues found? → 07-bug-triage.md + 08-task-creation.md
+  ↓
+Post-swarm? → 13-progress-review.md (assess) → 14-bead-audit.md (harden)
+  ↓
+New prompt needed? → 15-prompt-forge.md
   ↓
 Session end → 09-continuation.md
 ```

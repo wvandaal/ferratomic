@@ -295,9 +295,7 @@ impl Model for WriteLinModel {
                         PendingTxn::EpochAssigned(_) => {
                             *txn = PendingTxn::Waiting;
                         }
-                        PendingTxn::Waiting
-                        | PendingTxn::Fsynced(_)
-                        | PendingTxn::Done(_) => {}
+                        PendingTxn::Waiting | PendingTxn::Fsynced(_) | PendingTxn::Done(_) => {}
                     }
                 }
                 next.crash_mode = CrashMode::Recovering;
@@ -642,9 +640,7 @@ mod tests {
             .unwrap();
 
         // Recover: should replay epoch 2, maintaining monotonicity.
-        let s9 = model
-            .next_state(&s8, WriteLinAction::Recover)
-            .unwrap();
+        let s9 = model.next_state(&s8, WriteLinAction::Recover).unwrap();
 
         assert_eq!(
             s9.committed_epochs,

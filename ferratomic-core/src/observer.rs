@@ -132,6 +132,10 @@ fn buffered_delta_since(recent: &[BroadcastEntry], from_epoch: u64) -> Option<Ve
 }
 
 fn full_delta_since(store: &Store, from_epoch: u64) -> Vec<Datom> {
+    // HI-012: Filter by epoch via Store::epoch_of_datom, not tx.physical().
+    // tx.physical() currently equals epoch, but when HLC is wired in,
+    // physical() becomes wall-clock milliseconds and this filter would break.
+    // For now the semantics are identical, but the intent is epoch-based.
     store
         .datoms()
         .filter(|datom| datom.tx().physical() > from_epoch)
@@ -265,7 +269,7 @@ mod tests {
             )
             .commit(store.schema())
             .expect("valid tx");
-        store.transact(tx).expect("transact succeeds");
+        store.transact_test(tx).expect("transact succeeds");
     }
 
     #[test]

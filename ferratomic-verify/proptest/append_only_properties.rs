@@ -3,13 +3,10 @@
 //! The store only grows. No datom is ever removed by any operation.
 //! Retractions are new datoms with Op::Retract.
 
-use std::collections::BTreeSet;
-use std::sync::Arc;
+use std::{collections::BTreeSet, sync::Arc};
 
 use ferratom::{AgentId, Attribute, Datom, EntityId, Op, TxId, Value};
-use ferratomic_core::store::Store;
-use ferratomic_core::writer::Transaction;
-
+use ferratomic_core::{store::Store, writer::Transaction};
 use proptest::prelude::*;
 
 /// Generate a schema-valid datom triple.
@@ -40,7 +37,7 @@ proptest! {
                 .assert_datom(*entity, attr.clone(), val.clone())
                 .commit_unchecked();
 
-            if let Ok(_receipt) = store.transact(tx) {
+            if let Ok(_receipt) = store.transact_test(tx) {
                 let new_len = store.len();
                 prop_assert!(
                     new_len >= prev_len,
@@ -122,14 +119,14 @@ proptest! {
         let tx1 = Transaction::new(agent)
             .assert_datom(entity, Attribute::from("db/doc"), Value::String(Arc::from("hello")))
             .commit_unchecked();
-        store.transact(tx1).unwrap();
+        store.transact_test(tx1).unwrap();
         let len_after_assert = store.len();
 
         // Retract the same fact.
         let tx2 = Transaction::new(agent)
             .retract_datom(entity, Attribute::from("db/doc"), Value::String(Arc::from("hello")))
             .commit_unchecked();
-        store.transact(tx2).unwrap();
+        store.transact_test(tx2).unwrap();
         let len_after_retract = store.len();
 
         // Store must be strictly larger (retract datom + tx metadata added).

@@ -16,9 +16,7 @@
 //! }
 //! ```
 
-use ferratom::{
-    AgentId, Attribute, Datom, EntityId, Op, TxId, Value,
-};
+use ferratom::{AgentId, Attribute, Datom, EntityId, Op, TxId, Value};
 use ferratomic_core::store::Store;
 use proptest::prelude::*;
 
@@ -35,8 +33,7 @@ pub fn arb_entity_id() -> impl Strategy<Value = EntityId> {
 
 /// Arbitrary Attribute: namespace/name format.
 pub fn arb_attribute() -> impl Strategy<Value = Attribute> {
-    "[a-z][a-z0-9_]{0,15}/[a-z][a-z0-9_]{0,31}"
-        .prop_map(|s| Attribute::from(s.as_str()))
+    "[a-z][a-z0-9_]{0,15}/[a-z][a-z0-9_]{0,31}".prop_map(|s| Attribute::from(s.as_str()))
 }
 
 /// Arbitrary Value: all 11 variant types with uniform distribution.
@@ -47,10 +44,9 @@ pub fn arb_value() -> impl Strategy<Value = Value> {
         any::<i64>().prop_map(Value::Long),
         any::<bool>().prop_map(Value::Bool),
         ".*".prop_map(|s| Value::String(Arc::from(s.as_str()))),
-        any::<f64>()
-            .prop_filter_map("not NaN", |f| {
-                ferratom::NonNanFloat::new(f).map(Value::Double)
-            }),
+        any::<f64>().prop_filter_map("not NaN", |f| {
+            ferratom::NonNanFloat::new(f).map(Value::Double)
+        }),
         "[a-z][a-z0-9_/]{0,63}".prop_map(|s| Value::Keyword(Arc::from(s.as_str()))),
         any::<i64>().prop_map(Value::Instant),
         any::<[u8; 16]>().prop_map(Value::Uuid),
@@ -99,23 +95,20 @@ pub fn arb_datom() -> impl Strategy<Value = Datom> {
 /// Arbitrary Store with up to `max_datoms` datoms.
 /// INV-FERR-001..004: CRDT semilattice properties.
 pub fn arb_store(max_datoms: usize) -> impl Strategy<Value = Store> {
-    prop::collection::btree_set(arb_datom(), 0..max_datoms)
-        .prop_map(Store::from_datoms)
+    prop::collection::btree_set(arb_datom(), 0..max_datoms).prop_map(Store::from_datoms)
 }
 
 /// Arbitrary committed Transaction (bypasses schema for testing).
 pub fn arb_transaction(
 ) -> impl Strategy<Value = ferratomic_core::writer::Transaction<ferratomic_core::writer::Committed>>
 {
-    (arb_agent_id(), prop::collection::vec(arb_datom(), 1..20)).prop_map(
-        |(agent, datoms)| {
-            let mut tx = ferratomic_core::writer::Transaction::new(agent);
-            for d in datoms {
-                tx = tx.assert_datom(d.entity(), d.attribute().clone(), d.value().clone());
-            }
-            tx.commit_unchecked() // bypass schema for testing
-        },
-    )
+    (arb_agent_id(), prop::collection::vec(arb_datom(), 1..20)).prop_map(|(agent, datoms)| {
+        let mut tx = ferratomic_core::writer::Transaction::new(agent);
+        for d in datoms {
+            tx = tx.assert_datom(d.entity(), d.attribute().clone(), d.value().clone());
+        }
+        tx.commit_unchecked() // bypass schema for testing
+    })
 }
 
 /// Arbitrary multi-datom Transaction (at least 2 datoms).
@@ -123,15 +116,13 @@ pub fn arb_transaction(
 pub fn arb_multi_datom_transaction(
 ) -> impl Strategy<Value = ferratomic_core::writer::Transaction<ferratomic_core::writer::Committed>>
 {
-    (arb_agent_id(), prop::collection::vec(arb_datom(), 2..20)).prop_map(
-        |(agent, datoms)| {
-            let mut tx = ferratomic_core::writer::Transaction::new(agent);
-            for d in datoms {
-                tx = tx.assert_datom(d.entity(), d.attribute().clone(), d.value().clone());
-            }
-            tx.commit_unchecked()
-        },
-    )
+    (arb_agent_id(), prop::collection::vec(arb_datom(), 2..20)).prop_map(|(agent, datoms)| {
+        let mut tx = ferratomic_core::writer::Transaction::new(agent);
+        for d in datoms {
+            tx = tx.assert_datom(d.entity(), d.attribute().clone(), d.value().clone());
+        }
+        tx.commit_unchecked()
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -143,12 +134,14 @@ pub fn arb_schema_valid_datom() -> impl Strategy<Value = Datom> {
     let schema_attrs = prop_oneof![
         Just(("db/ident", Value::Keyword("test/attr".into()))),
         Just(("db/valueType", Value::Keyword("db.type/string".into()))),
-        Just(("db/cardinality", Value::Keyword("db.cardinality/one".into()))),
+        Just((
+            "db/cardinality",
+            Value::Keyword("db.cardinality/one".into())
+        )),
         Just(("db/doc", Value::String("test doc".into()))),
     ];
-    (arb_entity_id(), schema_attrs, arb_tx_id()).prop_map(|(e, (attr, val), tx)| {
-        Datom::new(e, Attribute::from(attr), val, tx, Op::Assert)
-    })
+    (arb_entity_id(), schema_attrs, arb_tx_id())
+        .prop_map(|(e, (attr, val), tx)| Datom::new(e, Attribute::from(attr), val, tx, Op::Assert))
 }
 
 /// Arbitrary datom with an attribute NOT in the genesis schema.
@@ -180,7 +173,6 @@ pub fn arb_datom_with_wrong_type() -> impl Strategy<Value = Datom> {
         // :db/doc expects String — give it Long
         Just(("db/doc", Value::Long(99))),
     ];
-    (arb_entity_id(), mismatched_pairs, arb_tx_id()).prop_map(|(e, (attr, val), tx)| {
-        Datom::new(e, Attribute::from(attr), val, tx, Op::Assert)
-    })
+    (arb_entity_id(), mismatched_pairs, arb_tx_id())
+        .prop_map(|(e, (attr, val), tx)| Datom::new(e, Attribute::from(attr), val, tx, Op::Assert))
 }

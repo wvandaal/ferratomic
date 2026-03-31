@@ -5,10 +5,10 @@
 //! INV-FERR-030 (replica filter), INV-FERR-031 (genesis determinism).
 //! Phase 4a: all tests passing against ferratomic-core implementation.
 
-use ferratom::{AgentId, Attribute, Datom, EntityId, Op, TxId, Value};
-use ferratomic_core::merge::merge;
-use ferratomic_core::store::Store;
 use std::collections::BTreeSet;
+
+use ferratom::{AgentId, Attribute, Datom, EntityId, Op, TxId, Value};
+use ferratomic_core::{merge::merge, store::Store};
 
 /// INV-FERR-001: Concrete merge commutativity with known stores.
 #[test]
@@ -88,11 +88,13 @@ fn inv_ferr_002_merge_associates_concrete() {
     let ab_c = merge(
         &merge(&a, &b).expect("INV-FERR-002: merge(A,B) must succeed"),
         &c,
-    ).expect("INV-FERR-002: merge(AB,C) must succeed");
+    )
+    .expect("INV-FERR-002: merge(AB,C) must succeed");
     let a_bc = merge(
         &a,
         &merge(&b, &c).expect("INV-FERR-002: merge(B,C) must succeed"),
-    ).expect("INV-FERR-002: merge(A,BC) must succeed");
+    )
+    .expect("INV-FERR-002: merge(A,BC) must succeed");
 
     assert_eq!(
         ab_c.datom_set(),
@@ -154,11 +156,8 @@ fn inv_ferr_004_transact_grows_store() {
     let committed = tx
         .commit(store.schema())
         .expect("INV-FERR-004: valid tx rejected");
-    let result = store.transact(committed);
-    assert!(
-        result.is_ok(),
-        "INV-FERR-004: transact failed unexpectedly"
-    );
+    let result = store.transact_test(committed);
+    assert!(result.is_ok(), "INV-FERR-004: transact failed unexpectedly");
     assert!(
         store.len() > pre_len,
         "INV-FERR-004: store did not grow. pre={}, post={}",
@@ -326,7 +325,9 @@ fn inv_ferr_017_shard_equivalence_concrete() {
             assert!(
                 overlap.is_empty(),
                 "INV-FERR-017: shards {} and {} overlap by {} datoms",
-                i, j, overlap.len()
+                i,
+                j,
+                overlap.len()
             );
         }
     }
@@ -356,8 +357,7 @@ fn inv_ferr_012_same_content_same_id() {
 /// full Database::genesis() -> db.transact() -> db.snapshot() path.
 #[test]
 fn test_inv_ferr_004_monotonic_growth_database() {
-    use ferratomic_core::db::Database;
-    use ferratomic_core::writer::Transaction;
+    use ferratomic_core::{db::Database, writer::Transaction};
 
     let db = Database::genesis();
     let agent = AgentId::from_bytes([4u8; 16]);

@@ -235,6 +235,10 @@ impl Transaction<Building> {
     /// Bypasses INV-FERR-009 so proptest generators can create committed
     /// transactions with arbitrary datoms. Production code must use
     /// [`commit`](Self::commit).
+    ///
+    /// HI-005: Gated behind `test` or `test-utils` feature to prevent
+    /// production code from bypassing schema validation.
+    #[cfg(any(test, feature = "test-utils"))]
     #[must_use]
     pub fn commit_unchecked(self) -> Transaction<Committed> {
         Transaction {
@@ -278,8 +282,9 @@ impl Transaction<Committed> {
 mod tests {
     use std::sync::Arc;
 
-    use super::*;
     use validate::value_matches_type;
+
+    use super::*;
 
     /// Helper: build a minimal schema with one String attribute.
     fn test_schema() -> Schema {
@@ -492,7 +497,10 @@ mod tests {
             (Value::Bool(true), ferratom::ValueType::Boolean),
             (Value::Instant(0), ferratom::ValueType::Instant),
             (Value::Uuid([0; 16]), ferratom::ValueType::Uuid),
-            (Value::Bytes(Arc::from(vec![0u8])), ferratom::ValueType::Bytes),
+            (
+                Value::Bytes(Arc::from(vec![0u8])),
+                ferratom::ValueType::Bytes,
+            ),
             (
                 Value::Ref(EntityId::from_bytes([0; 32])),
                 ferratom::ValueType::Ref,
@@ -517,10 +525,7 @@ mod tests {
     fn test_value_matches_type_rejects_mismatches() {
         // String value should NOT match Long type.
         assert!(
-            !value_matches_type(
-                &Value::String(Arc::from("s")),
-                &ferratom::ValueType::Long
-            ),
+            !value_matches_type(&Value::String(Arc::from("s")), &ferratom::ValueType::Long),
             "String should not match Long"
         );
         // Long value should NOT match String type.

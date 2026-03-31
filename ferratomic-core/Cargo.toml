@@ -14,7 +14,6 @@ arc-swap = { workspace = true }
 blake3 = { workspace = true }
 bincode = { workspace = true }
 serde = { workspace = true }
-serde_json = { workspace = true }
 asupersync = { workspace = true }
 # tokio: optional, for asupersync-tokio-compat adapter modules only
 tokio = { workspace = true, optional = true }
@@ -23,6 +22,9 @@ tokio = { workspace = true, optional = true }
 ## Enable release-mode index bijection sampling (INV-FERR-005).
 ## When active, every 100th transaction verifies 4-index cardinality match.
 release_bijection_check = []
+## HI-005: Expose commit_unchecked and other testing-only APIs.
+## Production builds must NOT enable this feature.
+test-utils = []
 
 [dev-dependencies]
 ferratom = { path = "../ferratom", features = ["test-utils"] }

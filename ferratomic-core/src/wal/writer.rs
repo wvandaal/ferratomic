@@ -7,9 +7,8 @@ use std::io::Write as IoWrite;
 
 use ferratom::FerraError;
 
-use crate::writer::{Committed, Transaction};
-
 use super::{crc32_ieee, Wal, CRC_SIZE, HEADER_SIZE, WAL_MAGIC, WAL_VERSION};
+use crate::writer::{Committed, Transaction};
 
 impl Wal {
     /// Append a committed transaction to the WAL at the given epoch.
@@ -53,14 +52,39 @@ impl Wal {
     pub fn fsync(&mut self) -> Result<(), FerraError> {
         self.file
             .sync_all()
-            .map_err(|e| FerraError::WalWrite(e.to_string()))
+            .map_err(|e| FerraError::WalWrite(e.to_string()))?;
+        // ME-012: Update last_synced_epoch after successful fsync so that
+        // epoch monotonicity enforcement (ME-011) reflects actual durable state.
+        // The pending_epoch tracks the highest epoch written since last fsync.
+        self.last_synced_epoch = self.last_synced_epoch.max(self.pending_epoch);
+        Ok(())
     }
 
     /// Build a WAL frame and write it to the file.
     ///
+    /// ME-011: Enforces epoch monotonicity — each frame's epoch must be
+    /// strictly greater than the previous synced epoch.
+    ///
     /// Shared by [`append`](Self::append) and [`append_raw`](Self::append_raw).
     fn write_frame(&mut self, epoch: u64, payload: &[u8]) -> Result<(), FerraError> {
+        // ME-011: Enforce WAL epoch monotonicity. Appending an epoch <=
+        // last_synced would violate INV-FERR-007 (strict monotonicity).
+        if epoch <= self.last_synced_epoch && self.last_synced_epoch > 0 {
+            return Err(FerraError::InvariantViolation {
+                invariant: "INV-FERR-007".to_string(),
+                details: format!(
+                    "WAL epoch monotonicity violated: epoch {epoch} <= last_synced {}",
+                    self.last_synced_epoch
+                ),
+            });
+        }
         let payload_len = payload.len();
+        // HI-006: Reject oversized payloads on the write path too.
+        if payload_len > 256 * 1024 * 1024 {
+            return Err(FerraError::WalWrite(format!(
+                "payload too large: {payload_len} bytes exceeds 256 MiB limit"
+            )));
+        }
         let frame_size = HEADER_SIZE + payload_len + CRC_SIZE;
         let mut frame = Vec::with_capacity(frame_size);
 
@@ -87,6 +111,8 @@ impl Wal {
             .write_all(&frame)
             .map_err(|e| FerraError::WalWrite(e.to_string()))?;
 
+        // ME-012: Track highest epoch written for fsync bookkeeping.
+        self.pending_epoch = self.pending_epoch.max(epoch);
         Ok(())
     }
 }
@@ -100,8 +126,7 @@ mod tests {
     use ferratom::{AgentId, Attribute, EntityId, Value};
     use tempfile::TempDir;
 
-    use crate::wal::Wal;
-    use crate::writer::Transaction;
+    use crate::{wal::Wal, writer::Transaction};
 
     /// Build a minimal committed transaction for testing.
     fn sample_tx() -> Transaction<crate::writer::Committed> {
@@ -196,8 +221,13 @@ mod tests {
             let entries = wal.recover().unwrap();
             assert_eq!(entries.len(), 1);
 
-            // The payload must be valid bincode (Vec<Datom>).
-            let datoms: Vec<ferratom::Datom> = bincode::deserialize(&entries[0].payload).unwrap();
+            // ADR-FERR-010: Deserialize as wire types, convert through trust boundary.
+            let wire_datoms: Vec<ferratom::wire::WireDatom> =
+                bincode::deserialize(&entries[0].payload).unwrap();
+            let datoms: Vec<ferratom::Datom> = wire_datoms
+                .into_iter()
+                .map(ferratom::wire::WireDatom::into_trusted)
+                .collect();
             assert!(
                 !datoms.is_empty(),
                 "INV-FERR-008: WAL payload must contain datoms"
@@ -222,8 +252,13 @@ mod tests {
             let entries = wal.recover().unwrap();
             assert_eq!(entries.len(), 1);
 
-            // Deserialize and verify datom content survives roundtrip.
-            let datoms: Vec<ferratom::Datom> = bincode::deserialize(&entries[0].payload).unwrap();
+            // ADR-FERR-010: Deserialize as wire types, convert through trust boundary.
+            let wire_datoms: Vec<ferratom::wire::WireDatom> =
+                bincode::deserialize(&entries[0].payload).unwrap();
+            let datoms: Vec<ferratom::Datom> = wire_datoms
+                .into_iter()
+                .map(ferratom::wire::WireDatom::into_trusted)
+                .collect();
             assert!(!datoms.is_empty(), "bd-32t: payload must contain datoms");
             assert_eq!(
                 datoms[0].attribute().as_str(),

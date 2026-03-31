@@ -7,12 +7,12 @@
 //!
 //! Phase 4a: all tests passing against ferratomic-core implementation.
 
+use std::collections::BTreeSet;
+
 use ferratom::{Datom, EntityId};
-use ferratomic_core::merge::merge;
-use ferratomic_core::store::Store;
+use ferratomic_core::{merge::merge, store::Store};
 use ferratomic_verify::generators::*;
 use proptest::prelude::*;
-use std::collections::BTreeSet;
 
 /// Verify index bijection: primary set == each secondary index set.
 fn verify_index_bijection(store: &Store) -> bool {
@@ -146,7 +146,7 @@ proptest! {
         let pre_len = initial.len();
 
         let mut store = initial;
-        let _receipt = store.transact(tx)
+        let _receipt = store.transact_test(tx)
             .expect("INV-FERR-004: transact must succeed for committed tx");
 
         // Strict growth
@@ -357,6 +357,114 @@ proptest! {
         prop_assert_eq!(
             g1.genesis_agent(), g2.genesis_agent(),
             "INV-FERR-031 violated: genesis agents differ"
+        );
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(1_000))]
+
+    /// ME-017 / INV-FERR-043: Merge of stores with conflicting attribute
+    /// definitions is deterministic and commutative.
+    ///
+    /// Generates two stores where the same attribute name has different
+    /// `ValueType` definitions. Merge must:
+    /// 1. Not panic or return Err.
+    /// 2. Be commutative: merge(A,B).schema == merge(B,A).schema.
+    /// 3. Produce a deterministic result (the definition that sorts first wins).
+    ///
+    /// Falsification: merge(A,B).schema != merge(B,A).schema for conflicting schemas.
+    #[test]
+    fn inv_ferr_043_schema_conflict_merge_commutativity(
+        seed in any::<u64>(),
+    ) {
+        use std::sync::Arc;
+        use ferratom::{AgentId, Attribute, Value};
+
+        // Build two genesis stores with divergent schema definitions.
+        let mut a = Store::genesis();
+        let mut b = Store::genesis();
+
+        // Store A: define "user/email" as String
+        let tx_a = ferratomic_core::writer::Transaction::new(AgentId::from_bytes([1u8; 16]))
+            .assert_datom(
+                EntityId::from_content(format!("attr-email-{seed}").as_bytes()),
+                Attribute::from("db/ident"),
+                Value::Keyword("user/email".into()),
+            )
+            .assert_datom(
+                EntityId::from_content(format!("attr-email-{seed}").as_bytes()),
+                Attribute::from("db/valueType"),
+                Value::Keyword("db.type/string".into()),
+            )
+            .assert_datom(
+                EntityId::from_content(format!("attr-email-{seed}").as_bytes()),
+                Attribute::from("db/cardinality"),
+                Value::Keyword("db.cardinality/one".into()),
+            )
+            .commit(a.schema())
+            .expect("valid schema tx a");
+        a.transact_test(tx_a).expect("transact a ok");
+
+        // Store B: define "user/email" as Keyword (conflicting type!)
+        let tx_b = ferratomic_core::writer::Transaction::new(AgentId::from_bytes([2u8; 16]))
+            .assert_datom(
+                EntityId::from_content(format!("attr-email-b-{seed}").as_bytes()),
+                Attribute::from("db/ident"),
+                Value::Keyword("user/email".into()),
+            )
+            .assert_datom(
+                EntityId::from_content(format!("attr-email-b-{seed}").as_bytes()),
+                Attribute::from("db/valueType"),
+                Value::Keyword("db.type/keyword".into()),
+            )
+            .assert_datom(
+                EntityId::from_content(format!("attr-email-b-{seed}").as_bytes()),
+                Attribute::from("db/cardinality"),
+                Value::Keyword("db.cardinality/one".into()),
+            )
+            .commit(b.schema())
+            .expect("valid schema tx b");
+        b.transact_test(tx_b).expect("transact b ok");
+
+        // Both stores define "user/email" with different types.
+        prop_assert!(
+            a.schema().get(&Attribute::from("user/email")).is_some(),
+            "store A must have user/email"
+        );
+        prop_assert!(
+            b.schema().get(&Attribute::from("user/email")).is_some(),
+            "store B must have user/email"
+        );
+
+        // Merge must succeed (not panic, not Err).
+        let ab = merge(&a, &b).expect("merge(A,B) must not fail");
+        let ba = merge(&b, &a).expect("merge(B,A) must not fail");
+
+        // INV-FERR-001: merge commutativity extends to schema.
+        prop_assert_eq!(
+            ab.schema().len(),
+            ba.schema().len(),
+            "INV-FERR-043: merge(A,B).schema.len() must equal merge(B,A).schema.len()"
+        );
+
+        // The resolved definition must be identical regardless of merge order.
+        let ab_email = ab.schema().get(&Attribute::from("user/email"));
+        let ba_email = ba.schema().get(&Attribute::from("user/email"));
+        prop_assert_eq!(
+            ab_email,
+            ba_email,
+            "INV-FERR-043: conflicting schema resolution must be commutative. \
+             merge(A,B)={:?}, merge(B,A)={:?}",
+            ab_email,
+            ba_email
+        );
+
+        // INV-FERR-001: datom set commutativity holds even with schema conflicts.
+        prop_assert_eq!(
+            ab.datom_set(),
+            ba.datom_set(),
+            "INV-FERR-001: datom sets must be identical regardless of merge order"
         );
     }
 }

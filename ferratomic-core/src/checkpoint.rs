@@ -15,17 +15,18 @@
 //! +------------------+
 //! | Epoch    (8B)    | u64 little-endian
 //! +------------------+
-//! | Length   (4B)    | u32 byte count of JSON payload
+//! | Length   (4B)    | u32 byte count of bincode payload
 //! +------------------+
-//! | Payload  (N)     | JSON: { schema, genesis_agent, datoms }
+//! | Payload  (N)     | bincode: { schema, genesis_agent, datoms }
 //! +------------------+
 //! | BLAKE3   (32B)   | Hash of all preceding bytes
 //! +------------------+
 //! ```
 //!
-//! The payload uses JSON serialization for consistency with the WAL
-//! (Phase 4a). Phase 4b may switch to bincode or compressed format
-//! for the INV-FERR-028 cold-start target at 100M datoms.
+//! CR-005: The payload uses bincode serialization (matching the WAL format)
+//! for INV-FERR-028 compliance. At 100M datoms, bincode produces ~20GB
+//! (parseable in <5s on `NVMe`). Per ADR-FERR-010, deserialization goes through
+//! wire types (`WireCheckpointPayload`) for trust boundary enforcement.
 
 use std::{
     collections::BTreeMap,
@@ -35,7 +36,7 @@ use std::{
 };
 
 use ferratom::{AgentId, AttributeDef, Datom, FerraError};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use crate::store::Store;
 
@@ -54,11 +55,13 @@ const HASH_SIZE: usize = 32;
 /// Minimum checkpoint file size: header + hash (empty payload).
 const MIN_FILE_SIZE: usize = HEADER_SIZE + HASH_SIZE;
 
-/// JSON-serializable checkpoint payload.
+/// JSON-serializable checkpoint payload (serialization only).
 ///
+/// ADR-FERR-010: Deserialization uses `WireCheckpointPayload` from the
+/// `ferratom::wire` module instead. This struct retains `Serialize` only.
 /// Schema attributes are sorted by name for deterministic output.
 /// Datoms are in `OrdSet` iteration order (`Datom`'s `Ord` impl = EAVT).
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize)]
 struct CheckpointPayload {
     /// Schema attributes as sorted (name, definition) pairs.
     schema: Vec<(String, AttributeDef)>,
@@ -98,8 +101,11 @@ pub(crate) fn serialize_checkpoint_bytes(store: &Store) -> Result<Vec<u8>, Ferra
         datoms: store.datoms().cloned().collect(),
     };
 
+    // CR-005: Use bincode instead of JSON for INV-FERR-028 compliance.
+    // At 100M datoms, bincode produces ~20GB (parseable in <5s on NVMe);
+    // JSON produces ~50GB (unparseable in the time budget).
     let payload_bytes =
-        serde_json::to_vec(&payload).map_err(|e| FerraError::CheckpointWrite(e.to_string()))?;
+        bincode::serialize(&payload).map_err(|e| FerraError::CheckpointWrite(e.to_string()))?;
 
     let payload_len = u32::try_from(payload_bytes.len()).map_err(|_| {
         FerraError::CheckpointWrite(format!(
@@ -154,18 +160,26 @@ pub(crate) fn deserialize_checkpoint_bytes(data: &[u8]) -> Result<Store, FerraEr
     // Parse header and extract payload.
     let (epoch, payload_bytes) = parse_header(content)?;
 
-    // Deserialize and reconstruct.
-    let payload: CheckpointPayload =
-        serde_json::from_slice(payload_bytes).map_err(|e| FerraError::CheckpointCorrupted {
-            expected: "valid JSON payload".to_string(),
+    // CR-005 + ADR-FERR-010: Deserialize as wire checkpoint payload using
+    // bincode, then convert through trust boundary. BLAKE3 verified above.
+    let wire_payload: ferratom::wire::WireCheckpointPayload =
+        bincode::deserialize(payload_bytes).map_err(|e| FerraError::CheckpointCorrupted {
+            expected: "valid bincode payload".to_string(),
             actual: e.to_string(),
         })?;
 
+    // ADR-FERR-010: Convert wire datoms to core datoms through trust boundary.
+    let datoms: Vec<ferratom::Datom> = wire_payload
+        .datoms
+        .into_iter()
+        .map(ferratom::wire::WireDatom::into_trusted)
+        .collect();
+
     Ok(Store::from_checkpoint(
         epoch,
-        payload.genesis_agent,
-        payload.schema,
-        payload.datoms,
+        wire_payload.genesis_agent,
+        wire_payload.schema,
+        datoms,
     ))
 }
 
@@ -176,6 +190,11 @@ pub(crate) fn deserialize_checkpoint_bytes(data: &[u8]) -> Result<Store, FerraEr
 /// can reconstruct exactly. A trailing BLAKE3 hash covers all preceding
 /// bytes for tamper detection.
 ///
+/// HI-001: Write is atomic via write-to-temp-then-rename. A crash during
+/// write leaves the old checkpoint intact (the temp file is discarded).
+/// HI-003: Parent directory is fsynced after rename to ensure the new
+/// directory entry is durable on ext4/XFS.
+///
 /// # Errors
 ///
 /// Returns `FerraError::CheckpointWrite` if file creation, serialization,
@@ -183,20 +202,50 @@ pub(crate) fn deserialize_checkpoint_bytes(data: &[u8]) -> Result<Store, FerraEr
 pub fn write_checkpoint(store: &Store, path: &Path) -> Result<(), FerraError> {
     let buf = serialize_checkpoint_bytes(store)?;
 
-    // Write atomically: write to file, then fsync.
-    let file = File::create(path).map_err(|e| FerraError::CheckpointWrite(e.to_string()))?;
-    let mut writer = BufWriter::new(file);
-    writer
-        .write_all(&buf)
-        .map_err(|e| FerraError::CheckpointWrite(e.to_string()))?;
-    writer
-        .flush()
-        .map_err(|e| FerraError::CheckpointWrite(e.to_string()))?;
-    writer
-        .get_ref()
+    // HI-001: Atomic write via temp file + rename. A crash between
+    // temp creation and rename leaves the original checkpoint intact.
+    let parent = path
+        .parent()
+        .ok_or_else(|| FerraError::CheckpointWrite("path has no parent directory".to_string()))?;
+    let tmp_path = parent.join(".checkpoint.tmp");
+
+    // Write to temp file and fsync the data.
+    {
+        let file =
+            File::create(&tmp_path).map_err(|e| FerraError::CheckpointWrite(e.to_string()))?;
+        let mut writer = BufWriter::new(file);
+        writer
+            .write_all(&buf)
+            .map_err(|e| FerraError::CheckpointWrite(e.to_string()))?;
+        writer
+            .flush()
+            .map_err(|e| FerraError::CheckpointWrite(e.to_string()))?;
+        writer
+            .get_ref()
+            .sync_all()
+            .map_err(|e| FerraError::CheckpointWrite(e.to_string()))?;
+    }
+
+    // Atomic rename (POSIX guarantees atomicity for same-filesystem rename).
+    std::fs::rename(&tmp_path, path).map_err(|e| FerraError::CheckpointWrite(e.to_string()))?;
+
+    // HI-003: fsync parent directory to ensure the new directory entry
+    // is durable. Required on ext4/XFS for metadata durability.
+    fsync_parent_dir(parent)?;
+
+    Ok(())
+}
+
+/// Fsync a parent directory to ensure directory entry durability (HI-002, HI-003).
+///
+/// Required on ext4, XFS, and other journaling filesystems where file
+/// data may be durable but directory entries are not until the parent
+/// directory is fsynced.
+fn fsync_parent_dir(dir: &Path) -> Result<(), FerraError> {
+    let dir_file = File::open(dir).map_err(|e| FerraError::CheckpointWrite(e.to_string()))?;
+    dir_file
         .sync_all()
         .map_err(|e| FerraError::CheckpointWrite(e.to_string()))?;
-
     Ok(())
 }
 
@@ -226,7 +275,9 @@ pub fn load_checkpoint(path: &Path) -> Result<Store, FerraError> {
 ///
 /// Returns `FerraError::Io` on read failure or `FerraError::CheckpointCorrupted`
 /// on checksum/format errors.
-pub(crate) fn load_checkpoint_from_reader<R: std::io::Read>(reader: &mut R) -> Result<Store, FerraError> {
+pub(crate) fn load_checkpoint_from_reader<R: std::io::Read>(
+    reader: &mut R,
+) -> Result<Store, FerraError> {
     let mut data = Vec::new();
     reader
         .read_to_end(&mut data)
@@ -379,7 +430,7 @@ mod tests {
                 Value::String(Arc::from("hello world")),
             )
             .commit_unchecked();
-        store.transact(tx).unwrap();
+        store.transact_test(tx).unwrap();
 
         let dir = tempfile::TempDir::new().unwrap();
         let path = dir.path().join("checkpoint.chkp");

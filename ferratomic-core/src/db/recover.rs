@@ -7,18 +7,21 @@
 //! All constructors in this module attach a WAL for post-recovery durability.
 //! They return `Database<Ready>` directly.
 
-use std::{marker::PhantomData, path::Path, sync::{atomic::AtomicU64, Mutex}};
+use std::{
+    marker::PhantomData,
+    path::Path,
+    sync::{atomic::AtomicU64, Mutex},
+};
 
 use arc_swap::ArcSwap;
-use ferratom::FerraError;
+use ferratom::{wire::WireDatom, FerraError, HybridClock};
 
+use super::{Database, Ready};
 use crate::{
     observer::{ObserverBroadcast, DEFAULT_OBSERVER_BUFFER},
     store::Store,
     wal::Wal,
 };
-
-use super::{Database, Ready};
 
 impl Database<Ready> {
     /// Create a genesis database backed by a WAL file.
@@ -32,13 +35,18 @@ impl Database<Ready> {
     /// Returns `FerraError::Io` if the WAL file cannot be created.
     pub fn genesis_with_wal(wal_path: &Path) -> Result<Self, FerraError> {
         let wal = Wal::create(wal_path)?;
+        let store = Store::genesis();
+        let agent = store.genesis_agent();
         Ok(Self {
-            current: ArcSwap::from_pointee(Store::genesis()),
+            current: ArcSwap::from_pointee(store),
             write_lock: Mutex::new(()),
             wal: Mutex::new(Some(wal)),
             observers: Mutex::new(ObserverBroadcast::new(DEFAULT_OBSERVER_BUFFER)),
-            write_limiter: crate::backpressure::WriteLimiter::new(&crate::backpressure::BackpressurePolicy::default()),
+            write_limiter: crate::backpressure::WriteLimiter::new(
+                &crate::backpressure::BackpressurePolicy::default(),
+            ),
             transaction_count: AtomicU64::new(0),
+            clock: Mutex::new(HybridClock::new(agent)),
             _state: PhantomData,
         })
     }
@@ -57,20 +65,30 @@ impl Database<Ready> {
 
         let mut store = Store::genesis();
         for entry in &entries {
-            let datoms: Vec<ferratom::Datom> = bincode::deserialize(&entry.payload)
+            // ADR-FERR-010: Deserialize as wire types, then convert through
+            // trust boundary. CRC was verified by Wal::recover().
+            let wire_datoms: Vec<WireDatom> = bincode::deserialize(&entry.payload)
                 .map_err(|e| FerraError::WalRead(e.to_string()))?;
+            let datoms: Vec<ferratom::Datom> = wire_datoms
+                .into_iter()
+                .map(ferratom::wire::WireDatom::into_trusted)
+                .collect();
             // INV-FERR-014: replay restores full state (datoms + schema + epoch),
             // not just raw datom insertion.
             store.replay_entry(entry.epoch, &datoms)?;
         }
 
+        let agent = store.genesis_agent();
         Ok(Self {
             current: ArcSwap::from_pointee(store),
             write_lock: Mutex::new(()),
             wal: Mutex::new(Some(wal)),
             observers: Mutex::new(ObserverBroadcast::new(DEFAULT_OBSERVER_BUFFER)),
-            write_limiter: crate::backpressure::WriteLimiter::new(&crate::backpressure::BackpressurePolicy::default()),
+            write_limiter: crate::backpressure::WriteLimiter::new(
+                &crate::backpressure::BackpressurePolicy::default(),
+            ),
             transaction_count: AtomicU64::new(0),
+            clock: Mutex::new(HybridClock::new(agent)),
             _state: PhantomData,
         })
     }
@@ -96,20 +114,29 @@ impl Database<Ready> {
 
         for entry in &entries {
             if entry.epoch > checkpoint_epoch {
-                let datoms: Vec<ferratom::Datom> = bincode::deserialize(&entry.payload)
+                // ADR-FERR-010: Deserialize as wire types, convert through trust boundary.
+                let wire_datoms: Vec<WireDatom> = bincode::deserialize(&entry.payload)
                     .map_err(|e| FerraError::WalRead(e.to_string()))?;
+                let datoms: Vec<ferratom::Datom> = wire_datoms
+                    .into_iter()
+                    .map(ferratom::wire::WireDatom::into_trusted)
+                    .collect();
                 // INV-FERR-014: replay restores full state (datoms + schema + epoch).
                 store.replay_entry(entry.epoch, &datoms)?;
             }
         }
 
+        let agent = store.genesis_agent();
         Ok(Self {
             current: ArcSwap::from_pointee(store),
             write_lock: Mutex::new(()),
             wal: Mutex::new(Some(wal)),
             observers: Mutex::new(ObserverBroadcast::new(DEFAULT_OBSERVER_BUFFER)),
-            write_limiter: crate::backpressure::WriteLimiter::new(&crate::backpressure::BackpressurePolicy::default()),
+            write_limiter: crate::backpressure::WriteLimiter::new(
+                &crate::backpressure::BackpressurePolicy::default(),
+            ),
             transaction_count: AtomicU64::new(0),
+            clock: Mutex::new(HybridClock::new(agent)),
             _state: PhantomData,
         })
     }
@@ -124,13 +151,17 @@ impl Database<Ready> {
     /// Returns `FerraError::Io` if the WAL file cannot be created.
     pub fn from_store_with_wal(store: Store, wal_path: &Path) -> Result<Self, FerraError> {
         let wal = Wal::create(wal_path)?;
+        let agent = store.genesis_agent();
         Ok(Self {
             current: ArcSwap::from_pointee(store),
             write_lock: Mutex::new(()),
             wal: Mutex::new(Some(wal)),
             observers: Mutex::new(ObserverBroadcast::new(DEFAULT_OBSERVER_BUFFER)),
-            write_limiter: crate::backpressure::WriteLimiter::new(&crate::backpressure::BackpressurePolicy::default()),
+            write_limiter: crate::backpressure::WriteLimiter::new(
+                &crate::backpressure::BackpressurePolicy::default(),
+            ),
             transaction_count: AtomicU64::new(0),
+            clock: Mutex::new(HybridClock::new(agent)),
             _state: PhantomData,
         })
     }

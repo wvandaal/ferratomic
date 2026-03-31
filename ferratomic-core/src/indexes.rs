@@ -97,25 +97,49 @@ impl<K: Ord + Clone + std::fmt::Debug, V: Clone + std::fmt::Debug> IndexBackend<
 ///
 /// Access pattern: "all facts about entity E".
 #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
-pub struct EavtKey(pub EntityId, pub Attribute, pub Value, pub TxId, pub Op);
+pub struct EavtKey(
+    pub(crate) EntityId,
+    pub(crate) Attribute,
+    pub(crate) Value,
+    pub(crate) TxId,
+    pub(crate) Op,
+);
 
 /// AEVT key: sorted by (attribute, entity, value, tx, op) (INV-FERR-005).
 ///
 /// Access pattern: "all entities with attribute A".
 #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
-pub struct AevtKey(pub Attribute, pub EntityId, pub Value, pub TxId, pub Op);
+pub struct AevtKey(
+    pub(crate) Attribute,
+    pub(crate) EntityId,
+    pub(crate) Value,
+    pub(crate) TxId,
+    pub(crate) Op,
+);
 
 /// VAET key: sorted by (value, attribute, entity, tx, op) (INV-FERR-005).
 ///
 /// Access pattern: "reverse reference -- who points to this entity?"
 #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
-pub struct VaetKey(pub Value, pub Attribute, pub EntityId, pub TxId, pub Op);
+pub struct VaetKey(
+    pub(crate) Value,
+    pub(crate) Attribute,
+    pub(crate) EntityId,
+    pub(crate) TxId,
+    pub(crate) Op,
+);
 
 /// AVET key: sorted by (attribute, value, entity, tx, op) (INV-FERR-005).
 ///
 /// Access pattern: "unique lookup by attribute + value pair".
 #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
-pub struct AvetKey(pub Attribute, pub Value, pub EntityId, pub TxId, pub Op);
+pub struct AvetKey(
+    pub(crate) Attribute,
+    pub(crate) Value,
+    pub(crate) EntityId,
+    pub(crate) TxId,
+    pub(crate) Op,
+);
 
 impl EavtKey {
     /// Construct an EAVT key from a datom reference (INV-FERR-005).
@@ -329,6 +353,24 @@ where
     #[must_use]
     pub fn verify_bijection(&self) -> bool {
         let n = self.eavt.backend_len();
-        self.aevt.backend_len() == n && self.vaet.backend_len() == n && self.avet.backend_len() == n
+        if self.aevt.backend_len() != n
+            || self.vaet.backend_len() != n
+            || self.avet.backend_len() != n
+        {
+            return false;
+        }
+        // ME-003: In debug/test builds, also verify datom identity —
+        // not just cardinality. A bug that inserts different datoms into
+        // different indexes would pass the count-only check.
+        #[cfg(any(test, debug_assertions))]
+        {
+            use std::collections::BTreeSet;
+            let eavt_datoms: BTreeSet<_> = self.eavt.backend_values().collect();
+            let aevt_datoms: BTreeSet<_> = self.aevt.backend_values().collect();
+            if eavt_datoms != aevt_datoms {
+                return false;
+            }
+        }
+        true
     }
 }

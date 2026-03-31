@@ -33,8 +33,8 @@ mod checkpoint;
 
 use std::collections::BTreeSet;
 
-use ferratom::{AgentId, Attribute, AttributeDef, Datom, Schema};
-use im::OrdSet;
+use ferratom::{AgentId, Attribute, AttributeDef, Datom, EntityId, Op, Schema, Value};
+use im::{OrdMap, OrdSet};
 
 use crate::indexes::Indexes;
 
@@ -141,6 +141,12 @@ pub struct Store {
     /// The agent identity used for genesis transactions.
     /// Stored so callers can create transactions against this store.
     pub(crate) genesis_agent: AgentId,
+    /// INV-FERR-029/032: Incrementally maintained LIVE view.
+    /// Maps (entity, attribute) → set of non-retracted values.
+    /// Card-one: `live_resolve` returns the LWW (highest-epoch) value.
+    /// Card-many: `live_resolve` returns all non-retracted values.
+    /// Updated O(k) per transaction, O(1) read.
+    pub(crate) live_set: OrdMap<(EntityId, Attribute), OrdSet<Value>>,
 }
 
 impl Store {
@@ -157,12 +163,14 @@ impl Store {
     pub fn from_datoms(datoms: BTreeSet<Datom>) -> Self {
         let ord_set: OrdSet<Datom> = datoms.into_iter().collect();
         let indexes = Indexes::from_datoms(ord_set.iter());
+        let live_set = build_live_set(ord_set.iter());
         Self {
             datoms: ord_set,
             indexes,
             schema: Schema::empty(),
             epoch: 0,
             genesis_agent: AgentId::from_bytes([0u8; 16]),
+            live_set,
         }
     }
 
@@ -184,12 +192,14 @@ impl Store {
         }
         let ord_set: OrdSet<Datom> = datoms.into_iter().collect();
         let indexes = Indexes::from_datoms(ord_set.iter());
+        let live_set = build_live_set(ord_set.iter());
         Self {
             datoms: ord_set,
             indexes,
             schema,
             epoch,
             genesis_agent,
+            live_set,
         }
     }
 
@@ -207,6 +217,7 @@ impl Store {
             schema: crate::schema_evolution::genesis_schema(),
             epoch: 0,
             genesis_agent: AgentId::from_bytes([0u8; 16]),
+            live_set: OrdMap::new(),
         }
     }
 
@@ -279,6 +290,52 @@ impl Store {
         self.epoch
     }
 
+    /// Resolve the LIVE value(s) for an entity-attribute pair.
+    ///
+    /// INV-FERR-029: Returns the set of non-retracted values.
+    /// INV-FERR-032: For card-one attributes, the caller should take the
+    /// value with the highest `TxId` epoch (LWW). For card-many, all values
+    /// are current. This method returns the raw set; callers apply
+    /// cardinality resolution.
+    #[must_use]
+    pub fn live_values(&self, entity: EntityId, attribute: &Attribute) -> Option<&OrdSet<Value>> {
+        self.live_set.get(&(entity, attribute.clone()))
+    }
+
+    /// Resolve a single LIVE value for a card-one entity-attribute pair.
+    ///
+    /// INV-FERR-032: For cardinality-one, returns the latest (highest in
+    /// `OrdSet` iteration order) non-retracted value, or `None` if fully
+    /// retracted or never asserted.
+    #[must_use]
+    pub fn live_resolve(&self, entity: EntityId, attribute: &Attribute) -> Option<&Value> {
+        self.live_set
+            .get(&(entity, attribute.clone()))
+            .and_then(|vals| vals.get_max())
+    }
+
+    /// Update the LIVE set for a single datom (incremental maintenance).
+    ///
+    /// INV-FERR-029: O(1) per datom. Assertions insert into the value set;
+    /// retractions remove from it. Empty sets are pruned.
+    pub(crate) fn live_apply(&mut self, datom: &Datom) {
+        let key = (datom.entity(), datom.attribute().clone());
+        match datom.op() {
+            Op::Assert => {
+                let vals = self.live_set.entry(key).or_default();
+                vals.insert(datom.value().clone());
+            }
+            Op::Retract => {
+                if let Some(vals) = self.live_set.get_mut(&key) {
+                    vals.remove(datom.value());
+                    if vals.is_empty() {
+                        self.live_set.remove(&key);
+                    }
+                }
+            }
+        }
+    }
+
     /// Take an immutable point-in-time snapshot of the store.
     ///
     /// INV-FERR-006: the returned snapshot is frozen. Subsequent
@@ -292,6 +349,34 @@ impl Store {
             epoch: self.epoch,
         }
     }
+}
+
+/// Build a LIVE set from an iterator of datoms (full rebuild).
+///
+/// INV-FERR-029: Used during cold start, checkpoint load, and merge.
+/// Processes datoms in iteration order (EAVT by `Datom::Ord`).
+fn build_live_set<'a>(
+    datoms: impl Iterator<Item = &'a Datom>,
+) -> OrdMap<(EntityId, Attribute), OrdSet<Value>> {
+    let mut live: OrdMap<(EntityId, Attribute), OrdSet<Value>> = OrdMap::new();
+    for datom in datoms {
+        let key = (datom.entity(), datom.attribute().clone());
+        match datom.op() {
+            Op::Assert => {
+                let vals = live.entry(key).or_default();
+                vals.insert(datom.value().clone());
+            }
+            Op::Retract => {
+                if let Some(vals) = live.get_mut(&key) {
+                    vals.remove(datom.value());
+                    if vals.is_empty() {
+                        live.remove(&key);
+                    }
+                }
+            }
+        }
+    }
+    live
 }
 
 // ---------------------------------------------------------------------------

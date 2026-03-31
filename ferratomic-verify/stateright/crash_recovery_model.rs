@@ -200,8 +200,7 @@ impl Model for CrashRecoveryModel {
                 // Transaction not yet visible in the store (commit not published).
                 next.wal = next.wal.union(&pending).cloned().collect();
                 // Commit immediately: WAL fsynced → apply to store.
-                next.committed_store =
-                    next.committed_store.union(&pending).cloned().collect();
+                next.committed_store = next.committed_store.union(&pending).cloned().collect();
                 next.committed_count += 1;
                 next.phase = Phase::Idle;
             }
@@ -282,11 +281,7 @@ impl Model for CrashRecoveryModel {
                 "inv_ferr_014_recovery_preserves_committed",
                 |_: &CrashRecoveryModel, state: &CrashRecoveryState| {
                     match &state.phase {
-                        Phase::Recovered => {
-                            state
-                                .committed_store
-                                .is_subset(&state.recovered_store)
-                        }
+                        Phase::Recovered => state.committed_store.is_subset(&state.recovered_store),
                         _ => true, // Property only meaningful in Recovered phase
                     }
                 },
@@ -298,15 +293,9 @@ impl Model for CrashRecoveryModel {
             // during Recover, this simplifies to recovered == committed.
             Property::always(
                 "inv_ferr_014_no_phantom_datoms",
-                |_: &CrashRecoveryModel, state: &CrashRecoveryState| {
-                    match &state.phase {
-                        Phase::Recovered => {
-                            state
-                                .recovered_store
-                                .is_subset(&state.committed_store)
-                        }
-                        _ => true,
-                    }
+                |_: &CrashRecoveryModel, state: &CrashRecoveryState| match &state.phase {
+                    Phase::Recovered => state.recovered_store.is_subset(&state.committed_store),
+                    _ => true,
                 },
             ),
             // INV-FERR-014 Idempotency: recovered store equals committed
@@ -314,13 +303,9 @@ impl Model for CrashRecoveryModel {
             // to committed_store during recovery).
             Property::always(
                 "inv_ferr_014_recovery_idempotent",
-                |_: &CrashRecoveryModel, state: &CrashRecoveryState| {
-                    match &state.phase {
-                        Phase::Recovered => {
-                            state.recovered_store == state.committed_store
-                        }
-                        _ => true,
-                    }
+                |_: &CrashRecoveryModel, state: &CrashRecoveryState| match &state.phase {
+                    Phase::Recovered => state.recovered_store == state.committed_store,
+                    _ => true,
                 },
             ),
             // Liveness: a recovered state is reachable.
@@ -334,8 +319,7 @@ impl Model for CrashRecoveryModel {
             Property::sometimes(
                 "inv_ferr_014_write_crash_recovery_reachable",
                 |_: &CrashRecoveryModel, state: &CrashRecoveryState| {
-                    matches!(&state.phase, Phase::Recovered)
-                        && !state.committed_store.is_empty()
+                    matches!(&state.phase, Phase::Recovered) && !state.committed_store.is_empty()
                 },
             ),
         ]
@@ -352,9 +336,9 @@ mod tests {
 
     use stateright::{Checker, Model};
 
-    use super::super::crdt_model::Datom;
     use super::{
-        CrashRecoveryAction, CrashRecoveryModel, CrashRecoveryState, Phase,
+        super::crdt_model::Datom, CrashRecoveryAction, CrashRecoveryModel, CrashRecoveryState,
+        Phase,
     };
 
     fn datom(seed: u64) -> Datom {
@@ -495,11 +479,15 @@ mod tests {
         let s1 = model
             .next_state(&init, CrashRecoveryAction::BeginWrite(d0.clone()))
             .unwrap();
-        let s2 = model.next_state(&s1, CrashRecoveryAction::FsyncWal).unwrap();
+        let s2 = model
+            .next_state(&s1, CrashRecoveryAction::FsyncWal)
+            .unwrap();
         let s3 = model
             .next_state(&s2, CrashRecoveryAction::BeginWrite(d1.clone()))
             .unwrap();
-        let s4 = model.next_state(&s3, CrashRecoveryAction::FsyncWal).unwrap();
+        let s4 = model
+            .next_state(&s3, CrashRecoveryAction::FsyncWal)
+            .unwrap();
 
         // Crash and recover.
         let crashed = model

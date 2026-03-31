@@ -95,7 +95,7 @@ mod tests {
                 Value::String(Arc::from("bytes round-trip test")),
             )
             .commit_unchecked();
-        store.transact(tx).expect("transact ok");
+        store.transact_test(tx).expect("transact ok");
 
         let bytes = store
             .to_checkpoint_bytes()

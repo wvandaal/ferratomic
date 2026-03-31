@@ -8,8 +8,7 @@
 //! - Schema evolution logic (transact-time attribute installation)
 //! - Value type and cardinality parsing from datom keywords
 
-use std::collections::HashMap;
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use ferratom::{
     Attribute, AttributeDef, Cardinality, Datom, EntityId, FerraError, ResolutionMode, Schema,
@@ -23,51 +22,108 @@ use ferratom::{
 /// other attribute is defined by transacting datoms that reference
 /// these 19. This is the schema-as-data bootstrap (C3, C7).
 #[must_use]
+/// Helper: LWW keyword attribute definition for genesis schema.
+fn lww_kw(doc: &str) -> AttributeDef {
+    AttributeDef::new(ValueType::Keyword, Cardinality::One, ResolutionMode::Lww, Some(Arc::from(doc)))
+}
+
+/// Helper: LWW string attribute definition for genesis schema.
+fn lww_str(doc: &str) -> AttributeDef {
+    AttributeDef::new(ValueType::String, Cardinality::One, ResolutionMode::Lww, Some(Arc::from(doc)))
+}
+
+/// Helper: LWW boolean attribute definition for genesis schema.
+fn lww_bool(doc: &str) -> AttributeDef {
+    AttributeDef::new(ValueType::Boolean, Cardinality::One, ResolutionMode::Lww, Some(Arc::from(doc)))
+}
+
+/// Helper: LWW ref attribute definition for genesis schema.
+fn lww_ref(doc: &str) -> AttributeDef {
+    AttributeDef::new(ValueType::Ref, Cardinality::One, ResolutionMode::Lww, Some(Arc::from(doc)))
+}
+
+/// Helper: LWW instant attribute definition for genesis schema.
+fn lww_instant(doc: &str) -> AttributeDef {
+    AttributeDef::new(ValueType::Instant, Cardinality::One, ResolutionMode::Lww, Some(Arc::from(doc)))
+}
+
 pub(crate) fn genesis_schema() -> Schema {
     let mut schema = Schema::empty();
+    define_meta_schema(&mut schema);
+    define_tx_schema(&mut schema);
+    schema
+}
 
-    let lww_kw = |doc: &str| AttributeDef::new(
-        ValueType::Keyword, Cardinality::One, ResolutionMode::Lww, Some(Arc::from(doc)),
-    );
-    let lww_str = |doc: &str| AttributeDef::new(
-        ValueType::String, Cardinality::One, ResolutionMode::Lww, Some(Arc::from(doc)),
-    );
-    let lww_bool = |doc: &str| AttributeDef::new(
-        ValueType::Boolean, Cardinality::One, ResolutionMode::Lww, Some(Arc::from(doc)),
-    );
-    let lww_ref = |doc: &str| AttributeDef::new(
-        ValueType::Ref, Cardinality::One, ResolutionMode::Lww, Some(Arc::from(doc)),
-    );
-    let lww_instant = |doc: &str| AttributeDef::new(
-        ValueType::Instant, Cardinality::One, ResolutionMode::Lww, Some(Arc::from(doc)),
-    );
-
+/// Attributes 1-14: db/* (meta-schema) and lattice/* definitions.
+fn define_meta_schema(schema: &mut Schema) {
     // 1-9: db/* attributes (meta-schema)
-    schema.define(Attribute::from("db/ident"), lww_kw("Attribute identity keyword"));
-    schema.define(Attribute::from("db/valueType"), lww_kw("Declared value type"));
-    schema.define(Attribute::from("db/cardinality"), lww_kw("Cardinality: one or many"));
+    schema.define(
+        Attribute::from("db/ident"),
+        lww_kw("Attribute identity keyword"),
+    );
+    schema.define(
+        Attribute::from("db/valueType"),
+        lww_kw("Declared value type"),
+    );
+    schema.define(
+        Attribute::from("db/cardinality"),
+        lww_kw("Cardinality: one or many"),
+    );
     schema.define(Attribute::from("db/doc"), lww_str("Documentation string"));
-    schema.define(Attribute::from("db/unique"), lww_kw("Uniqueness constraint"));
-    schema.define(Attribute::from("db/isComponent"), lww_bool("Component ownership"));
-    schema.define(Attribute::from("db/resolutionMode"), lww_kw("CRDT conflict resolution mode"));
-    schema.define(Attribute::from("db/latticeOrder"), lww_ref("Reference to lattice definition"));
+    schema.define(
+        Attribute::from("db/unique"),
+        lww_kw("Uniqueness constraint"),
+    );
+    schema.define(
+        Attribute::from("db/isComponent"),
+        lww_bool("Component ownership"),
+    );
+    schema.define(
+        Attribute::from("db/resolutionMode"),
+        lww_kw("CRDT conflict resolution mode"),
+    );
+    schema.define(
+        Attribute::from("db/latticeOrder"),
+        lww_ref("Reference to lattice definition"),
+    );
     schema.define(Attribute::from("db/lwwClock"), lww_kw("LWW clock source"));
 
     // 10-14: lattice/* attributes (lattice definitions)
     schema.define(Attribute::from("lattice/ident"), lww_kw("Lattice name"));
-    schema.define(Attribute::from("lattice/elements"), lww_str("Ordered element list"));
-    schema.define(Attribute::from("lattice/comparator"), lww_str("Comparison function"));
+    schema.define(
+        Attribute::from("lattice/elements"),
+        lww_str("Ordered element list"),
+    );
+    schema.define(
+        Attribute::from("lattice/comparator"),
+        lww_str("Comparison function"),
+    );
     schema.define(Attribute::from("lattice/bottom"), lww_kw("Least element"));
     schema.define(Attribute::from("lattice/top"), lww_kw("Greatest element"));
+}
 
-    // 15-19: tx/* attributes (transaction metadata)
-    schema.define(Attribute::from("tx/time"), lww_instant("Transaction wall-clock time"));
-    schema.define(Attribute::from("tx/agent"), lww_ref("Agent that created transaction"));
-    schema.define(Attribute::from("tx/provenance"), lww_str("Provenance description"));
-    schema.define(Attribute::from("tx/rationale"), lww_str("Why this transaction exists"));
-    schema.define(Attribute::from("tx/coherence-override"), lww_str("Manual coherence exemption"));
-
-    schema
+/// Attributes 15-19: tx/* transaction metadata.
+fn define_tx_schema(schema: &mut Schema) {
+    schema.define(
+        Attribute::from("tx/time"),
+        lww_instant("Transaction wall-clock time"),
+    );
+    schema.define(
+        Attribute::from("tx/agent"),
+        lww_ref("Agent that created transaction"),
+    );
+    schema.define(
+        Attribute::from("tx/provenance"),
+        lww_str("Provenance description"),
+    );
+    schema.define(
+        Attribute::from("tx/rationale"),
+        lww_str("Why this transaction exists"),
+    );
+    schema.define(
+        Attribute::from("tx/coherence-override"),
+        lww_str("Manual coherence exemption"),
+    );
 }
 
 /// Scan datoms for schema-defining patterns and install new attributes (INV-FERR-009).
@@ -133,7 +189,11 @@ fn extract_attribute_def(
             if let Some(vt) = parse_value_type(kw) {
                 if let Some(ref prev) = vtype {
                     if *prev != vt {
-                        return Err(schema_violation("db/valueType", &format!("{prev:?}"), &format!("{vt:?}")));
+                        return Err(schema_violation(
+                            "db/valueType",
+                            &format!("{prev:?}"),
+                            &format!("{vt:?}"),
+                        ));
                     }
                 }
                 vtype = Some(vt);
@@ -142,7 +202,11 @@ fn extract_attribute_def(
             if let Some(c) = parse_cardinality(kw) {
                 if let Some(ref prev) = card {
                     if *prev != c {
-                        return Err(schema_violation("db/cardinality", &format!("{prev:?}"), &format!("{c:?}")));
+                        return Err(schema_violation(
+                            "db/cardinality",
+                            &format!("{prev:?}"),
+                            &format!("{c:?}"),
+                        ));
                     }
                 }
                 card = Some(c);

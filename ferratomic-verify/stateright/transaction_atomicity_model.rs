@@ -215,10 +215,7 @@ impl Model for TxAtomicityModel {
         let mut next = state.clone();
         match action {
             TxAction::StartTx(datom_ids) => {
-                if next.pending_tx.is_some()
-                    || next.crashed
-                    || next.current_epoch > MAX_EPOCH
-                {
+                if next.pending_tx.is_some() || next.crashed || next.current_epoch > MAX_EPOCH {
                     return None;
                 }
                 next.pending_tx = Some(PendingTx {
@@ -385,8 +382,7 @@ impl Model for TxAtomicityModel {
                     // the normal operating state.
                     let committed_set: BTreeSet<&CommittedTx> =
                         state.committed_txns.iter().collect();
-                    let wal_set: BTreeSet<&CommittedTx> =
-                        state.durable_wal.iter().collect();
+                    let wal_set: BTreeSet<&CommittedTx> = state.durable_wal.iter().collect();
                     committed_set == wal_set
                 },
             ),
@@ -460,10 +456,7 @@ mod tests {
             "INV-FERR-020: exactly one tx committed"
         );
         let tx = &state.committed_txns[0];
-        assert_eq!(
-            tx.epoch, 1,
-            "INV-FERR-020: first tx gets epoch 1"
-        );
+        assert_eq!(tx.epoch, 1, "INV-FERR-020: first tx gets epoch 1");
         assert_eq!(
             tx.datom_ids,
             datom_set(&[0, 1, 2]),
@@ -487,7 +480,11 @@ mod tests {
         }
 
         let epochs: Vec<u64> = state.committed_txns.iter().map(|t| t.epoch).collect();
-        assert_eq!(epochs, vec![1, 2], "INV-FERR-020: distinct monotonic epochs");
+        assert_eq!(
+            epochs,
+            vec![1, 2],
+            "INV-FERR-020: distinct monotonic epochs"
+        );
     }
 
     // -----------------------------------------------------------------------

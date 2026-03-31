@@ -10,9 +10,8 @@ mod entity;
 mod value;
 
 pub use entity::EntityId;
-pub use value::{Attribute, NonNanFloat, Value};
-
 use serde::{Deserialize, Serialize};
+pub use value::{Attribute, NonNanFloat, Value};
 
 use crate::clock::TxId;
 
@@ -46,7 +45,10 @@ pub enum Op {
 /// INV-FERR-018: Immutable after creation. All fields are private. There
 /// are no `&mut self` methods. The only way to "modify" a datom is to
 /// create a new one.
-#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug, Serialize, Deserialize)]
+/// ADR-FERR-010: `Deserialize` is intentionally NOT derived. `Datom` contains
+/// `EntityId`, so deserialization must go through `WireDatom` in the `wire`
+/// module to enforce the trust boundary.
+#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug, Serialize)]
 pub struct Datom {
     /// The entity this datom describes.
     entity: EntityId,

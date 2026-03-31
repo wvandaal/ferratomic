@@ -10,12 +10,10 @@
 use std::time::Instant;
 
 use ferratom::{AgentId, Attribute, EntityId, Value};
-use ferratomic_core::checkpoint::write_checkpoint;
-use ferratomic_core::db::Database;
-use ferratomic_core::indexes::EavtKey;
-use ferratomic_core::storage::cold_start;
-use ferratomic_core::store::Store;
-use ferratomic_core::writer::Transaction;
+use ferratomic_core::{
+    checkpoint::write_checkpoint, db::Database, indexes::EavtKey, storage::cold_start,
+    store::Store, writer::Transaction,
+};
 
 // ---------------------------------------------------------------------------
 // Constants: spec-defined thresholds (generous for CI)
@@ -57,7 +55,7 @@ fn build_store_with_datoms(count: usize) -> Store {
             )
             .commit_unchecked();
         store
-            .transact(tx)
+            .transact_test(tx)
             .unwrap_or_else(|e| panic!("transact {i} failed: {e}"));
     }
 
@@ -70,8 +68,8 @@ fn measure_write_amplification(count: usize) -> f64 {
     let dir = tempfile::TempDir::new().expect("create temp dir for WA test");
     let wal_path = dir.path().join("wa_test.wal");
 
-    let db = Database::genesis_with_wal(&wal_path)
-        .expect("INV-FERR-026: genesis_with_wal must succeed");
+    let db =
+        Database::genesis_with_wal(&wal_path).expect("INV-FERR-026: genesis_with_wal must succeed");
     let agent = AgentId::from_bytes([2u8; 16]);
 
     let mut logical_bytes: u64 = 0;
@@ -90,8 +88,7 @@ fn measure_write_amplification(count: usize) -> f64 {
             ferratom::TxId::new(0, 0, 0),
             ferratom::Op::Assert,
         );
-        let serialized = serde_json::to_vec(&[&datom])
-            .expect("serialize datom for logical size");
+        let serialized = serde_json::to_vec(&[&datom]).expect("serialize datom for logical size");
         logical_bytes += serialized.len() as u64;
 
         let tx = Transaction::new(agent)
@@ -176,13 +173,14 @@ fn threshold_inv_ferr_027_read_latency() {
     let eavt = store.indexes().eavt();
 
     // Warm up: one lookup to fault in pages / warm caches.
-    let warmup_key = EavtKey(
+    let warmup_datom = ferratom::Datom::new(
         lookup_entities[0],
         Attribute::from("db/doc"),
         Value::String("value-0".into()),
         ferratom::TxId::new(0, 0, 0),
         ferratom::Op::Assert,
     );
+    let warmup_key = EavtKey::from_datom(&warmup_datom);
     let _ = eavt.get_prev(&warmup_key);
 
     // Timed lookups: use get_prev which finds the nearest entry <= key.
@@ -190,13 +188,14 @@ fn threshold_inv_ferr_027_read_latency() {
     let start = Instant::now();
 
     for i in 0..lookup_count {
-        let key = EavtKey(
+        let probe = ferratom::Datom::new(
             lookup_entities[i],
             Attribute::from("db/doc"),
             Value::String(format!("value-{i}").into()),
             ferratom::TxId::new(0, 0, 0),
             ferratom::Op::Assert,
         );
+        let key = EavtKey::from_datom(&probe);
         // get_prev returns the greatest key <= the query key.
         // This is the standard EAVT range scan entry point.
         let result = eavt.get_prev(&key);

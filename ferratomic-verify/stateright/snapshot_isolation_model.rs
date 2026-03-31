@@ -126,9 +126,9 @@ impl SnapshotIsolationModel {
         // (e.g., same datom id written at epoch 1 and epoch 3). We only
         // flag a violation if the id is EXCLUSIVELY from future epochs.
         for &datom_id in visible_datoms {
-            let in_past = datoms_by_epoch.iter().any(|(&epoch, ids)| {
-                epoch <= captured_epoch && ids.contains(&datom_id)
-            });
+            let in_past = datoms_by_epoch
+                .iter()
+                .any(|(&epoch, ids)| epoch <= captured_epoch && ids.contains(&datom_id));
             if !in_past && future_datoms.contains(&datom_id) {
                 return false;
             }
@@ -252,9 +252,10 @@ impl Model for SnapshotIsolationModel {
         state.current_epoch <= self.max_epochs
             && state.reader_snapshots.len() <= self.max_readers
             && (state.total_writes as usize) <= self.max_writes
-            && state.datoms_by_epoch.values().all(|ids| {
-                ids.iter().all(|&id| id < self.max_datoms)
-            })
+            && state
+                .datoms_by_epoch
+                .values()
+                .all(|ids| ids.iter().all(|&id| id < self.max_datoms))
     }
 
     fn properties(&self) -> Vec<Property<Self>> {
@@ -624,36 +625,34 @@ mod tests {
         let s1 = model
             .next_state(&state0, SnapshotAction::StartWrite(vec![0]))
             .unwrap();
-        let s2 = model
-            .next_state(&s1, SnapshotAction::CommitWrite)
-            .unwrap();
+        let s2 = model.next_state(&s1, SnapshotAction::CommitWrite).unwrap();
         // Reader 1 captures at epoch 1.
-        let s3 = model
-            .next_state(&s2, SnapshotAction::StartRead)
-            .unwrap();
+        let s3 = model.next_state(&s2, SnapshotAction::StartRead).unwrap();
 
         // Second write + commit: datom 1 at epoch 2.
         let s4 = model
             .next_state(&s3, SnapshotAction::StartWrite(vec![1]))
             .unwrap();
-        let s5 = model
-            .next_state(&s4, SnapshotAction::CommitWrite)
-            .unwrap();
+        let s5 = model.next_state(&s4, SnapshotAction::CommitWrite).unwrap();
         // Reader 2 captures at epoch 2.
-        let s6 = model
-            .next_state(&s5, SnapshotAction::StartRead)
-            .unwrap();
+        let s6 = model.next_state(&s5, SnapshotAction::StartRead).unwrap();
 
         let (epoch_r1, ref datoms_r1) = s6.reader_snapshots[0];
         let (epoch_r2, ref datoms_r2) = s6.reader_snapshots[1];
 
-        assert_eq!(epoch_r1, 1, "INV-FERR-006: first reader captured at epoch 1");
+        assert_eq!(
+            epoch_r1, 1,
+            "INV-FERR-006: first reader captured at epoch 1"
+        );
         assert_eq!(
             *datoms_r1,
             id_set(&[0]),
             "INV-FERR-006: first reader sees only datom 0"
         );
-        assert_eq!(epoch_r2, 2, "INV-FERR-006: second reader captured at epoch 2");
+        assert_eq!(
+            epoch_r2, 2,
+            "INV-FERR-006: second reader captured at epoch 2"
+        );
         assert_eq!(
             *datoms_r2,
             id_set(&[0, 1]),

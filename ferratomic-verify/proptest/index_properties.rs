@@ -6,14 +6,17 @@
 //!
 //! Phase 4a: all tests passing against ferratomic-core implementation.
 
+use std::collections::BTreeSet;
+
 use ferratom::Datom;
-use ferratomic_core::indexes::{EavtKey, IndexBackend};
-use ferratomic_core::merge::merge;
-use ferratomic_core::store::Store;
+use ferratomic_core::{
+    indexes::{EavtKey, IndexBackend},
+    merge::merge,
+    store::Store,
+};
 use ferratomic_verify::generators::*;
 use im::OrdMap;
 use proptest::prelude::*;
-use std::collections::BTreeSet;
 
 /// Verify index bijection: primary set == each secondary index set.
 fn verify_index_bijection(store: &Store) -> bool {
@@ -40,7 +43,7 @@ proptest! {
     ) {
         let mut store = initial;
         for tx in txns {
-            store.transact(tx)
+            store.transact_test(tx)
                 .expect("INV-FERR-005: transact must succeed for committed tx");
             prop_assert!(
                 verify_index_bijection(&store),
@@ -121,7 +124,7 @@ proptest! {
     ) {
         let mut store = Store::genesis();
         for tx in initial_txns {
-            store.transact(tx)
+            store.transact_test(tx)
                 .expect("INV-FERR-006: initial transact must succeed");
         }
 
@@ -129,7 +132,7 @@ proptest! {
         let snap_datoms: BTreeSet<_> = snapshot.datoms().cloned().collect();
 
         for tx in later_txns {
-            store.transact(tx)
+            store.transact_test(tx)
                 .expect("INV-FERR-006: later transact must succeed");
         }
 
@@ -155,20 +158,25 @@ proptest! {
     ) {
         let mut store = Store::genesis();
         for tx in txns {
-            let tx_datoms: BTreeSet<_> = tx.datoms().iter().cloned().collect();
-            store.transact(tx)
+            // ME-020: Use receipt datoms (post-stamp) instead of tx datoms
+            // (pre-stamp with placeholder TxId). The original assertion was
+            // tautological because pre-stamp datoms never match post-stamp
+            // ones in the snapshot, so visible_count was always 0.
+            let receipt = store.transact_test(tx)
                 .expect("INV-FERR-006: transact must succeed for committed tx");
+            let stamped_datoms: BTreeSet<_> = receipt.datoms().iter().cloned().collect();
 
             let snapshot = store.snapshot();
             let visible: BTreeSet<_> = snapshot.datoms().cloned().collect();
 
-            let visible_count = tx_datoms.iter().filter(|d| visible.contains(d)).count();
-            prop_assert!(
-                visible_count == 0 || visible_count == tx_datoms.len(),
-                "INV-FERR-006 violated: partial transaction visibility. \
-                 {} of {} datoms visible",
+            let visible_count = stamped_datoms.iter().filter(|d| visible.contains(d)).count();
+            prop_assert_eq!(
                 visible_count,
-                tx_datoms.len()
+                stamped_datoms.len(),
+                "INV-FERR-006 violated: partial transaction visibility. \
+                 {} of {} post-stamp datoms visible",
+                visible_count,
+                stamped_datoms.len()
             );
         }
     }
@@ -248,7 +256,7 @@ proptest! {
         let mut prev_epoch: Option<u64> = None;
 
         for tx in txns {
-            let receipt = store.transact(tx)
+            let receipt = store.transact_test(tx)
                 .expect("INV-FERR-007: transact must succeed for committed tx");
             if let Some(prev) = prev_epoch {
                 prop_assert!(

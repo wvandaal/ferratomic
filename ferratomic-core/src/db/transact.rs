@@ -9,12 +9,11 @@ use std::sync::{atomic::Ordering, Arc};
 
 use ferratom::{Datom, FerraError};
 
+use super::{Database, Ready};
 use crate::{
     store::{Store, TxReceipt},
     writer::{Committed, Transaction},
 };
-
-use super::{Database, Ready};
 
 impl Database<Ready> {
     /// Apply a committed transaction to the database.
@@ -50,15 +49,33 @@ impl Database<Ready> {
 
         // INV-FERR-007: serialize writes. try_lock returns immediately
         // rather than blocking, so callers can shed load under contention.
-        let guard = self
-            .write_lock
-            .try_lock()
-            .map_err(|_| FerraError::Backpressure)?;
+        // ME-001: Distinguish poisoned mutex (InvariantViolation) from
+        // contention (Backpressure). A poisoned mutex is permanently broken.
+        let guard = self.write_lock.try_lock().map_err(|e| match e {
+            std::sync::TryLockError::Poisoned(_) => FerraError::InvariantViolation {
+                invariant: "INV-FERR-007".to_string(),
+                details: "write lock mutex poisoned (previous panic)".to_string(),
+            },
+            std::sync::TryLockError::WouldBlock => FerraError::Backpressure,
+        })?;
 
-        // Step 1: Apply transaction to a cloned store.
+        // HI-011: Tick the HLC under the write lock to produce a causally-
+        // ordered TxId. INV-FERR-015: monotonicity guaranteed by HybridClock.
+        let tx_id = {
+            let mut clock = self
+                .clock
+                .lock()
+                .map_err(|_| FerraError::InvariantViolation {
+                    invariant: "INV-FERR-015".to_string(),
+                    details: "HLC mutex poisoned (previous panic)".to_string(),
+                })?;
+            clock.tick()
+        };
+
+        // Step 1: Apply transaction to a cloned store with HLC-derived TxId.
         let current = self.current.load();
         let mut new_store = Store::clone(&current);
-        let receipt = new_store.transact(transaction)?;
+        let receipt = new_store.transact(transaction, tx_id)?;
         let new_datoms = receipt.datoms().to_vec();
 
         // Step 2: INV-FERR-008: WAL before publish.
@@ -73,7 +90,10 @@ impl Database<Ready> {
         drop(write_slot);
 
         // Step 4: Observer delivery (outside write lock scope).
-        self.notify_observers(receipt.epoch(), &new_datoms)?;
+        // HI-004: Observer delivery failure is advisory-only. The transaction
+        // IS already committed (WAL fsynced + ArcSwap stored). Propagating
+        // observer errors would mislead callers into retrying a committed tx.
+        let _ = self.notify_observers(receipt.epoch(), &new_datoms);
 
         Ok(receipt)
     }
@@ -89,10 +109,18 @@ impl Database<Ready> {
     /// Returns `FerraError::WalWrite` on serialization or I/O failure.
     /// Returns `FerraError::Backpressure` if the WAL mutex is poisoned.
     fn write_wal(&self, epoch: u64, datoms: &[Datom]) -> Result<(), FerraError> {
-        let mut wal_guard = self.wal.lock().map_err(|_| FerraError::Backpressure)?;
+        // ME-002: Poisoned WAL mutex is an invariant violation (permanent
+        // failure from a prior panic), not backpressure (transient contention).
+        let mut wal_guard = self
+            .wal
+            .lock()
+            .map_err(|_| FerraError::InvariantViolation {
+                invariant: "INV-FERR-008".to_string(),
+                details: "WAL mutex poisoned (previous panic)".to_string(),
+            })?;
         if let Some(ref mut wal) = *wal_guard {
-            let payload = bincode::serialize(datoms)
-                .map_err(|e| FerraError::WalWrite(e.to_string()))?;
+            let payload =
+                bincode::serialize(datoms).map_err(|e| FerraError::WalWrite(e.to_string()))?;
             wal.append_raw(epoch, &payload)?;
             wal.fsync()?;
         }
@@ -107,7 +135,9 @@ impl Database<Ready> {
     fn publish_and_check(&self, new_store: Store) {
         self.current.store(Arc::new(new_store));
 
-        let count = self.transaction_count.fetch_add(1, Ordering::Relaxed) + 1;
+        // ME-010: AcqRel ensures the counter increment is visible to
+        // other threads checking the bijection canary.
+        let count = self.transaction_count.fetch_add(1, Ordering::AcqRel) + 1;
         #[cfg(feature = "release_bijection_check")]
         {
             if count % 100 == 0 {
