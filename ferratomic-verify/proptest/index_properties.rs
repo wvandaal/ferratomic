@@ -1,14 +1,17 @@
-//! Index consistency property tests.
+//! Index consistency and shard property tests.
 //!
 //! Tests INV-FERR-005 (index bijection), INV-FERR-006 (snapshot isolation),
-//! INV-FERR-007 (write linearizability).
+//! INV-FERR-007 (write linearizability), INV-FERR-017 (shard equivalence),
+//! INV-FERR-025 (index backend interchangeability), INV-FERR-027 (read latency).
 //!
-//! ALL TESTS MUST FAIL (red phase). Types are not yet implemented.
+//! Phase 4a: all tests passing against ferratomic-core implementation.
 
 use ferratom::Datom;
+use ferratomic_core::indexes::{EavtKey, IndexBackend};
 use ferratomic_core::merge::merge;
 use ferratomic_core::store::Store;
 use ferratomic_verify::generators::*;
+use im::OrdMap;
 use proptest::prelude::*;
 use std::collections::BTreeSet;
 
@@ -54,12 +57,57 @@ proptest! {
         a in arb_store(30),
         b in arb_store(30),
     ) {
-        let merged = merge(&a, &b);
+        let merged = merge(&a, &b).expect("INV-FERR-005: merge must succeed");
         prop_assert!(
             verify_index_bijection(&merged),
             "INV-FERR-005 violated: index bijection broken after merge. \
              |A|={}, |B|={}, |merged|={}",
             a.len(), b.len(), merged.len()
+        );
+    }
+
+    /// INV-FERR-005: Runtime bijection check via Store::verify_bijection
+    /// and explicit 4-index cardinality comparison against primary set.
+    ///
+    /// bd-zws: generates random stores and verifies that
+    /// (a) Store::verify_bijection returns Ok, and
+    /// (b) all 4 secondary indexes have exactly the same count as primary.
+    #[test]
+    fn test_inv_ferr_005_index_bijection(
+        store in arb_store(50),
+    ) {
+        // (a) The indexes verify_bijection must succeed.
+        prop_assert!(
+            store.indexes().verify_bijection(),
+            "INV-FERR-005: index bijection violated for a valid store"
+        );
+
+        // (b) Explicit 4-index cardinality check against primary.
+        let primary_count = store.len();
+        let eavt_count = store.indexes().eavt().len();
+        let aevt_count = store.indexes().aevt().len();
+        let vaet_count = store.indexes().vaet().len();
+        let avet_count = store.indexes().avet().len();
+
+        prop_assert_eq!(
+            eavt_count, primary_count,
+            "INV-FERR-005: EAVT count ({}) != primary count ({})",
+            eavt_count, primary_count
+        );
+        prop_assert_eq!(
+            aevt_count, primary_count,
+            "INV-FERR-005: AEVT count ({}) != primary count ({})",
+            aevt_count, primary_count
+        );
+        prop_assert_eq!(
+            vaet_count, primary_count,
+            "INV-FERR-005: VAET count ({}) != primary count ({})",
+            vaet_count, primary_count
+        );
+        prop_assert_eq!(
+            avet_count, primary_count,
+            "INV-FERR-005: AVET count ({}) != primary count ({})",
+            avet_count, primary_count
         );
     }
 
@@ -125,6 +173,70 @@ proptest! {
         }
     }
 
+    /// INV-FERR-017: Shard partition + union = original store.
+    ///
+    /// Partition a store by entity hash modulo N shards. The union of all
+    /// shards must equal the original store exactly.
+    ///
+    /// Falsification: a datom is missing from all shards, or appears in two
+    /// shards, or the union differs from the original.
+    #[test]
+    fn inv_ferr_017_shard_equivalence(
+        store in arb_store(50),
+        shard_count in 2usize..8,
+    ) {
+        use std::collections::BTreeSet;
+
+        // Partition datoms by entity hash modulo shard_count.
+        let mut shards: Vec<BTreeSet<&ferratom::Datom>> =
+            (0..shard_count).map(|_| BTreeSet::new()).collect();
+
+        for d in store.datoms() {
+            let shard_id = {
+                let entity = d.entity();
+                let entity_bytes = entity.as_bytes();
+                // Use first 8 bytes of entity as a u64 hash for sharding.
+                let mut buf = [0u8; 8];
+                let len = entity_bytes.len().min(8);
+                buf[..len].copy_from_slice(&entity_bytes[..len]);
+                (u64::from_le_bytes(buf) as usize) % shard_count
+            };
+            shards[shard_id].insert(d);
+        }
+
+        // Property 1: Union of all shards = original store (coverage).
+        let union: BTreeSet<&ferratom::Datom> = shards.iter().flat_map(|s| s.iter().copied()).collect();
+        let primary: BTreeSet<&ferratom::Datom> = store.datoms().collect();
+        let union_len = union.len();
+        let primary_len = primary.len();
+        prop_assert_eq!(
+            union, primary,
+            "INV-FERR-017 violated: shard union differs from original store. \
+             union_size={}, primary_size={}",
+            union_len, primary_len
+        );
+
+        // Property 2: Shards are disjoint.
+        for i in 0..shard_count {
+            for j in (i + 1)..shard_count {
+                let overlap: Vec<_> = shards[i].intersection(&shards[j]).collect();
+                prop_assert!(
+                    overlap.is_empty(),
+                    "INV-FERR-017 violated: shards {} and {} share {} datoms",
+                    i, j, overlap.len()
+                );
+            }
+        }
+
+        // Property 3: Total cardinality is preserved.
+        let total: usize = shards.iter().map(|s| s.len()).sum();
+        prop_assert_eq!(
+            total, store.len(),
+            "INV-FERR-017 violated: total shard cardinality {} != store cardinality {}",
+            total, store.len()
+        );
+    }
+
     /// INV-FERR-007: Committed epochs are strictly monotonically increasing.
     ///
     /// Falsification: two transactions with same epoch, or epoch decreases.
@@ -148,6 +260,99 @@ proptest! {
                 );
             }
             prev_epoch = Some(receipt.epoch());
+        }
+    }
+
+    /// INV-FERR-025: IndexBackend<OrdMap> insert/get round-trip.
+    ///
+    /// For any sequence of datoms, every datom inserted into an OrdMap-backed
+    /// index can be retrieved by its key. The backend_len matches the number
+    /// of unique keys inserted.
+    ///
+    /// Falsification: an inserted datom cannot be retrieved by its key, or
+    /// backend_len disagrees with the number of unique keys.
+    #[test]
+    fn inv_ferr_025_index_backend_roundtrip(
+        datoms in prop::collection::vec(arb_datom(), 1..100),
+    ) {
+        let mut backend: OrdMap<EavtKey, Datom> = OrdMap::new();
+
+        // Insert all datoms.
+        for d in &datoms {
+            let key = EavtKey::from_datom(d);
+            backend.backend_insert(key, d.clone());
+        }
+
+        // Every datom must be retrievable by its key.
+        for d in &datoms {
+            let key = EavtKey::from_datom(d);
+            let retrieved = backend.backend_get(&key);
+            prop_assert!(
+                retrieved.is_some(),
+                "INV-FERR-025 violated: inserted datom not found by key. \
+                 entity={:?}, attr={:?}",
+                d.entity(), d.attribute()
+            );
+            // The retrieved datom must equal the original.
+            prop_assert_eq!(
+                retrieved.expect("already checked"),
+                d,
+                "INV-FERR-025 violated: retrieved datom differs from inserted"
+            );
+        }
+
+        // backend_len must equal the number of unique keys.
+        let unique_keys: BTreeSet<_> = datoms.iter()
+            .map(|d| EavtKey::from_datom(d))
+            .collect();
+        prop_assert_eq!(
+            backend.backend_len(),
+            unique_keys.len(),
+            "INV-FERR-025 violated: backend_len {} != unique keys {}",
+            backend.backend_len(),
+            unique_keys.len()
+        );
+
+        // backend_is_empty must agree with len.
+        prop_assert_eq!(
+            backend.backend_is_empty(),
+            unique_keys.is_empty(),
+            "INV-FERR-025 violated: is_empty disagrees with len"
+        );
+    }
+
+    /// INV-FERR-027: Read latency — lookup in a store with datoms finds inserted datoms.
+    ///
+    /// This is a correctness test for index-backed lookups: after inserting
+    /// N datoms (up to 1000) into a store, every datom can be found via the
+    /// EAVT index. The index ordering enables O(log n + k) range scans.
+    ///
+    /// Falsification: an inserted datom is absent from the EAVT index.
+    #[test]
+    fn inv_ferr_027_read_latency_lookup(
+        datoms in prop::collection::vec(arb_datom(), 1..100),
+    ) {
+        let store = Store::from_datoms(datoms.iter().cloned().collect());
+
+        // Every inserted datom must be findable in the EAVT index.
+        let eavt_datoms: BTreeSet<&Datom> = store.indexes().eavt_datoms().collect();
+        for d in &datoms {
+            prop_assert!(
+                eavt_datoms.contains(d),
+                "INV-FERR-027 violated: datom not found in EAVT index after insert. \
+                 entity={:?}, attr={:?}",
+                d.entity(), d.attribute()
+            );
+        }
+
+        // The store must also find every datom in its primary set.
+        for d in &datoms {
+            prop_assert!(
+                store.datom_set().contains(d),
+                "INV-FERR-027 violated: datom not found in primary set after insert. \
+                 entity={:?}",
+                d.entity()
+            );
         }
     }
 }

@@ -29,8 +29,11 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 #[derive(Debug, Clone)]
 pub struct BackpressurePolicy {
     /// Maximum number of concurrent `transact()` attempts.
-    /// Includes the active writer and all threads waiting to try_lock.
-    /// Default: 64.
+    /// Includes the active writer and all threads waiting to `try_lock`.
+    /// Defaults to 64.
+    ///
+    /// INV-FERR-021: this bound prevents unbounded write queue growth.
+    /// NEG-FERR-005: ensures memory usage from pending writes is bounded.
     pub max_concurrent_writes: usize,
 }
 
@@ -48,14 +51,14 @@ impl Default for BackpressurePolicy {
 /// When the count reaches `max_concurrent_writes`, new attempts are
 /// rejected with `Err(Backpressure)`.
 ///
-/// This is a lightweight semaphore implemented with `AtomicUsize`.
-/// The guard pattern ensures the count is always decremented, even
-/// on early returns or panics.
-pub struct WriteGuard<'a> {
-    limiter: &'a WriteLimiter,
+/// INV-FERR-021: the guard pattern ensures the active count is always
+/// decremented, even on early returns or panics. This is a lightweight
+/// semaphore implemented with `AtomicUsize`.
+pub struct WriteGuard<'g> {
+    limiter: &'g WriteLimiter,
 }
 
-impl<'a> Drop for WriteGuard<'a> {
+impl Drop for WriteGuard<'_> {
     fn drop(&mut self) {
         self.limiter.active.fetch_sub(1, Ordering::Release);
     }
@@ -73,6 +76,9 @@ pub struct WriteLimiter {
 
 impl WriteLimiter {
     /// Create a new write limiter with the given policy.
+    ///
+    /// INV-FERR-021: initializes with zero active writes and the
+    /// configured maximum from the policy.
     #[must_use]
     pub fn new(policy: &BackpressurePolicy) -> Self {
         Self {
@@ -96,6 +102,9 @@ impl WriteLimiter {
     }
 
     /// Current number of active write attempts.
+    ///
+    /// INV-FERR-021: this value is bounded by `max_concurrent_writes`.
+    /// Useful for monitoring and diagnostics.
     #[must_use]
     pub fn active_count(&self) -> usize {
         self.active.load(Ordering::Acquire)

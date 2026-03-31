@@ -1,3 +1,8 @@
-//! `snapshot` module — see spec/23-ferratomic.md and `FERRATOMIC_ARCHITECTURE.md`
+//! `snapshot` module — Phase 4b (planned).
 //!
-//! TODO(Phase 4a): Implement. Tests must exist and fail (red phase) before code.
+//! Phase 4a (current) implements snapshots directly via `ArcSwap<Store>` in `db.rs`
+//! and `Store::snapshot()` in `store.rs`. This module is reserved for Phase 4b,
+//! which will add dedicated snapshot types with prolly-tree-backed storage and
+//! lazy index materialization.
+//!
+//! See `FERRATOMIC_ARCHITECTURE.md` and spec/02-concurrency.md (INV-FERR-006).

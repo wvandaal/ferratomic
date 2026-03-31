@@ -40,17 +40,17 @@ pub fn arb_attribute() -> impl Strategy<Value = Attribute> {
 }
 
 /// Arbitrary Value: all 11 variant types with uniform distribution.
-/// Wraps generated primitives into Arc/OrderedFloat for Value enum compatibility.
+/// Wraps generated primitives into `Arc`/`NonNanFloat` for Value enum compatibility.
 pub fn arb_value() -> impl Strategy<Value = Value> {
-    use ordered_float::OrderedFloat;
     use std::sync::Arc;
     prop_oneof![
         any::<i64>().prop_map(Value::Long),
         any::<bool>().prop_map(Value::Bool),
         ".*".prop_map(|s| Value::String(Arc::from(s.as_str()))),
         any::<f64>()
-            .prop_filter("not NaN", |f| !f.is_nan())
-            .prop_map(|f| Value::Double(OrderedFloat(f))),
+            .prop_filter_map("not NaN", |f| {
+                ferratom::NonNanFloat::new(f).map(Value::Double)
+            }),
         "[a-z][a-z0-9_/]{0,63}".prop_map(|s| Value::Keyword(Arc::from(s.as_str()))),
         any::<i64>().prop_map(Value::Instant),
         any::<[u8; 16]>().prop_map(Value::Uuid),

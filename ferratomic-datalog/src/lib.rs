@@ -6,6 +6,7 @@
 //!
 //! Facade crate. HOMOMORPHISMS — structure-preserving maps from Store to QueryResult.
 
+// INV-FERR-023: No unsafe code permitted. Compiler-enforced.
 #![forbid(unsafe_code)]
 #![deny(clippy::all, missing_docs)]
 

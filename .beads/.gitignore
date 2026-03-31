@@ -9,3 +9,6 @@
 # Temporary
 last-touched
 *.tmp
+
+# History snapshots (high-churn, derived from issues.jsonl)
+.br_history/

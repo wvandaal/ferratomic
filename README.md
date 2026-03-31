@@ -27,12 +27,16 @@ The store is a grow-only set of datoms under set union. This single equation giv
 ├─────────────────────────────────┤
 │     ferratomic-core              │  ← Storage + concurrency engine
 │  ┌───────────┐ ┌──────────────┐ │
-│  │ ArcSwap   │ │ WriterActor  │ │  ← Lock-free reads, single writer
-│  │ snapshots │ │ group commit │ │
+│  │ ArcSwap   │ │ Mutex writer │ │  ← Phase 4a (current): lock-free
+│  │ snapshots │ │ serialized   │ │    reads, Mutex-serialized writes
 │  └───────────┘ └──────────────┘ │
 │  ┌───────────┐ ┌──────────────┐ │
-│  │ Prolly    │ │ WAL + check- │ │  ← O(d) diff, structural sharing
-│  │ tree      │ │ point        │ │
+│  │ im::OrdMap│ │ WAL + check- │ │  ← Phase 4a (current): persistent
+│  │ indexes   │ │ point        │ │    data structures, durability
+│  └───────────┘ └──────────────┘ │
+│  ┌───────────┐ ┌──────────────┐ │
+│  │ Prolly    │ │ WriterActor  │ │  ← Phase 4b (planned): O(d) diff,
+│  │ tree      │ │ group commit │ │    actor-based writer, chunked store
 │  └───────────┘ └──────────────┘ │
 ├─────────────────────────────────┤
 │       ferratom                   │  ← Core types (zero dependencies)
@@ -44,21 +48,23 @@ The store is a grow-only set of datoms under set union. This single equation giv
 | Crate | Role | Dependencies |
 |-------|------|-------------|
 | `ferratom` | Core types: Datom, EntityId, Value, Schema, HLC | blake3, ordered-float, serde |
-| `ferratomic-core` | Engine: Store, MVCC snapshots, WAL, observers, federation | ferratom, im, arc-swap, asupersync |
+| `ferratomic-core` | Phase 4a (current): Store, MVCC snapshots, Mutex writer, WAL, checkpoint, observers. Phase 4b+ (planned): actor writer, prolly tree, federation | ferratom, im, arc-swap |
 | `ferratomic-datalog` | Query: Datalog parser, planner, evaluator, CALM classification | ferratom, ferratomic-core |
 | `ferratomic-verify` | Proofs: Lean 4, Stateright, Kani, proptest | ferratom, ferratomic-core |
 
 ## Key Design Decisions
 
-| Decision | Choice | Why |
-|----------|--------|-----|
-| Data structures | `im::OrdMap` (persistent) | O(1) snapshot clones via structural sharing |
-| Concurrency | ArcSwap + single writer | Lock-free reads (~1ns), zero contention |
-| Storage | Prolly tree block store | O(d) diff, chunk-based federation, on-disk structural sharing |
-| Clock | Hybrid Logical Clock | Causal ordering without central coordination |
-| Async | Asupersync (native) | Structured concurrency, DPOR testing, cancel-aware `&Cx` |
-| Signing | Ed25519 per transaction | Trustless verification, 5µs sign / 2µs verify |
-| Trust | Query-level predicate | `TrustPolicy::Calibrated(accuracy, samples)` |
+| Decision | Choice | Phase | Why |
+|----------|--------|-------|-----|
+| Data structures | `im::OrdMap` (persistent) | 4a (current) | O(1) snapshot clones via structural sharing |
+| Concurrency | ArcSwap + Mutex writer | 4a (current) | Lock-free reads (~1ns), serialized writes via `Mutex` |
+| Writer | Actor-based writer with group commit | 4b (planned) | Replaces Mutex with mpsc channel for batched writes |
+| Storage | Prolly tree block store | 4b (planned) | O(d) diff, chunk-based federation, on-disk structural sharing |
+| Clock | Hybrid Logical Clock | 4a (current) | Causal ordering without central coordination |
+| Async | Asupersync (native) | 4b (planned) | Structured concurrency, DPOR testing, cancel-aware `&Cx` |
+| Signing | Ed25519 per transaction | 4c (planned) | Trustless verification, 5µs sign / 2µs verify |
+| Trust | Query-level predicate | 4c (planned) | `TrustPolicy::Calibrated(accuracy, samples)` |
+| Federation | Selective merge over transport | 4c (planned) | Chunk-level sync, cryptographic provenance |
 
 ## Verification
 
@@ -76,14 +82,14 @@ Every invariant is verified at three levels before implementation begins:
 
 ## Performance Targets
 
-| Metric | Target | How |
-|--------|--------|-----|
-| Snapshot load | < 5ns | ArcSwap atomic pointer load |
-| Point read | < 10µs | im::OrdMap at 100M datoms |
-| Write throughput | 50-200K datoms/sec | Group commit, WAL fsync batching |
-| Diff (d changes) | O(d × log N) | Prolly tree recursive descent |
-| Federation transfer | O(\|Δ\|) chunks | Only missing chunks cross the network |
-| Cold start | < 5s at 100M | Compressed checkpoint + lazy index |
+| Metric | Target | How | Phase |
+|--------|--------|-----|-------|
+| Snapshot load | < 5ns | ArcSwap atomic pointer load | 4a (current) |
+| Point read | < 10µs | im::OrdMap at 100M datoms | 4a (current) |
+| Write throughput | 50-200K datoms/sec | Group commit, WAL fsync batching | 4b (planned) -- Phase 4a uses Mutex-serialized writes |
+| Diff (d changes) | O(d × log N) | Prolly tree recursive descent | 4b (planned) |
+| Federation transfer | O(\|Δ\|) chunks | Only missing chunks cross the network | 4c (planned) |
+| Cold start | < 5s at 100M | Compressed checkpoint + lazy index | 4a (current) |
 
 ## Quick Start
 

@@ -1,11 +1,10 @@
 //! WAL recovery integration tests.
 //!
-//! INV-FERR-008.
-//! ALL TESTS MUST FAIL (red phase). Types are not yet implemented.
+//! INV-FERR-008, INV-FERR-014, INV-FERR-024 (in-memory backend).
+//! Phase 4a: all tests passing against ferratomic-core implementation.
 
 use ferratom::{AgentId, Attribute, EntityId, Value};
 use ferratomic_core::db::Database;
-use ferratomic_core::store::Store;
 use ferratomic_core::wal::Wal;
 use ferratomic_core::writer::Transaction;
 use std::io::Write;
@@ -45,6 +44,7 @@ fn inv_ferr_008_wal_write_and_recover() {
         );
 
         // CR-027: Deserialize the recovered payload and verify datom content.
+        // WAL uses bincode for payload serialization (see wal.rs append()).
         let datoms: Vec<ferratom::Datom> =
             bincode::deserialize(&entries[0].payload)
                 .expect("INV-FERR-008: recovered payload must deserialize as Vec<Datom>");
@@ -119,8 +119,125 @@ fn inv_ferr_008_crash_mid_write_recovery() {
     }
 }
 
+/// INV-FERR-014: Crash-then-transact roundtrip.
+///
+/// Full lifecycle: genesis → transact N datoms → crash (drop) → recover
+/// from WAL → verify identical state → transact M more → verify epoch
+/// advances correctly and all N+M user datoms are present.
+#[test]
+fn test_inv_ferr_014_crash_then_transact() {
+    let dir = TempDir::new().expect("failed to create temp dir");
+    let wal_path = dir.path().join("crash_roundtrip.wal");
+
+    let agent = AgentId::from_bytes([42u8; 16]);
+
+    // -- Phase 1: genesis + transact 3 user datoms ----------------------------
+    let (pre_crash_datoms, pre_crash_epoch, pre_crash_schema) = {
+        let db = Database::genesis_with_wal(&wal_path)
+            .expect("genesis_with_wal must succeed");
+
+        for i in 0..3i64 {
+            let tx = Transaction::new(agent)
+                .assert_datom(
+                    EntityId::from_content(format!("user-{i}").as_bytes()),
+                    Attribute::from("user/name"),
+                    Value::String(format!("User {i}").into()),
+                )
+                .commit_unchecked();
+            db.transact(tx).expect("transact failed");
+        }
+
+        let snap = db.snapshot();
+        let datoms: std::collections::BTreeSet<_> = snap.datoms().cloned().collect();
+        let epoch = db.epoch();
+        let schema = db.schema();
+        (datoms, epoch, schema)
+        // db drops here — simulates crash
+    };
+
+    assert_eq!(
+        pre_crash_epoch, 3,
+        "INV-FERR-014: 3 transactions must produce epoch 3"
+    );
+
+    // -- Phase 2: recover from WAL and verify identical state -----------------
+    let recovered_db =
+        Database::recover_from_wal(&wal_path).expect("recovery from WAL must succeed");
+
+    let recovered_snap = recovered_db.snapshot();
+    let recovered_datoms: std::collections::BTreeSet<_> =
+        recovered_snap.datoms().cloned().collect();
+    let recovered_epoch = recovered_db.epoch();
+    let recovered_schema = recovered_db.schema();
+
+    assert_eq!(
+        recovered_epoch, pre_crash_epoch,
+        "INV-FERR-014: recovered epoch must equal pre-crash epoch. \
+         recovered={recovered_epoch}, expected={pre_crash_epoch}"
+    );
+    assert_eq!(
+        recovered_schema, pre_crash_schema,
+        "INV-FERR-014: recovered schema must be identical to pre-crash schema"
+    );
+    assert_eq!(
+        recovered_datoms, pre_crash_datoms,
+        "INV-FERR-014: recovered datoms must be identical to pre-crash datoms. \
+         recovered={}, pre_crash={}",
+        recovered_datoms.len(),
+        pre_crash_datoms.len()
+    );
+
+    // -- Phase 3: transact 2 more datoms on recovered database ----------------
+    for i in 3..5i64 {
+        let tx = Transaction::new(agent)
+            .assert_datom(
+                EntityId::from_content(format!("user-{i}").as_bytes()),
+                Attribute::from("user/name"),
+                Value::String(format!("User {i}").into()),
+            )
+            .commit_unchecked();
+        recovered_db
+            .transact(tx)
+            .expect("transact on recovered db failed");
+    }
+
+    // -- Phase 4: verify epoch advances and all datoms present ----------------
+    let final_epoch = recovered_db.epoch();
+    assert_eq!(
+        final_epoch,
+        recovered_epoch + 2,
+        "INV-FERR-014: epoch must advance by 2 after 2 post-recovery transactions. \
+         final={final_epoch}, expected={}",
+        recovered_epoch + 2
+    );
+
+    let final_snap = recovered_db.snapshot();
+    let final_datoms: std::collections::BTreeSet<_> =
+        final_snap.datoms().cloned().collect();
+
+    // All 5 user datoms must be findable by entity ID.
+    for i in 0..5i64 {
+        let expected_entity = EntityId::from_content(format!("user-{i}").as_bytes());
+        assert!(
+            final_datoms.iter().any(|d| d.entity() == expected_entity),
+            "INV-FERR-014: user-{i} entity must be present in final state"
+        );
+    }
+
+    // Final state must be a strict superset of the recovered state (only
+    // additions, never deletions — append-only C1).
+    assert!(
+        final_datoms.is_superset(&recovered_datoms),
+        "INV-FERR-014: post-recovery state must be a superset of recovered state. \
+         final={}, recovered={}",
+        final_datoms.len(),
+        recovered_datoms.len()
+    );
+}
+
 /// INV-FERR-008: WAL entry must precede snapshot visibility.
-/// After commit, WAL recovery alone must reproduce all visible datoms.
+/// After commit, WAL recovery alone must reproduce all visible datoms,
+/// epoch, and schema -- exact state equality.
 #[test]
 fn inv_ferr_008_wal_entry_precedes_snapshot() {
     let dir = TempDir::new().expect("failed to create temp dir");
@@ -144,17 +261,99 @@ fn inv_ferr_008_wal_entry_precedes_snapshot() {
 
     let snapshot_datoms: std::collections::BTreeSet<_> =
         db.snapshot().datoms().cloned().collect();
+    let expected_epoch = db.epoch();
+    let expected_schema = db.schema();
 
     // Recover from WAL alone (simulating crash + restart)
     let recovered_db = Database::recover_from_wal(&wal_path).expect("recovery failed");
     let recovered_datoms: std::collections::BTreeSet<_> =
         recovered_db.snapshot().datoms().cloned().collect();
 
+    // INV-FERR-008: exact state equality -- datoms, epoch, schema.
     assert_eq!(
         snapshot_datoms, recovered_datoms,
-        "INV-FERR-008: WAL recovery produced different state. \
+        "INV-FERR-008: WAL recovery produced different datom set. \
          pre-crash={}, recovered={}",
         snapshot_datoms.len(),
         recovered_datoms.len()
+    );
+    assert_eq!(
+        expected_epoch,
+        recovered_db.epoch(),
+        "INV-FERR-008: WAL recovery produced different epoch. \
+         pre-crash={expected_epoch}, recovered={}",
+        recovered_db.epoch()
+    );
+    assert_eq!(
+        expected_schema,
+        recovered_db.schema(),
+        "INV-FERR-008: WAL recovery produced different schema"
+    );
+}
+
+/// INV-FERR-024: InMemoryBackend supports cold_start_with_backend.
+///
+/// bd-7tb0: integration test verifying the InMemoryBackend trait implementation
+/// works with the generic cold_start_with_backend path. Empty backend produces
+/// genesis; backend with a checkpoint restores state.
+#[test]
+fn test_inv_ferr_024_in_memory_backend() {
+    use ferratomic_core::storage::{
+        cold_start_with_backend, InMemoryBackend, RecoveryLevel, StorageBackend,
+    };
+
+    // Phase 1: Empty backend produces genesis.
+    let backend = InMemoryBackend::new();
+    let result = cold_start_with_backend(&backend)
+        .expect("INV-FERR-024: cold_start_with_backend must succeed on empty backend");
+
+    assert_eq!(
+        result.level,
+        RecoveryLevel::Genesis,
+        "INV-FERR-024: empty in-memory backend must produce genesis recovery level"
+    );
+    assert_eq!(
+        result.database.epoch(),
+        0,
+        "INV-FERR-024: genesis database must have epoch 0"
+    );
+
+    // Phase 2: Write a checkpoint into the backend, then cold-start again.
+    {
+        let mut store = ferratomic_core::store::Store::genesis();
+        let tx = ferratomic_core::writer::Transaction::new(AgentId::from_bytes([24u8; 16]))
+            .assert_datom(
+                EntityId::from_content(b"in-mem-test-entity"),
+                Attribute::from("db/doc"),
+                Value::String("in-memory-backend-test".into()),
+            )
+            .commit_unchecked();
+        store
+            .transact(tx)
+            .expect("INV-FERR-024: transact into store for checkpoint");
+
+        let mut writer = backend
+            .open_checkpoint_writer()
+            .expect("INV-FERR-024: open checkpoint writer");
+        ferratomic_core::checkpoint::write_checkpoint_to_writer(&store, &mut writer)
+            .expect("INV-FERR-024: write checkpoint to in-memory backend");
+    }
+
+    assert!(
+        backend.checkpoint_exists(),
+        "INV-FERR-024: checkpoint must exist after write"
+    );
+
+    let result2 = cold_start_with_backend(&backend)
+        .expect("INV-FERR-024: cold_start_with_backend must succeed with checkpoint");
+
+    assert_eq!(
+        result2.level,
+        RecoveryLevel::CheckpointOnly,
+        "INV-FERR-024: backend with checkpoint must recover at CheckpointOnly level"
+    );
+    assert!(
+        result2.database.snapshot().datoms().count() > 0,
+        "INV-FERR-024: recovered database must contain datoms from checkpoint"
     );
 }

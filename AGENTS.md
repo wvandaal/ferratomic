@@ -196,6 +196,9 @@ too-many-lines-threshold = 50
   - Never stack multiple full skills simultaneously (k* budget).
 - **Disjoint file sets for parallel agents.** Two agents NEVER edit the same file.
   Agent coordination via beads tasks + dependency edges.
+- **NEVER use worktrees.** `isolation: "worktree"` is FORBIDDEN for all subagents.
+  Worktrees corrupt shared state (.beads/, .cass/) and create unmergeable branches.
+  Always use default (non-worktree) agents with disjoint file sets.
 - **Agents don't run cargo.** The orchestrator (human or primary agent) runs build/test
   ONCE after all agents complete. Prevents build lock contention and disk exhaustion.
 

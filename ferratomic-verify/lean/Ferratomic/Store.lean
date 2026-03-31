@@ -6,6 +6,8 @@
     INV-FERR-002  Merge associativity
     INV-FERR-003  Merge idempotency
     INV-FERR-004  Monotonic growth
+    INV-FERR-005  Index bijection (cardinality preservation under injective projection)
+    INV-FERR-009  Schema validation (atomic accept/reject at transact boundary)
     INV-FERR-010  Merge convergence (strong eventual consistency)
     INV-FERR-012  Content-addressed identity
     INV-FERR-018  Append-only
@@ -208,3 +210,142 @@ theorem append_only_card_apply (s : DatomStore) (d : Datom) :
 theorem append_only_card_merge (a b : DatomStore) :
     a.card ≤ (merge a b).card :=
   Finset.card_le_card (merge_mono_left a b)
+
+/-! ## INV-FERR-005: Index Bijection
+
+  Indexes are projections of the primary datom set, differing only in access pattern.
+  Any bijective projection preserves cardinality and membership.
+
+  We model an index as the image of a bijection over the primary set.
+  Since a bijection on Datom (Datom → Datom) applied via Finset.image preserves
+  cardinality and membership (via injectivity), all indexes have the same
+  cardinality as primary and contain the same elements. -/
+
+/-- An index projection is any injective function on Datom (e.g., identity with a
+    different sort order — the set content is identical). -/
+def index_project (s : DatomStore) (f : Datom → Datom) : DatomStore :=
+  s.image f
+
+/-- INV-FERR-005: A bijective projection preserves cardinality.
+    |index(S)| = |S| when the projection is injective. -/
+theorem index_bijection_card (s : DatomStore) (f : Datom → Datom)
+    (hinj : Function.Injective f) :
+    (index_project s f).card = s.card := by
+  unfold index_project
+  exact Finset.card_image_of_injective s hinj
+
+/-- INV-FERR-005: Identity projection (trivial case — index IS the primary set). -/
+theorem index_identity (s : DatomStore) :
+    index_project s id = s := by
+  unfold index_project
+  exact Finset.image_id
+
+/-- INV-FERR-005: Multiple indexes all have the same cardinality as primary,
+    when each is an injective projection. -/
+theorem index_bijection_multi (s : DatomStore)
+    (f₁ f₂ f₃ f₄ : Datom → Datom)
+    (h₁ : Function.Injective f₁)
+    (h₂ : Function.Injective f₂)
+    (h₃ : Function.Injective f₃)
+    (h₄ : Function.Injective f₄) :
+    (index_project s f₁).card = s.card ∧
+    (index_project s f₂).card = s.card ∧
+    (index_project s f₃).card = s.card ∧
+    (index_project s f₄).card = s.card :=
+  ⟨index_bijection_card s f₁ h₁,
+   index_bijection_card s f₂ h₂,
+   index_bijection_card s f₃ h₃,
+   index_bijection_card s f₄ h₄⟩
+
+/-- INV-FERR-005: Membership equivalence — d ∈ primary ↔ f(d) ∈ index,
+    when f is a bijection on Datom. -/
+theorem index_bijection_mem (s : DatomStore) (f : Datom → Datom)
+    (hbij : Function.Bijective f) (d : Datom) :
+    d ∈ s ↔ f d ∈ index_project s f := by
+  unfold index_project
+  simp only [Finset.mem_image]
+  constructor
+  · intro hd; exact ⟨d, hd, rfl⟩
+  · rintro ⟨x, hx, hfx⟩
+    have : x = d := hbij.1 hfx
+    subst this; exact hx
+
+/-- INV-FERR-005: Transact preserves index bijection — if we apply the same
+    transaction to both primary and index, cardinality remains equal. -/
+theorem index_bijection_after_transact (s : DatomStore) (d : Datom)
+    (f : Datom → Datom) (hinj : Function.Injective f) :
+    (index_project (apply_tx s d) f).card = (apply_tx s d).card :=
+  index_bijection_card (apply_tx s d) f hinj
+
+/-- INV-FERR-005: Merge preserves index bijection. -/
+theorem index_bijection_after_merge (a b : DatomStore)
+    (f : Datom → Datom) (hinj : Function.Injective f) :
+    (index_project (merge a b) f).card = (merge a b).card :=
+  index_bijection_card (merge a b) f hinj
+
+/-! ## INV-FERR-009: Schema Validation
+
+  Schema is a predicate on datoms. If a datom passes the schema check,
+  transact succeeds and the datom is in the resulting store. If it fails,
+  transact rejects the entire transaction (no datoms enter the store).
+
+  We model schema as a decidable predicate and transact_checked as a
+  function that either applies all datoms (if all pass) or applies none. -/
+
+/-- Checked transact: apply a list of datoms only if ALL pass the schema check.
+    Returns some (new store) on success, none on rejection. -/
+def transact_checked (s : DatomStore) (datoms : List Datom) (schema : Datom → Bool) :
+    Option DatomStore :=
+  if datoms.all schema = true then
+    some (s ∪ datoms.toFinset)
+  else
+    none
+
+/-- INV-FERR-009: If all datoms pass schema validation, transact succeeds. -/
+theorem schema_valid_implies_success (s : DatomStore) (datoms : List Datom)
+    (schema : Datom → Bool) (hvalid : datoms.all schema = true) :
+    transact_checked s datoms schema = some (s ∪ datoms.toFinset) := by
+  unfold transact_checked
+  simp [hvalid]
+
+/-- INV-FERR-009: If any datom fails schema validation, transact rejects. -/
+theorem schema_invalid_implies_rejection (s : DatomStore) (datoms : List Datom)
+    (schema : Datom → Bool) (hinvalid : datoms.all schema = false) :
+    transact_checked s datoms schema = none := by
+  unfold transact_checked
+  simp [hinvalid]
+
+/-- INV-FERR-009: Rejected transaction leaves the store unchanged. -/
+theorem schema_rejection_preserves_store (s : DatomStore) (datoms : List Datom)
+    (schema : Datom → Bool) (hinvalid : datoms.all schema = false) :
+    ∀ s', transact_checked s datoms schema ≠ some s' := by
+  intro s'
+  simp [schema_invalid_implies_rejection s datoms schema hinvalid]
+
+/-- INV-FERR-009: Successful transact includes all new datoms. -/
+theorem schema_success_includes_datoms (s : DatomStore) (datoms : List Datom)
+    (schema : Datom → Bool) (hvalid : datoms.all schema = true) (d : Datom)
+    (hd : d ∈ datoms) :
+    ∃ s', transact_checked s datoms schema = some s' ∧ d ∈ s' := by
+  refine ⟨s ∪ datoms.toFinset, schema_valid_implies_success s datoms schema hvalid, ?_⟩
+  exact Finset.mem_union_right s (List.mem_toFinset.mpr hd)
+
+/-- INV-FERR-009: Successful transact preserves existing datoms. -/
+theorem schema_success_preserves_store (s : DatomStore) (datoms : List Datom)
+    (schema : Datom → Bool) (hvalid : datoms.all schema = true) :
+    ∃ s', transact_checked s datoms schema = some s' ∧ s ⊆ s' := by
+  refine ⟨s ∪ datoms.toFinset, schema_valid_implies_success s datoms schema hvalid, ?_⟩
+  exact Finset.subset_union_left
+
+/-- INV-FERR-009: Schema validation is atomic — all-or-nothing.
+    If the result is some, all datoms passed. If none, zero datoms entered. -/
+theorem schema_atomic (s : DatomStore) (datoms : List Datom)
+    (schema : Datom → Bool) :
+    (∃ s', transact_checked s datoms schema = some s') ↔
+    datoms.all schema = true := by
+  constructor
+  · intro ⟨s', hs'⟩
+    unfold transact_checked at hs'
+    split at hs' <;> simp_all
+  · intro hvalid
+    exact ⟨s ∪ datoms.toFinset, schema_valid_implies_success s datoms schema hvalid⟩

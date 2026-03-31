@@ -23,13 +23,19 @@ pub const DEFAULT_OBSERVER_BUFFER: usize = 1024;
 /// INV-FERR-011: delivery is at-least-once with epoch-based deduplication.
 /// Implementations must therefore treat `epoch` as an idempotency key.
 pub trait DatomObserver: Send + Sync {
-    /// Deliver the datoms for one freshly committed epoch.
+    /// Deliver the datoms for one freshly committed epoch (INV-FERR-011).
+    ///
+    /// Called once per successfully committed transaction on all registered
+    /// observers. The `epoch` serves as an idempotency key.
     fn on_commit(&self, epoch: u64, datoms: &[Datom]);
 
-    /// Deliver a catch-up batch for all epochs after `from_epoch`.
+    /// Deliver a catch-up batch for all epochs after `from_epoch` (INV-FERR-011).
+    ///
+    /// Called when an observer falls behind and needs to catch up to the
+    /// current store state. May be called at registration time.
     fn on_catchup(&self, from_epoch: u64, datoms: &[Datom]);
 
-    /// Stable human-readable observer name for diagnostics.
+    /// Stable human-readable observer name for diagnostics (INV-FERR-011).
     fn name(&self) -> &str;
 }
 

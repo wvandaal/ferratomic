@@ -19,6 +19,11 @@ asupersync = { workspace = true }
 # tokio: optional, for asupersync-tokio-compat adapter modules only
 tokio = { workspace = true, optional = true }
 
+[features]
+## Enable release-mode index bijection sampling (INV-FERR-005).
+## When active, every 100th transaction verifies 4-index cardinality match.
+release_bijection_check = []
+
 [dev-dependencies]
 ferratom = { path = "../ferratom", features = ["test-utils"] }
 proptest = { workspace = true }

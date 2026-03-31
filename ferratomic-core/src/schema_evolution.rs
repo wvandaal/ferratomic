@@ -71,17 +71,18 @@ pub fn genesis_schema() -> Schema {
     schema
 }
 
-/// Scan datoms for schema-defining patterns and install new attributes.
+/// Scan datoms for schema-defining patterns and install new attributes (INV-FERR-009).
 ///
-/// INV-FERR-009: schema evolution is a transaction. When a transaction
-/// contains datoms with `db/ident`, `db/valueType`, and `db/cardinality`
-/// all sharing the same entity, a new attribute is installed.
+/// When a transaction contains datoms with `db/ident`, `db/valueType`, and
+/// `db/cardinality` all sharing the same entity, a new attribute is installed
+/// into the schema. This is the schema-as-data bootstrap mechanism (C3, C7).
 ///
 /// # Errors
 ///
 /// Returns `FerraError::SchemaViolation` if a single entity carries
 /// conflicting values for `db/ident`, `db/valueType`, or `db/cardinality`
 /// within the same transaction (bd-ty5 / CR-037).
+#[allow(clippy::too_many_lines)]
 pub fn evolve_schema(schema: &mut Schema, datoms: &[Datom]) -> Result<(), FerraError> {
     let mut by_entity: HashMap<EntityId, Vec<&Datom>> = HashMap::new();
     for datom in datoms {
@@ -93,69 +94,87 @@ pub fn evolve_schema(schema: &mut Schema, datoms: &[Datom]) -> Result<(), FerraE
     let db_cardinality = Attribute::from("db/cardinality");
 
     for entity_datoms in by_entity.values() {
-        let mut ident: Option<&str> = None;
-        let mut value_type: Option<ValueType> = None;
-        let mut cardinality: Option<Cardinality> = None;
-
-        for datom in entity_datoms {
-            if datom.attribute() == &db_ident {
-                if let ferratom::Value::Keyword(kw) = datom.value() {
-                    let new_val = kw.as_ref();
-                    if let Some(prev) = ident {
-                        if prev != new_val {
-                            return Err(FerraError::SchemaViolation {
-                                attribute: "db/ident".to_string(),
-                                expected: prev.to_string(),
-                                got: new_val.to_string(),
-                            });
-                        }
-                    }
-                    ident = Some(new_val);
-                }
-            } else if datom.attribute() == &db_value_type {
-                if let ferratom::Value::Keyword(kw) = datom.value() {
-                    if let Some(new_vt) = parse_value_type(kw) {
-                        if let Some(ref prev_vt) = value_type {
-                            if *prev_vt != new_vt {
-                                return Err(FerraError::SchemaViolation {
-                                    attribute: "db/valueType".to_string(),
-                                    expected: format!("{prev_vt:?}"),
-                                    got: format!("{new_vt:?}"),
-                                });
-                            }
-                        }
-                        value_type = Some(new_vt);
-                    }
-                }
-            } else if datom.attribute() == &db_cardinality {
-                if let ferratom::Value::Keyword(kw) = datom.value() {
-                    if let Some(new_card) = parse_cardinality(kw) {
-                        if let Some(ref prev_card) = cardinality {
-                            if *prev_card != new_card {
-                                return Err(FerraError::SchemaViolation {
-                                    attribute: "db/cardinality".to_string(),
-                                    expected: format!("{prev_card:?}"),
-                                    got: format!("{new_card:?}"),
-                                });
-                            }
-                        }
-                        cardinality = Some(new_card);
-                    }
-                }
-            }
-        }
-
-        if let (Some(name), Some(vt), Some(card)) = (ident, value_type, cardinality) {
-            schema.define(
-                Attribute::from(name),
-                AttributeDef::new(vt, card, ResolutionMode::Lww, None),
-            );
+        if let Some((attr, def)) =
+            extract_attribute_def(entity_datoms, &db_ident, &db_value_type, &db_cardinality)?
+        {
+            schema.define(attr, def);
         }
     }
     Ok(())
 }
 
+/// Extract a schema attribute definition from a group of entity datoms.
+///
+/// Returns `Some((attribute, definition))` when the entity carries all three
+/// required meta-attributes (`db/ident`, `db/valueType`, `db/cardinality`).
+/// Returns `Err` if the same entity carries conflicting values for any
+/// meta-attribute (bd-ty5 / CR-037).
+fn extract_attribute_def(
+    datoms: &[&Datom],
+    db_ident: &Attribute,
+    db_value_type: &Attribute,
+    db_cardinality: &Attribute,
+) -> Result<Option<(Attribute, AttributeDef)>, FerraError> {
+    let (mut ident, mut vtype, mut card): (Option<&str>, Option<ValueType>, Option<Cardinality>) =
+        (None, None, None);
+
+    for d in datoms {
+        let kw = match d.value() {
+            ferratom::Value::Keyword(kw) => kw.as_ref(),
+            _ => continue,
+        };
+        let attr = d.attribute();
+        if attr == db_ident {
+            if let Some(prev) = ident {
+                if prev != kw {
+                    return Err(schema_violation("db/ident", prev, kw));
+                }
+            }
+            ident = Some(kw);
+        } else if attr == db_value_type {
+            if let Some(vt) = parse_value_type(kw) {
+                if let Some(ref prev) = vtype {
+                    if *prev != vt {
+                        return Err(schema_violation("db/valueType", &format!("{prev:?}"), &format!("{vt:?}")));
+                    }
+                }
+                vtype = Some(vt);
+            }
+        } else if attr == db_cardinality {
+            if let Some(c) = parse_cardinality(kw) {
+                if let Some(ref prev) = card {
+                    if *prev != c {
+                        return Err(schema_violation("db/cardinality", &format!("{prev:?}"), &format!("{c:?}")));
+                    }
+                }
+                card = Some(c);
+            }
+        }
+    }
+
+    match (ident, vtype, card) {
+        (Some(name), Some(vt), Some(c)) => Ok(Some((
+            Attribute::from(name),
+            AttributeDef::new(vt, c, ResolutionMode::Lww, None),
+        ))),
+        _ => Ok(None),
+    }
+}
+
+/// Build a `SchemaViolation` error for conflicting meta-attribute values.
+fn schema_violation(field: &str, expected: &str, got: &str) -> FerraError {
+    FerraError::SchemaViolation {
+        attribute: field.to_string(),
+        expected: expected.to_string(),
+        got: got.to_string(),
+    }
+}
+
 /// Parse a `db.type/*` keyword into a `ValueType`.
+///
+/// INV-FERR-009: used during schema evolution to interpret the
+/// `db/valueType` keyword into the typed `ValueType` enum that
+/// governs transact-time validation.
 ///
 /// Returns `None` for unrecognized type keywords.
 #[must_use]
@@ -177,6 +196,10 @@ pub fn parse_value_type(keyword: &str) -> Option<ValueType> {
 }
 
 /// Parse a `db.cardinality/*` keyword into a `Cardinality`.
+///
+/// INV-FERR-009: used during schema evolution to interpret the
+/// `db/cardinality` keyword. Cardinality governs whether an
+/// entity-attribute pair holds one value or many.
 ///
 /// Returns `None` for unrecognized cardinality keywords.
 #[must_use]

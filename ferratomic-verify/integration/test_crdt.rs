@@ -1,7 +1,9 @@
 //! Concrete CRDT integration tests.
 //!
-//! INV-FERR-001..004, INV-FERR-010, INV-FERR-012.
-//! ALL TESTS MUST FAIL (red phase). Types are not yet implemented.
+//! INV-FERR-001..004, INV-FERR-009/C4, INV-FERR-010, INV-FERR-012,
+//! INV-FERR-017 (shard equivalence), INV-FERR-022 (anti-entropy),
+//! INV-FERR-030 (replica filter), INV-FERR-031 (genesis determinism).
+//! Phase 4a: all tests passing against ferratomic-core implementation.
 
 use ferratom::{AgentId, Attribute, Datom, EntityId, Op, TxId, Value};
 use ferratomic_core::merge::merge;
@@ -45,8 +47,8 @@ fn inv_ferr_001_merge_commutes_concrete() {
         ),
     ]));
 
-    let ab = merge(&a, &b);
-    let ba = merge(&b, &a);
+    let ab = merge(&a, &b).expect("INV-FERR-001: merge(A,B) must succeed");
+    let ba = merge(&b, &a).expect("INV-FERR-001: merge(B,A) must succeed");
 
     assert_eq!(
         ab.datom_set(),
@@ -83,8 +85,14 @@ fn inv_ferr_002_merge_associates_concrete() {
         Op::Assert,
     )]));
 
-    let ab_c = merge(&merge(&a, &b), &c);
-    let a_bc = merge(&a, &merge(&b, &c));
+    let ab_c = merge(
+        &merge(&a, &b).expect("INV-FERR-002: merge(A,B) must succeed"),
+        &c,
+    ).expect("INV-FERR-002: merge(AB,C) must succeed");
+    let a_bc = merge(
+        &a,
+        &merge(&b, &c).expect("INV-FERR-002: merge(B,C) must succeed"),
+    ).expect("INV-FERR-002: merge(A,BC) must succeed");
 
     assert_eq!(
         ab_c.datom_set(),
@@ -114,7 +122,7 @@ fn inv_ferr_003_merge_idempotent_concrete() {
         ),
     ]));
 
-    let merged = merge(&store, &store);
+    let merged = merge(&store, &store).expect("INV-FERR-003: self-merge must succeed");
 
     assert_eq!(
         store.datom_set(),
@@ -189,22 +197,22 @@ fn inv_ferr_010_convergence_three_replicas() {
     // Replica 1: forward order
     let mut r1 = Store::genesis();
     for d in datoms.iter() {
-        r1.insert(d.clone());
+        r1.insert(d);
     }
 
     // Replica 2: reverse order
     let mut r2 = Store::genesis();
     for d in datoms.iter().rev() {
-        r2.insert(d.clone());
+        r2.insert(d);
     }
 
     // Replica 3: merge topology
     let mut r3a = Store::genesis();
-    r3a.insert(datoms[0].clone());
-    r3a.insert(datoms[2].clone());
+    r3a.insert(&datoms[0]);
+    r3a.insert(&datoms[2]);
     let mut r3b = Store::genesis();
-    r3b.insert(datoms[1].clone());
-    let r3 = merge(&r3a, &r3b);
+    r3b.insert(&datoms[1]);
+    let r3 = merge(&r3a, &r3b).expect("INV-FERR-010: merge must succeed");
 
     assert_eq!(
         r1.datom_set(),
@@ -235,12 +243,93 @@ fn inv_ferr_009_merge_exempt_from_schema() {
     let foreign_store = Store::from_datoms(BTreeSet::from([foreign_datom.clone()]));
 
     // Merge must preserve the foreign datom — no schema filtering
-    let merged = merge(&genesis, &foreign_store);
+    let merged = merge(&genesis, &foreign_store)
+        .expect("INV-FERR-009: merge with unknown attrs must succeed");
     assert!(
         merged.datom_set().contains(&foreign_datom),
         "INV-FERR-009/C4: merge dropped datom with unknown attribute. \
          Merge must be pure set union."
     );
+}
+
+/// INV-FERR-017: Shard partition + union = original store.
+///
+/// Partition a concrete store into N shards by entity hash. Verify the union
+/// of all shards equals the original store.
+#[test]
+fn inv_ferr_017_shard_equivalence_concrete() {
+    let datoms = BTreeSet::from([
+        Datom::new(
+            EntityId::from_content(b"shard-e1"),
+            Attribute::from("user/name"),
+            Value::String("Alice".into()),
+            TxId::new(1, 0, 0),
+            Op::Assert,
+        ),
+        Datom::new(
+            EntityId::from_content(b"shard-e2"),
+            Attribute::from("user/name"),
+            Value::String("Bob".into()),
+            TxId::new(2, 0, 0),
+            Op::Assert,
+        ),
+        Datom::new(
+            EntityId::from_content(b"shard-e3"),
+            Attribute::from("user/name"),
+            Value::String("Carol".into()),
+            TxId::new(3, 0, 0),
+            Op::Assert,
+        ),
+        Datom::new(
+            EntityId::from_content(b"shard-e1"),
+            Attribute::from("user/age"),
+            Value::Long(30),
+            TxId::new(4, 0, 0),
+            Op::Assert,
+        ),
+    ]);
+    let store = Store::from_datoms(datoms);
+    let shard_count = 3usize;
+
+    // Partition by entity.
+    let mut shards: Vec<BTreeSet<&Datom>> = (0..shard_count).map(|_| BTreeSet::new()).collect();
+    for d in store.datoms() {
+        let entity = d.entity();
+        let bytes = entity.as_bytes();
+        let mut buf = [0u8; 8];
+        let len = bytes.len().min(8);
+        buf[..len].copy_from_slice(&bytes[..len]);
+        let shard_id = (u64::from_le_bytes(buf) as usize) % shard_count;
+        shards[shard_id].insert(d);
+    }
+
+    // Union of shards = original.
+    let union: BTreeSet<&Datom> = shards.iter().flat_map(|s| s.iter().copied()).collect();
+    let primary: BTreeSet<&Datom> = store.datoms().collect();
+    assert_eq!(
+        union, primary,
+        "INV-FERR-017: shard union != original store"
+    );
+
+    // Total cardinality preserved.
+    let total: usize = shards.iter().map(|s| s.len()).sum();
+    assert_eq!(
+        total,
+        store.len(),
+        "INV-FERR-017: shard cardinality mismatch"
+    );
+
+    // Shards are disjoint.
+    for i in 0..shard_count {
+        for j in (i + 1)..shard_count {
+            let overlap: Vec<_> = shards[i].intersection(&shards[j]).collect();
+            assert!(
+                overlap.is_empty(),
+                "INV-FERR-017: shards {} and {} overlap by {} datoms",
+                i, j, overlap.len()
+            );
+        }
+    }
 }
 
 /// INV-FERR-012: Content-addressed identity — same content, same EntityId.
@@ -258,5 +347,179 @@ fn inv_ferr_012_same_content_same_id() {
     assert_ne!(
         id1, id3,
         "INV-FERR-012: different content produced same EntityId"
+    );
+}
+
+/// INV-FERR-004: Transact 3x via Database, assert store size only grows.
+///
+/// bd-7tb0: integration test at the Database level (not Store). Uses the
+/// full Database::genesis() -> db.transact() -> db.snapshot() path.
+#[test]
+fn test_inv_ferr_004_monotonic_growth_database() {
+    use ferratomic_core::db::Database;
+    use ferratomic_core::writer::Transaction;
+
+    let db = Database::genesis();
+    let agent = AgentId::from_bytes([4u8; 16]);
+
+    let mut prev_count = db.snapshot().datoms().count();
+
+    for i in 0..3i64 {
+        let tx = Transaction::new(agent)
+            .assert_datom(
+                EntityId::from_content(format!("growth-e{i}").as_bytes()),
+                Attribute::from("db/doc"),
+                Value::String(format!("growth-{i}").into()),
+            )
+            .commit(&db.schema())
+            .expect("INV-FERR-004: valid tx must commit");
+        db.transact(tx)
+            .expect("INV-FERR-004: transact must succeed");
+
+        let current_count = db.snapshot().datoms().count();
+        assert!(
+            current_count > prev_count,
+            "INV-FERR-004: store must strictly grow after transact. \
+             iteration={i}, prev={prev_count}, current={current_count}"
+        );
+        prev_count = current_count;
+    }
+
+    // Final size must be strictly greater than genesis.
+    assert!(
+        prev_count > 0,
+        "INV-FERR-004: database must contain datoms after 3 transactions"
+    );
+}
+
+/// INV-FERR-022: NullAntiEntropy compiles and diff returns empty.
+///
+/// bd-7tb0: verifies the anti-entropy trait boundary works at the
+/// integration level. NullAntiEntropy is the no-op default for
+/// single-node operation.
+#[test]
+fn test_inv_ferr_022_anti_entropy_trait() {
+    use ferratomic_core::anti_entropy::{AntiEntropy, NullAntiEntropy};
+
+    let ae = NullAntiEntropy;
+    let mut store = ferratomic_core::store::Store::genesis();
+
+    // diff must return Ok with empty vec.
+    let diff = ae
+        .diff(&store)
+        .expect("INV-FERR-022: NullAntiEntropy::diff must succeed");
+    assert!(
+        diff.is_empty(),
+        "INV-FERR-022: NullAntiEntropy diff must return empty vec, got {} bytes",
+        diff.len()
+    );
+
+    // apply_diff must succeed and leave store unchanged.
+    let epoch_before = store.epoch();
+    let len_before = store.len();
+    ae.apply_diff(&mut store, &diff)
+        .expect("INV-FERR-022: NullAntiEntropy::apply_diff must succeed");
+    assert_eq!(
+        store.epoch(),
+        epoch_before,
+        "INV-FERR-022: apply_diff must not change epoch"
+    );
+    assert_eq!(
+        store.len(),
+        len_before,
+        "INV-FERR-022: apply_diff must not change store size"
+    );
+
+    // apply_diff with non-empty bytes must also be a no-op.
+    ae.apply_diff(&mut store, &[0xCA, 0xFE, 0xBA, 0xBE])
+        .expect("INV-FERR-022: apply_diff with arbitrary bytes must succeed");
+    assert_eq!(
+        store.epoch(),
+        epoch_before,
+        "INV-FERR-022: apply_diff with arbitrary bytes must not change epoch"
+    );
+}
+
+/// INV-FERR-030: AcceptAll replica filter passes all datoms.
+///
+/// bd-7tb0: verifies the ReplicaFilter trait boundary at integration level.
+/// AcceptAll is the default full-replica behavior.
+#[test]
+fn test_inv_ferr_030_replica_filter() {
+    use ferratomic_core::topology::{AcceptAll, ReplicaFilter};
+
+    let filter = AcceptAll;
+
+    // Build several diverse datoms and verify all are accepted.
+    let datoms = vec![
+        Datom::new(
+            EntityId::from_content(b"filter-e1"),
+            Attribute::from("user/name"),
+            Value::String("Alice".into()),
+            TxId::new(1, 0, 0),
+            Op::Assert,
+        ),
+        Datom::new(
+            EntityId::from_content(b"filter-e2"),
+            Attribute::from("user/age"),
+            Value::Long(30),
+            TxId::new(2, 0, 0),
+            Op::Assert,
+        ),
+        Datom::new(
+            EntityId::from_content(b"filter-e3"),
+            Attribute::from("user/name"),
+            Value::String("Bob".into()),
+            TxId::new(3, 0, 0),
+            Op::Retract,
+        ),
+    ];
+
+    for (i, datom) in datoms.iter().enumerate() {
+        assert!(
+            filter.accepts(datom),
+            "INV-FERR-030: AcceptAll must accept datom {i}, got false"
+        );
+    }
+
+    // Verify AcceptAll is Send + Sync (required by trait bound).
+    fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<AcceptAll>();
+}
+
+/// INV-FERR-031: Two genesis databases produce identical datom sets.
+///
+/// bd-7tb0: integration-level genesis determinism test. Creates two
+/// Database instances via genesis(), verifies identical schemas, epochs,
+/// and datom sets.
+#[test]
+fn test_inv_ferr_031_genesis_determinism() {
+    use ferratomic_core::db::Database;
+
+    let db1 = Database::genesis();
+    let db2 = Database::genesis();
+
+    // Epochs must be identical (both 0).
+    assert_eq!(
+        db1.epoch(),
+        db2.epoch(),
+        "INV-FERR-031: genesis databases must have identical epochs"
+    );
+
+    // Schemas must be identical.
+    assert_eq!(
+        db1.schema(),
+        db2.schema(),
+        "INV-FERR-031: genesis databases must have identical schemas"
+    );
+
+    // Datom sets must be identical.
+    let snap1 = db1.snapshot();
+    let snap2 = db2.snapshot();
+    let datoms1: BTreeSet<_> = snap1.datoms().cloned().collect();
+    let datoms2: BTreeSet<_> = snap2.datoms().cloned().collect();
+    assert_eq!(
+        datoms1, datoms2,
+        "INV-FERR-031: genesis databases must have identical datom sets"
     );
 }

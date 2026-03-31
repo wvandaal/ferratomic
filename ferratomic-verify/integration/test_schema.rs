@@ -1,7 +1,7 @@
 //! Schema validation integration tests.
 //!
 //! INV-FERR-009, INV-FERR-031.
-//! ALL TESTS MUST FAIL (red phase). Types are not yet implemented.
+//! Phase 4a: all tests passing against ferratomic-core implementation.
 
 use ferratom::{AgentId, Attribute, EntityId, Value};
 use ferratomic_core::store::Store;
@@ -157,5 +157,140 @@ fn inv_ferr_009_atomic_rejection() {
     assert!(
         result.is_err(),
         "INV-FERR-009: transaction with one invalid datom was not fully rejected"
+    );
+}
+
+/// INV-FERR-019: Every FerraError variant can be constructed and exhaustively matched.
+///
+/// This test enumerates ALL variants of `FerraError` without using a wildcard (`_ =>`).
+/// If a new variant is added to the enum, this test will fail to compile until it is
+/// updated — which is the point.
+#[test]
+fn test_inv_ferr_019_error_exhaustiveness() {
+    use ferratom::FerraError;
+
+    let variants: Vec<FerraError> = vec![
+        FerraError::WalWrite("test wal write".into()),
+        FerraError::WalRead("test wal read".into()),
+        FerraError::CheckpointCorrupted {
+            expected: "abc123".into(),
+            actual: "def456".into(),
+        },
+        FerraError::CheckpointWrite("test checkpoint write".into()),
+        FerraError::Io("test io error".into()),
+        FerraError::UnknownAttribute {
+            attribute: "test/attr".into(),
+        },
+        FerraError::SchemaViolation {
+            attribute: "test/attr".into(),
+            expected: "String".into(),
+            got: "Long".into(),
+        },
+        FerraError::EmptyTransaction,
+        FerraError::Backpressure,
+        FerraError::PeerUnreachable {
+            addr: "127.0.0.1:9000".into(),
+            reason: "connection refused".into(),
+        },
+        FerraError::SchemaIncompatible {
+            attribute: "test/attr".into(),
+            left: "String".into(),
+            right: "Long".into(),
+        },
+        FerraError::InvariantViolation {
+            invariant: "INV-FERR-005".into(),
+            details: "test invariant violation".into(),
+        },
+    ];
+
+    // Exhaustive match on every variant — no wildcards.
+    // Adding a new FerraError variant will cause a compile error here.
+    for error in &variants {
+        match error {
+            FerraError::WalWrite(msg) => {
+                assert!(!msg.is_empty(), "WalWrite message should not be empty");
+            }
+            FerraError::WalRead(msg) => {
+                assert!(!msg.is_empty(), "WalRead message should not be empty");
+            }
+            FerraError::CheckpointCorrupted { expected, actual } => {
+                assert_ne!(
+                    expected, actual,
+                    "CheckpointCorrupted expected != actual"
+                );
+            }
+            FerraError::CheckpointWrite(msg) => {
+                assert!(!msg.is_empty(), "CheckpointWrite message should not be empty");
+            }
+            FerraError::Io(msg) => {
+                assert!(!msg.is_empty(), "Io message should not be empty");
+            }
+            FerraError::UnknownAttribute { attribute } => {
+                assert!(
+                    !attribute.is_empty(),
+                    "UnknownAttribute attribute should not be empty"
+                );
+            }
+            FerraError::SchemaViolation {
+                attribute,
+                expected,
+                got,
+            } => {
+                assert!(!attribute.is_empty(), "SchemaViolation attribute should not be empty");
+                assert_ne!(
+                    expected, got,
+                    "SchemaViolation expected != got"
+                );
+            }
+            FerraError::EmptyTransaction => {
+                // Unit variant — construction is sufficient proof.
+            }
+            FerraError::SchemaIncompatible {
+                attribute,
+                left,
+                right,
+            } => {
+                assert!(!attribute.is_empty(), "SchemaIncompatible attribute should not be empty");
+                assert_ne!(
+                    left, right,
+                    "SchemaIncompatible left != right"
+                );
+            }
+            FerraError::Backpressure => {
+                // Unit variant — construction is sufficient proof.
+            }
+            FerraError::PeerUnreachable { addr, reason } => {
+                assert!(!addr.is_empty(), "PeerUnreachable addr should not be empty");
+                assert!(!reason.is_empty(), "PeerUnreachable reason should not be empty");
+            }
+            FerraError::InvariantViolation { invariant, details } => {
+                assert!(
+                    invariant.starts_with("INV-FERR-"),
+                    "InvariantViolation invariant should follow naming convention"
+                );
+                assert!(!details.is_empty(), "InvariantViolation details should not be empty");
+            }
+        }
+    }
+
+    // Verify Display impl works for every variant (INV-FERR-019: typed errors).
+    for error in &variants {
+        let display = format!("{error}");
+        assert!(
+            !display.is_empty(),
+            "INV-FERR-019: Display impl must produce non-empty output for all variants"
+        );
+    }
+
+    // Verify std::error::Error impl (every variant is a valid Error).
+    for error in &variants {
+        let as_error: &dyn std::error::Error = error;
+        let _ = format!("{as_error}");
+    }
+
+    assert_eq!(
+        variants.len(),
+        12,
+        "INV-FERR-019: expected 12 FerraError variants — update this test if variants are added"
     );
 }

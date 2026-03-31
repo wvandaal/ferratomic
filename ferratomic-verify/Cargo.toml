@@ -15,10 +15,15 @@ ordered-float = { workspace = true }
 im = { workspace = true }
 
 [dev-dependencies]
+bincode = { workspace = true }
+criterion = { workspace = true }
 tempfile = "3"
 tokio = { workspace = true }
 rand = "0.8"
 serde_json = { workspace = true }
+
+[lints.rust]
+unexpected_cfgs = { level = "allow", check-cfg = ['cfg(kani)'] }
 
 # --- Property-based test suites (proptest/) ---
 
@@ -67,3 +72,34 @@ path = "integration/test_recovery.rs"
 [[test]]
 name = "integration_schema"
 path = "integration/test_schema.rs"
+
+[[test]]
+name = "integration_thresholds"
+path = "integration/test_thresholds.rs"
+
+# --- Criterion benchmark suites (benches/) ---
+
+[[bench]]
+name = "cold_start"
+path = "benches/cold_start.rs"
+harness = false
+
+[[bench]]
+name = "merge_throughput"
+path = "benches/merge_throughput.rs"
+harness = false
+
+[[bench]]
+name = "read_latency"
+path = "benches/read_latency.rs"
+harness = false
+
+[[bench]]
+name = "snapshot_creation"
+path = "benches/snapshot_creation.rs"
+harness = false
+
+[[bench]]
+name = "write_amplification"
+path = "benches/write_amplification.rs"
+harness = false

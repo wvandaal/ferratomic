@@ -18,6 +18,7 @@
 //! Leaf crate in the dependency DAG. FREE objects — no imposed structure.
 //! `ferratom` depends on nothing project-internal. All other crates depend on it.
 
+// INV-FERR-023: No unsafe code permitted. Compiler-enforced.
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 #![deny(clippy::all)]
@@ -30,6 +31,6 @@ pub mod schema;
 pub mod traits;
 
 pub use clock::{AgentId, Frontier, HybridClock, TxId};
-pub use datom::{Attribute, Datom, EntityId, Op, Value};
+pub use datom::{Attribute, Datom, EntityId, NonNanFloat, Op, Value};
 pub use error::FerraError;
 pub use schema::{AttributeDef, Cardinality, ResolutionMode, Schema, ValueType};

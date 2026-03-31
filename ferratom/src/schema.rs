@@ -8,8 +8,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::datom::Attribute;
 
-/// The type of values an attribute accepts.
-/// INV-FERR-009: Each attribute has exactly one declared `ValueType`.
+/// The type of values an attribute accepts (INV-FERR-009).
+///
+/// Each attribute has exactly one declared `ValueType`. Schema validation
+/// at the transact boundary checks that every datom's value matches its
+/// attribute's declared type.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum ValueType {
     /// Keyword (namespace/name string)
@@ -36,8 +39,10 @@ pub enum ValueType {
     BigDec,
 }
 
-/// Cardinality of an attribute.
-/// INV-FERR-032: Card-one uses LWW, card-many keeps all non-retracted.
+/// Cardinality of an attribute (INV-FERR-032).
+///
+/// Card-one uses last-writer-wins (LWW) resolution; card-many keeps
+/// all non-retracted values for each entity-attribute pair.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum Cardinality {
     /// At most one value per entity-attribute pair (last-writer-wins).
@@ -46,8 +51,9 @@ pub enum Cardinality {
     Many,
 }
 
-/// Resolution mode for card-one conflicts.
-/// Phase 4a: only `Lww` and `MultiValue` are implemented.
+/// Resolution mode for card-one conflicts (INV-FERR-032).
+///
+/// Phase 4a implements `Lww` and `MultiValue` only.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum ResolutionMode {
     /// Last-writer-wins by `TxId` ordering.
@@ -56,8 +62,10 @@ pub enum ResolutionMode {
     MultiValue,
 }
 
-/// Definition of a single attribute in the schema.
-/// INV-FERR-009: Governs validation at transact boundary.
+/// Definition of a single attribute in the schema (INV-FERR-009).
+///
+/// Governs transact-time validation: the declared `ValueType` and
+/// `Cardinality` constrain which datoms are admissible.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct AttributeDef {
     value_type: ValueType,
@@ -80,19 +88,19 @@ impl AttributeDef {
         Self { value_type, cardinality, resolution_mode, doc }
     }
 
-    /// The value type this attribute accepts.
+    /// The value type this attribute accepts (INV-FERR-009).
     #[must_use]
     pub fn value_type(&self) -> &ValueType {
         &self.value_type
     }
 
-    /// The cardinality (one or many).
+    /// The cardinality: one or many (INV-FERR-032).
     #[must_use]
     pub fn cardinality(&self) -> &Cardinality {
         &self.cardinality
     }
 
-    /// The conflict resolution mode.
+    /// The conflict resolution mode for card-one attributes (INV-FERR-032).
     #[must_use]
     pub fn resolution_mode(&self) -> &ResolutionMode {
         &self.resolution_mode
@@ -105,16 +113,18 @@ impl AttributeDef {
     }
 }
 
-/// The schema: a mapping from attribute names to their definitions.
+/// The schema: an ordered mapping from attribute names to their definitions.
+///
 /// INV-FERR-009: Schema-as-data. Schema evolution is a transaction.
-/// INV-FERR-031: Genesis creates 19 axiomatic attributes.
+/// INV-FERR-031: Genesis creates 19 axiomatic attributes that bootstrap
+/// all subsequent schema definitions.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Schema {
     attrs: BTreeMap<Attribute, AttributeDef>,
 }
 
 impl Schema {
-    /// Create an empty schema.
+    /// Create an empty schema with no defined attributes.
     #[must_use]
     pub fn empty() -> Self {
         Self {
@@ -133,36 +143,38 @@ impl Schema {
         }
     }
 
-    /// Look up an attribute definition.
+    /// Look up an attribute definition by name (INV-FERR-009).
     #[must_use]
     pub fn get(&self, attr: &Attribute) -> Option<&AttributeDef> {
         self.attrs.get(attr)
     }
 
-    /// Check if an attribute is defined in the schema.
+    /// Check if an attribute is defined in this schema (INV-FERR-009).
     #[must_use]
     pub fn contains(&self, attr: &Attribute) -> bool {
         self.attrs.contains_key(attr)
     }
 
-    /// Number of defined attributes.
+    /// Number of defined attributes in this schema.
     #[must_use]
     pub fn len(&self) -> usize {
         self.attrs.len()
     }
 
-    /// Whether the schema is empty.
+    /// Whether this schema contains no attribute definitions.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.attrs.is_empty()
     }
 
-    /// Insert or update an attribute definition.
+    /// Insert or update an attribute definition (INV-FERR-009).
+    ///
+    /// Used by schema evolution to install new attributes at transact time.
     pub fn define(&mut self, attr: Attribute, def: AttributeDef) {
         self.attrs.insert(attr, def);
     }
 
-    /// Iterate over all attribute definitions.
+    /// Iterate over all attribute definitions in sorted order (INV-FERR-031).
     pub fn iter(&self) -> impl Iterator<Item = (&Attribute, &AttributeDef)> {
         self.attrs.iter()
     }

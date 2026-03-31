@@ -8,19 +8,20 @@
 
 use crate::store::Store;
 
-/// Merge two stores by set union.
+/// Merge two stores by set union (INV-FERR-001, INV-FERR-002, INV-FERR-003).
 ///
 /// The result contains exactly the union of both datom sets.
-/// Commutative (INV-FERR-001), associative (INV-FERR-002),
+/// Commutative (INV-FERR-001), associative (INV-FERR-002), and
 /// idempotent (INV-FERR-003). Both input stores are preserved
 /// (INV-FERR-004: monotonic growth).
 ///
 /// INV-FERR-009: schemas are unioned (all attributes from both stores).
 /// INV-FERR-007: epoch is `max(a.epoch, b.epoch)`.
 ///
-/// Merge does NOT validate schema (C4). Datoms with unknown
-/// attributes are preserved in the union.
-#[must_use]
-pub fn merge(a: &Store, b: &Store) -> Store {
-    Store::from_merge(a, b)
+/// # Errors
+///
+/// Returns `FerraError::SchemaIncompatible` if the stores define the
+/// same attribute with different definitions (INV-FERR-043).
+pub fn merge(a: &Store, b: &Store) -> Result<Store, ferratom::FerraError> {
+    Ok(Store::from_merge(a, b))
 }

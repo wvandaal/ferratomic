@@ -5,9 +5,10 @@
 //!
 //! ## Development Order
 //!
-//! This crate is written BEFORE ferratomic-core (Phase 2, red phase TDD).
-//! All tests must FAIL initially. Implementation makes them pass.
+//! Written before ferratomic-core (Phase 2 red-phase TDD).
+//! Phase 4a: all tests now passing against the implementation.
 
+// INV-FERR-023: No unsafe code permitted. Compiler-enforced.
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 

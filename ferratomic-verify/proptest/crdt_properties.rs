@@ -2,9 +2,10 @@
 //!
 //! Tests INV-FERR-001 (commutativity), INV-FERR-002 (associativity),
 //! INV-FERR-003 (idempotency), INV-FERR-004 (monotonic growth),
-//! INV-FERR-010 (convergence), INV-FERR-012 (content-addressed identity).
+//! INV-FERR-010 (convergence), INV-FERR-012 (content-addressed identity),
+//! INV-FERR-031 (genesis determinism).
 //!
-//! ALL TESTS MUST FAIL (red phase). Types are not yet implemented.
+//! Phase 4a: all tests passing against ferratomic-core implementation.
 
 use ferratom::{Datom, EntityId};
 use ferratomic_core::merge::merge;
@@ -37,15 +38,25 @@ proptest! {
         a in arb_store(100),
         b in arb_store(100),
     ) {
-        let ab = merge(&a, &b);
-        let ba = merge(&b, &a);
+        let ab = merge(&a, &b).expect("INV-FERR-001: merge(A,B) must succeed");
+        let ba = merge(&b, &a).expect("INV-FERR-001: merge(B,A) must succeed");
 
+        let (a_len, b_len, ab_len, ba_len) = (a.len(), b.len(), ab.len(), ba.len());
+        // bd-2jx: compare datom sets, schema length, and epoch for equality.
+        // Store does not implement PartialEq; compare components instead.
         prop_assert_eq!(
-            ab.datom_set(),
-            ba.datom_set(),
-            "INV-FERR-001 violated: merge(A,B) != merge(B,A). \
+            ab.datom_set(), ba.datom_set(),
+            "INV-FERR-001 violated: merge(A,B).datom_set != merge(B,A).datom_set. \
              |A|={}, |B|={}, |A∪B|={}, |B∪A|={}",
-            a.len(), b.len(), ab.len(), ba.len()
+            a_len, b_len, ab_len, ba_len
+        );
+        prop_assert_eq!(
+            ab.schema().len(), ba.schema().len(),
+            "INV-FERR-001 violated: merge(A,B).schema != merge(B,A).schema"
+        );
+        prop_assert_eq!(
+            ab.epoch(), ba.epoch(),
+            "INV-FERR-001 violated: merge(A,B).epoch != merge(B,A).epoch"
         );
     }
 
@@ -59,15 +70,31 @@ proptest! {
         b in arb_store(50),
         c in arb_store(50),
     ) {
-        let ab_c = merge(&merge(&a, &b), &c);
-        let a_bc = merge(&a, &merge(&b, &c));
+        let ab_c = merge(
+            &merge(&a, &b).expect("INV-FERR-002: merge(A,B) must succeed"),
+            &c,
+        ).expect("INV-FERR-002: merge(AB,C) must succeed");
+        let a_bc = merge(
+            &a,
+            &merge(&b, &c).expect("INV-FERR-002: merge(B,C) must succeed"),
+        ).expect("INV-FERR-002: merge(A,BC) must succeed");
 
+        let (a_len, b_len, c_len) = (a.len(), b.len(), c.len());
+        // bd-2jx: compare datom sets, schema length, and epoch for equality.
+        // Store does not implement PartialEq; compare components instead.
         prop_assert_eq!(
-            ab_c.datom_set(),
-            a_bc.datom_set(),
-            "INV-FERR-002 violated: merge(merge(A,B),C) != merge(A,merge(B,C)). \
+            ab_c.datom_set(), a_bc.datom_set(),
+            "INV-FERR-002 violated: merge(merge(A,B),C).datom_set != merge(A,merge(B,C)).datom_set. \
              |A|={}, |B|={}, |C|={}",
-            a.len(), b.len(), c.len()
+            a_len, b_len, c_len
+        );
+        prop_assert_eq!(
+            ab_c.schema().len(), a_bc.schema().len(),
+            "INV-FERR-002 violated: schema mismatch"
+        );
+        prop_assert_eq!(
+            ab_c.epoch(), a_bc.epoch(),
+            "INV-FERR-002 violated: epoch mismatch"
         );
     }
 
@@ -79,25 +106,30 @@ proptest! {
     fn inv_ferr_003_merge_idempotency(
         store in arb_store(100),
     ) {
-        let merged = merge(&store, &store);
+        let merged = merge(&store, &store).expect("INV-FERR-003: self-merge must succeed");
 
-        prop_assert_eq!(
-            store.datom_set(),
-            merged.datom_set(),
-            "INV-FERR-003 violated: merge(A,A) != A. |A|={}, |merge(A,A)|={}",
-            store.len(), merged.len()
-        );
-        prop_assert_eq!(
-            store.len(),
-            merged.len(),
-            "INV-FERR-003 violated: cardinality changed. |A|={}, |merge(A,A)|={}",
-            store.len(), merged.len()
-        );
+        let store_len = store.len();
+        let merged_len = merged.len();
         // Also verify index state is preserved (spec falsification includes "different index state")
         prop_assert!(
             verify_index_bijection(&merged),
             "INV-FERR-003 violated: index bijection broken after self-merge. |A|={}",
-            store.len()
+            store_len
+        );
+        // bd-2jx: compare datom sets, schema length, and epoch for equality.
+        // Store does not implement PartialEq; compare components instead.
+        prop_assert_eq!(
+            store.datom_set(), merged.datom_set(),
+            "INV-FERR-003 violated: merge(A,A).datom_set != A.datom_set. |A|={}, |merge(A,A)|={}",
+            store_len, merged_len
+        );
+        prop_assert_eq!(
+            store.schema().len(), merged.schema().len(),
+            "INV-FERR-003 violated: schema mismatch after self-merge"
+        );
+        prop_assert_eq!(
+            store.epoch(), merged.epoch(),
+            "INV-FERR-003 violated: epoch mismatch after self-merge"
         );
     }
 
@@ -141,7 +173,7 @@ proptest! {
         a in arb_store(50),
         b in arb_store(50),
     ) {
-        let merged = merge(&a, &b);
+        let merged = merge(&a, &b).expect("INV-FERR-004: merge must succeed");
 
         prop_assert!(
             merged.len() >= a.len(),
@@ -187,14 +219,14 @@ proptest! {
         let mut r2 = Store::genesis();
 
         for d in &datoms {
-            r1.insert(d.clone());
+            r1.insert(d);
         }
 
         let mut shuffled = datoms.clone();
         let mut rng = StdRng::seed_from_u64(perm_seed);
         shuffled.shuffle(&mut rng);
         for d in &shuffled {
-            r2.insert(d.clone());
+            r2.insert(d);
         }
 
         prop_assert_eq!(
@@ -254,7 +286,7 @@ proptest! {
         // Build store B with datoms whose attributes are NOT in genesis schema
         let b = Store::from_datoms(unknown_datoms.iter().cloned().collect());
 
-        let merged = merge(&a, &b);
+        let merged = merge(&a, &b).expect("INV-FERR-009: merge must succeed");
 
         // Every datom from B must be in the merged result — merge does NOT filter
         for d in &unknown_datoms {
@@ -265,5 +297,66 @@ proptest! {
                 d.attribute()
             );
         }
+    }
+
+    /// INV-FERR-031: Two independent genesis() calls produce identical stores.
+    ///
+    /// Genesis determinism: the 19 axiomatic meta-schema attributes, empty
+    /// datom set, epoch 0, and genesis agent are all fixed. Any deviation
+    /// between two calls indicates non-determinism in schema construction.
+    ///
+    /// The proptest input is a dummy seed — we want 10,000 repetitions to
+    /// stress any source of non-determinism (hashmap iteration order,
+    /// thread-local state, etc.).
+    ///
+    /// Falsification: two genesis() calls produce stores that differ in
+    /// schema, epoch, datom set, or genesis agent.
+    #[test]
+    fn inv_ferr_031_genesis_determinism(
+        _seed in any::<u64>(),
+    ) {
+        let g1 = Store::genesis();
+        let g2 = Store::genesis();
+
+        // Datom sets must be identical (both empty).
+        prop_assert_eq!(
+            g1.datom_set(), g2.datom_set(),
+            "INV-FERR-031 violated: genesis datom sets differ"
+        );
+
+        // Epoch must be identical (both 0).
+        prop_assert_eq!(
+            g1.epoch(), g2.epoch(),
+            "INV-FERR-031 violated: genesis epochs differ. g1={}, g2={}",
+            g1.epoch(), g2.epoch()
+        );
+
+        // Schema must have identical attributes.
+        prop_assert_eq!(
+            g1.schema().len(), g2.schema().len(),
+            "INV-FERR-031 violated: genesis schema lengths differ. g1={}, g2={}",
+            g1.schema().len(), g2.schema().len()
+        );
+
+        // Each attribute in g1 must exist with the same definition in g2.
+        for (attr, def) in g1.schema().iter() {
+            let g2_def = g2.schema().get(attr);
+            prop_assert!(
+                g2_def.is_some(),
+                "INV-FERR-031 violated: attribute {:?} in g1 but not g2",
+                attr
+            );
+            prop_assert_eq!(
+                def, g2_def.expect("already checked"),
+                "INV-FERR-031 violated: attribute {:?} has different definition",
+                attr
+            );
+        }
+
+        // Genesis agent must be identical.
+        prop_assert_eq!(
+            g1.genesis_agent(), g2.genesis_agent(),
+            "INV-FERR-031 violated: genesis agents differ"
+        );
     }
 }

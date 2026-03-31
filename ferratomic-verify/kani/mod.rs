@@ -8,9 +8,12 @@
 
 #![cfg(kani)]
 
+pub mod backpressure_bounds;
 pub mod clock;
 pub mod crdt_laws;
 pub mod durability;
+pub mod error_exhaustiveness;
+pub mod live_resolution;
 pub mod schema_identity;
 pub mod sharding;
 pub mod store_views;

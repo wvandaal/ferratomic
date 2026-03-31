@@ -32,7 +32,11 @@ fn shard(store: &Store, shard_count: usize) -> Vec<Store> {
 
 /// Recompose a sharded store by set union.
 fn unshard(shards: &[Store]) -> Store {
-    shards.iter().fold(Store::empty(), |acc, s| merge(&acc, s))
+    shards
+        .iter()
+        .fold(Store::empty(), |acc, s| {
+            merge(&acc, s).expect("INV-FERR-017: unshard merge must succeed")
+        })
 }
 
 /// INV-FERR-017: sharding followed by unsharding is identity.
