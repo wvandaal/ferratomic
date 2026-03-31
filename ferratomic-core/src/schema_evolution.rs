@@ -24,7 +24,7 @@ use ferratom::{
 /// these 19. This is the schema-as-data bootstrap (C3, C7).
 #[must_use]
 #[allow(clippy::too_many_lines)] // 19 attribute definitions are inherently verbose
-pub fn genesis_schema() -> Schema {
+pub(crate) fn genesis_schema() -> Schema {
     let mut schema = Schema::empty();
 
     let lww_kw = |doc: &str| AttributeDef::new(
@@ -83,7 +83,7 @@ pub fn genesis_schema() -> Schema {
 /// conflicting values for `db/ident`, `db/valueType`, or `db/cardinality`
 /// within the same transaction (bd-ty5 / CR-037).
 #[allow(clippy::too_many_lines)]
-pub fn evolve_schema(schema: &mut Schema, datoms: &[Datom]) -> Result<(), FerraError> {
+pub(crate) fn evolve_schema(schema: &mut Schema, datoms: &[Datom]) -> Result<(), FerraError> {
     let mut by_entity: HashMap<EntityId, Vec<&Datom>> = HashMap::new();
     for datom in datoms {
         by_entity.entry(datom.entity()).or_default().push(datom);
@@ -178,7 +178,7 @@ fn schema_violation(field: &str, expected: &str, got: &str) -> FerraError {
 ///
 /// Returns `None` for unrecognized type keywords.
 #[must_use]
-pub fn parse_value_type(keyword: &str) -> Option<ValueType> {
+pub(crate) fn parse_value_type(keyword: &str) -> Option<ValueType> {
     match keyword {
         "db.type/keyword" => Some(ValueType::Keyword),
         "db.type/string" => Some(ValueType::String),
@@ -203,7 +203,7 @@ pub fn parse_value_type(keyword: &str) -> Option<ValueType> {
 ///
 /// Returns `None` for unrecognized cardinality keywords.
 #[must_use]
-pub fn parse_cardinality(keyword: &str) -> Option<Cardinality> {
+pub(crate) fn parse_cardinality(keyword: &str) -> Option<Cardinality> {
     match keyword {
         "db.cardinality/one" => Some(Cardinality::One),
         "db.cardinality/many" => Some(Cardinality::Many),

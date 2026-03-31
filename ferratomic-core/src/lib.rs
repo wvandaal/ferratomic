@@ -127,6 +127,37 @@
 //! - `transport`: federation transport layer (Phase 4c)
 //! - `topology`: cluster topology and peer discovery (Phase 4c)
 //!
+//! # Quick Start
+//!
+//! ```no_run
+//! use ferratom::{AgentId, Attribute, EntityId, Value};
+//! use ferratomic_core::db::Database;
+//! use ferratomic_core::writer::Transaction;
+//!
+//! // Create a genesis database (deterministic, INV-FERR-031)
+//! let db = Database::genesis();
+//!
+//! // Build a transaction (typestate: Building -> Committed)
+//! let agent = AgentId::from_bytes([1u8; 16]);
+//! let schema = db.schema();
+//! let tx = Transaction::new(agent)
+//!     .assert_datom(
+//!         EntityId::from_content(b"alice"),
+//!         Attribute::from("db/doc"),
+//!         Value::String("Alice".into()),
+//!     )
+//!     .commit(&schema)
+//!     .expect("schema valid");
+//!
+//! // Commit (advances epoch, writes WAL if configured)
+//! let receipt = db.transact(tx).expect("transact succeeds");
+//! assert_eq!(receipt.epoch(), 1);
+//!
+//! // Read via snapshot (INV-FERR-006: consistent point-in-time view)
+//! let snap = db.snapshot();
+//! assert!(snap.datoms().count() > 0);
+//! ```
+//!
 //! ## Algebraic Role
 //!
 //! Core crate. ALGEBRAS — operations over types from ferratom.
@@ -139,17 +170,17 @@
 #![warn(clippy::pedantic)]
 
 pub mod indexes;
-pub mod schema_evolution;
+pub(crate) mod schema_evolution;
 pub mod store;
 pub mod db;
-pub mod snapshot;
+pub(crate) mod snapshot;
 pub mod writer;
 pub mod wal;
 pub mod checkpoint;
 pub mod storage;
 pub mod observer;
 pub mod merge;
-pub mod transport;
+pub(crate) mod transport;
 pub mod topology;
 pub mod backpressure;
 pub mod anti_entropy;

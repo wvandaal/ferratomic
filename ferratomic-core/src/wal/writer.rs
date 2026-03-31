@@ -37,7 +37,7 @@ impl Wal {
     /// # Errors
     ///
     /// Returns `FerraError::WalWrite` if the write fails.
-    pub fn append_raw(&mut self, epoch: u64, payload: &[u8]) -> Result<(), FerraError> {
+    pub(crate) fn append_raw(&mut self, epoch: u64, payload: &[u8]) -> Result<(), FerraError> {
         self.write_frame(epoch, payload)
     }
 

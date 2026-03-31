@@ -79,7 +79,7 @@ struct CheckpointPayload {
 ///
 /// Returns `FerraError::CheckpointWrite` if the JSON payload exceeds
 /// `u32::MAX` bytes or serialization fails.
-pub fn serialize_checkpoint_bytes(store: &Store) -> Result<Vec<u8>, FerraError> {
+pub(crate) fn serialize_checkpoint_bytes(store: &Store) -> Result<Vec<u8>, FerraError> {
     let epoch = store.epoch();
 
     // Build deterministic payload: schema sorted by attribute name,
@@ -139,7 +139,7 @@ pub fn serialize_checkpoint_bytes(store: &Store) -> Result<Vec<u8>, FerraError> 
 ///
 /// Returns `FerraError::CheckpointCorrupted` on checksum mismatch,
 /// format errors, or deserialization failure.
-pub fn deserialize_checkpoint_bytes(data: &[u8]) -> Result<Store, FerraError> {
+pub(crate) fn deserialize_checkpoint_bytes(data: &[u8]) -> Result<Store, FerraError> {
     if data.len() < MIN_FILE_SIZE {
         return Err(FerraError::CheckpointCorrupted {
             expected: format!("at least {MIN_FILE_SIZE} bytes"),
@@ -226,7 +226,7 @@ pub fn load_checkpoint(path: &Path) -> Result<Store, FerraError> {
 ///
 /// Returns `FerraError::Io` on read failure or `FerraError::CheckpointCorrupted`
 /// on checksum/format errors.
-pub fn load_checkpoint_from_reader<R: std::io::Read>(reader: &mut R) -> Result<Store, FerraError> {
+pub(crate) fn load_checkpoint_from_reader<R: std::io::Read>(reader: &mut R) -> Result<Store, FerraError> {
     let mut data = Vec::new();
     reader
         .read_to_end(&mut data)

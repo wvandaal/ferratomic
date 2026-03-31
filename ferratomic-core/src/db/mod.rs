@@ -60,7 +60,8 @@ use crate::{
 /// to make the two lifecycle phases explicit in the type system and to
 /// support future phased-initialization flows (e.g., async recovery).
 #[derive(Debug)]
-pub struct Opening;
+#[allow(dead_code)] // Typestate marker — exists for the type system, not for construction.
+pub(crate) struct Opening;
 
 /// Marker: database initialization is complete. Reads (`snapshot`, `schema`,
 /// `epoch`) and writes (`transact`, `register_observer`) are available.

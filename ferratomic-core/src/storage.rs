@@ -577,36 +577,22 @@ pub fn cold_start(data_dir: &Path) -> Result<ColdStartResult, FerraError> {
 
     // Level 1: checkpoint + WAL (fastest path).
     if has_checkpoint && has_wal {
-        if let Ok(db) = Database::recover(&checkpoint_path, &wal_path) {
-            return Ok(ColdStartResult {
-                database: db,
-                level: RecoveryLevel::CheckpointPlusWal,
-            });
+        if let Some(result) = try_checkpoint_plus_wal(&checkpoint_path, &wal_path) {
+            return Ok(result);
         }
     }
 
     // Level 1b: checkpoint only (no WAL file).
-    // INV-FERR-008: attach a WAL so post-recovery transactions are durable.
     if has_checkpoint && !has_wal {
-        if let Ok(store) = crate::checkpoint::load_checkpoint(&checkpoint_path) {
-            let db = match Database::from_store_with_wal(store.clone(), &wal_path) {
-                Ok(db) => db,
-                Err(_) => Database::from_store(store),
-            };
-            return Ok(ColdStartResult {
-                database: db,
-                level: RecoveryLevel::CheckpointOnly,
-            });
+        if let Some(result) = try_checkpoint_only(&checkpoint_path, &wal_path) {
+            return Ok(result);
         }
     }
 
     // Level 2: WAL-only (no checkpoint).
     if has_wal {
-        if let Ok(db) = Database::recover_from_wal(&wal_path) {
-            return Ok(ColdStartResult {
-                database: db,
-                level: RecoveryLevel::WalOnly,
-            });
+        if let Some(result) = try_wal_only(&wal_path) {
+            return Ok(result);
         }
     }
 
@@ -616,6 +602,53 @@ pub fn cold_start(data_dir: &Path) -> Result<ColdStartResult, FerraError> {
     Ok(ColdStartResult {
         database: db,
         level: RecoveryLevel::Genesis,
+    })
+}
+
+/// Level 1 filesystem recovery: checkpoint + WAL delta.
+///
+/// INV-FERR-013, INV-FERR-014: Load checkpoint then replay WAL entries
+/// after the checkpoint epoch. Returns `None` if recovery fails (corrupt
+/// data), allowing the caller to fall back to a lower level.
+fn try_checkpoint_plus_wal(
+    checkpoint_path: &Path,
+    wal_path: &Path,
+) -> Option<ColdStartResult> {
+    let db = Database::recover(checkpoint_path, wal_path).ok()?;
+    Some(ColdStartResult {
+        database: db,
+        level: RecoveryLevel::CheckpointPlusWal,
+    })
+}
+
+/// Level 1b filesystem recovery: checkpoint only (no WAL file).
+///
+/// INV-FERR-013: Load checkpoint as complete state.
+/// INV-FERR-008: Attach a fresh WAL so post-recovery transactions are durable.
+fn try_checkpoint_only(
+    checkpoint_path: &Path,
+    wal_path: &Path,
+) -> Option<ColdStartResult> {
+    let store = crate::checkpoint::load_checkpoint(checkpoint_path).ok()?;
+    let db = match Database::from_store_with_wal(store.clone(), wal_path) {
+        Ok(db) => db,
+        Err(_) => Database::from_store(store),
+    };
+    Some(ColdStartResult {
+        database: db,
+        level: RecoveryLevel::CheckpointOnly,
+    })
+}
+
+/// Level 2 filesystem recovery: WAL-only (no checkpoint).
+///
+/// INV-FERR-014: Replay all WAL entries from genesis. Returns `None` if
+/// WAL recovery fails, allowing fallback to genesis.
+fn try_wal_only(wal_path: &Path) -> Option<ColdStartResult> {
+    let db = Database::recover_from_wal(wal_path).ok()?;
+    Some(ColdStartResult {
+        database: db,
+        level: RecoveryLevel::WalOnly,
     })
 }
 

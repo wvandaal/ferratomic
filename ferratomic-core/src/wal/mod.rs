@@ -31,7 +31,7 @@
 mod recover;
 mod writer;
 
-pub use recover::recover_wal_from_reader;
+pub(crate) use recover::recover_wal_from_reader;
 
 use std::{
     fs::{File, OpenOptions},

@@ -7,7 +7,7 @@
 
 use std::sync::{atomic::Ordering, Arc};
 
-use ferratom::FerraError;
+use ferratom::{Datom, FerraError};
 
 use crate::{
     store::{Store, TxReceipt},
@@ -55,37 +55,58 @@ impl Database<Ready> {
             .try_lock()
             .map_err(|_| FerraError::Backpressure)?;
 
-        // Step 1: Apply transaction to a cloned store (stamps TxIds, creates
-        // tx metadata datoms). The clone is NOT yet published.
-        // TxReceipt carries the inserted datoms directly -- no O(n) set
-        // difference needed. This is O(m) where m = transaction datom count.
+        // Step 1: Apply transaction to a cloned store.
         let current = self.current.load();
         let mut new_store = Store::clone(&current);
         let receipt = new_store.transact(transaction)?;
         let new_datoms = receipt.datoms().to_vec();
 
-        // Step 2: INV-FERR-008: Write WAL with STAMPED datoms BEFORE publishing.
-        // durable(WAL(T)) BEFORE visible(SNAP(e)).
-        // The WAL contains post-stamp datoms so recovery produces identical state.
-        {
-            let mut wal_guard = self.wal.lock().map_err(|_| FerraError::Backpressure)?;
-            if let Some(ref mut wal) = *wal_guard {
-                let payload = bincode::serialize(&new_datoms)
-                    .map_err(|e| FerraError::WalWrite(e.to_string()))?;
-                wal.append_raw(receipt.epoch(), &payload)?;
-                wal.fsync()?;
-            }
-        }
+        // Step 2: INV-FERR-008: WAL before publish.
+        self.write_wal(receipt.epoch(), &new_datoms)?;
 
-        // Step 3: Atomic swap -- readers loading after this point see the new state.
-        // INV-FERR-006 preserved: im::OrdSet nodes are reference-counted.
+        // Step 3: Atomic swap + bijection canary.
+        self.publish_and_check(new_store);
+
+        // Release write lock and backpressure slot BEFORE observer delivery
+        // (bd-jxi / CR-032). WAL + ArcSwap are already committed.
+        drop(guard);
+        drop(write_slot);
+
+        // Step 4: Observer delivery (outside write lock scope).
+        self.notify_observers(receipt.epoch(), &new_datoms)?;
+
+        Ok(receipt)
+    }
+
+    /// Write stamped datoms to the WAL and fsync before publish.
+    ///
+    /// INV-FERR-008: `durable(WAL(T)) BEFORE visible(SNAP(e))`.
+    /// The WAL contains post-stamp datoms so recovery produces identical state.
+    /// No-op when no WAL is attached (in-memory-only mode).
+    ///
+    /// # Errors
+    ///
+    /// Returns `FerraError::WalWrite` on serialization or I/O failure.
+    /// Returns `FerraError::Backpressure` if the WAL mutex is poisoned.
+    fn write_wal(&self, epoch: u64, datoms: &[Datom]) -> Result<(), FerraError> {
+        let mut wal_guard = self.wal.lock().map_err(|_| FerraError::Backpressure)?;
+        if let Some(ref mut wal) = *wal_guard {
+            let payload = bincode::serialize(datoms)
+                .map_err(|e| FerraError::WalWrite(e.to_string()))?;
+            wal.append_raw(epoch, &payload)?;
+            wal.fsync()?;
+        }
+        Ok(())
+    }
+
+    /// Atomic-swap the new store and run the release-mode bijection canary.
+    ///
+    /// INV-FERR-006: readers loading after the swap see the new state.
+    /// INV-FERR-005: every 100th transaction checks index bijection in
+    /// release builds (when `release_bijection_check` feature is enabled).
+    fn publish_and_check(&self, new_store: Store) {
         self.current.store(Arc::new(new_store));
 
-        // Step 3b: Increment transaction counter and run release-mode bijection
-        // canary every 100 transactions. INV-FERR-005: index bijection check.
-        // In debug builds, Store::transact already asserts bijection via
-        // debug_assert!. This canary provides sampling-based coverage in
-        // release builds when the `release_bijection_check` feature is enabled.
         let count = self.transaction_count.fetch_add(1, Ordering::Relaxed) + 1;
         #[cfg(feature = "release_bijection_check")]
         {
@@ -103,16 +124,19 @@ impl Database<Ready> {
         }
         // Suppress unused-variable warning when the feature is not enabled.
         let _ = count;
+    }
 
-        // Release write lock and backpressure slot BEFORE observer delivery
-        // (bd-jxi / CR-032). Slow observer on_commit callbacks no longer
-        // block concurrent transact() callers. WAL + ArcSwap are already
-        // committed; observer delivery is best-effort at-least-once.
-        drop(guard);
-        drop(write_slot);
-
-        // Step 4: Observer delivery (outside write lock scope).
-        // INV-FERR-011: delivery serialized by observers mutex, not write lock.
+    /// Deliver commit notification to registered observers.
+    ///
+    /// INV-FERR-011: delivery is serialized by the observers mutex, not
+    /// the write lock. Slow callbacks do not block concurrent `transact()`
+    /// callers. Delivery is best-effort at-least-once.
+    ///
+    /// # Errors
+    ///
+    /// Returns `FerraError::InvariantViolation` if the observer mutex is
+    /// poisoned.
+    fn notify_observers(&self, epoch: u64, datoms: &[Datom]) -> Result<(), FerraError> {
         let published = self.current.load();
         let mut observers = self
             .observers
@@ -121,8 +145,7 @@ impl Database<Ready> {
                 invariant: "INV-FERR-011".to_string(),
                 details: "observer registry mutex poisoned during publish".to_string(),
             })?;
-        observers.publish(receipt.epoch(), &new_datoms, published.as_ref());
-
-        Ok(receipt)
+        observers.publish(epoch, datoms, published.as_ref());
+        Ok(())
     }
 }

@@ -93,59 +93,64 @@ fn parse_wal_frames_with_pos(buf: &[u8]) -> (Vec<WalEntry>, usize) {
     let mut last_valid_pos: usize = 0;
 
     while pos + MIN_FRAME_SIZE <= buf.len() {
-        // Magic (4 bytes)
-        if buf[pos..pos + 4] != WAL_MAGIC {
-            break;
+        match try_parse_frame(buf, pos) {
+            Some((entry, frame_end)) => {
+                entries.push(entry);
+                last_valid_pos = frame_end;
+                pos = frame_end;
+            }
+            None => break,
         }
-
-        // Version (2 bytes)
-        let version = u16::from_le_bytes([buf[pos + 4], buf[pos + 5]]);
-        if version != WAL_VERSION {
-            break;
-        }
-
-        // Epoch (8 bytes)
-        let epoch_bytes: [u8; 8] = match buf[pos + 6..pos + 14].try_into() {
-            Ok(b) => b,
-            Err(_) => break,
-        };
-        let epoch = u64::from_le_bytes(epoch_bytes);
-
-        // Payload length (4 bytes)
-        let len_bytes: [u8; 4] = match buf[pos + 14..pos + 18].try_into() {
-            Ok(b) => b,
-            Err(_) => break,
-        };
-        let payload_len = u32::from_le_bytes(len_bytes) as usize;
-
-        // Frame completeness
-        let frame_end = pos + HEADER_SIZE + payload_len + CRC_SIZE;
-        if frame_end > buf.len() {
-            break; // Incomplete frame (crash mid-write)
-        }
-
-        // CRC32
-        let frame_data = &buf[pos..pos + HEADER_SIZE + payload_len];
-        let stored_crc_bytes: [u8; 4] =
-            match buf[pos + HEADER_SIZE + payload_len..frame_end].try_into() {
-                Ok(b) => b,
-                Err(_) => break,
-            };
-        let stored_crc = u32::from_le_bytes(stored_crc_bytes);
-        let computed_crc = crc32_ieee(frame_data);
-
-        if stored_crc != computed_crc {
-            break; // CRC mismatch -- corrupt frame
-        }
-
-        // Frame is valid
-        let payload = buf[pos + HEADER_SIZE..pos + HEADER_SIZE + payload_len].to_vec();
-        entries.push(WalEntry { epoch, payload });
-        last_valid_pos = frame_end;
-        pos = frame_end;
     }
 
     (entries, last_valid_pos)
+}
+
+/// Try to parse a single WAL frame starting at `pos` in the buffer.
+///
+/// Returns `Some((entry, frame_end))` if the frame is valid, where
+/// `frame_end` is the byte offset past the frame. Returns `None` if
+/// magic, version, completeness, or CRC validation fails.
+fn try_parse_frame(buf: &[u8], pos: usize) -> Option<(WalEntry, usize)> {
+    // Magic (4 bytes)
+    if buf[pos..pos + 4] != WAL_MAGIC {
+        return None;
+    }
+
+    // Version (2 bytes)
+    let version = u16::from_le_bytes([buf[pos + 4], buf[pos + 5]]);
+    if version != WAL_VERSION {
+        return None;
+    }
+
+    // Epoch (8 bytes)
+    let epoch_bytes: [u8; 8] = buf[pos + 6..pos + 14].try_into().ok()?;
+    let epoch = u64::from_le_bytes(epoch_bytes);
+
+    // Payload length (4 bytes)
+    let len_bytes: [u8; 4] = buf[pos + 14..pos + 18].try_into().ok()?;
+    let payload_len = u32::from_le_bytes(len_bytes) as usize;
+
+    // Frame completeness
+    let frame_end = pos + HEADER_SIZE + payload_len + CRC_SIZE;
+    if frame_end > buf.len() {
+        return None; // Incomplete frame (crash mid-write)
+    }
+
+    // CRC32 verification
+    let frame_data = &buf[pos..pos + HEADER_SIZE + payload_len];
+    let stored_crc_bytes: [u8; 4] =
+        buf[pos + HEADER_SIZE + payload_len..frame_end].try_into().ok()?;
+    let stored_crc = u32::from_le_bytes(stored_crc_bytes);
+    let computed_crc = crc32_ieee(frame_data);
+
+    if stored_crc != computed_crc {
+        return None; // CRC mismatch -- corrupt frame
+    }
+
+    // Frame is valid
+    let payload = buf[pos + HEADER_SIZE..pos + HEADER_SIZE + payload_len].to_vec();
+    Some((WalEntry { epoch, payload }, frame_end))
 }
 
 // ---------------------------------------------------------------------------

@@ -16,7 +16,7 @@ use crate::store::{Snapshot, Store};
 ///
 /// INV-FERR-011: slow observers can catch up from a bounded in-memory
 /// history before falling back to store replay.
-pub const DEFAULT_OBSERVER_BUFFER: usize = 1024;
+pub(crate) const DEFAULT_OBSERVER_BUFFER: usize = 1024;
 
 /// A push-based consumer of committed datom batches.
 ///

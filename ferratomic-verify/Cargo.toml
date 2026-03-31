@@ -103,3 +103,8 @@ harness = false
 name = "write_amplification"
 path = "benches/write_amplification.rs"
 harness = false
+
+[[bench]]
+name = "index_backend"
+path = "benches/index_backend.rs"
+harness = false
