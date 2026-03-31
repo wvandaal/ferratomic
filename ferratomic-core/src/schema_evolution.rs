@@ -17,36 +17,63 @@ use ferratom::{
 
 /// Build the deterministic genesis meta-schema with 19 axiomatic attributes.
 ///
+/// Helper: LWW keyword attribute definition for genesis schema.
+fn lww_kw(doc: &str) -> AttributeDef {
+    AttributeDef::new(
+        ValueType::Keyword,
+        Cardinality::One,
+        ResolutionMode::Lww,
+        Some(Arc::from(doc)),
+    )
+}
+
+/// Helper: LWW string attribute definition for genesis schema.
+fn lww_str(doc: &str) -> AttributeDef {
+    AttributeDef::new(
+        ValueType::String,
+        Cardinality::One,
+        ResolutionMode::Lww,
+        Some(Arc::from(doc)),
+    )
+}
+
+/// Helper: LWW boolean attribute definition for genesis schema.
+fn lww_bool(doc: &str) -> AttributeDef {
+    AttributeDef::new(
+        ValueType::Boolean,
+        Cardinality::One,
+        ResolutionMode::Lww,
+        Some(Arc::from(doc)),
+    )
+}
+
+/// Helper: LWW ref attribute definition for genesis schema.
+fn lww_ref(doc: &str) -> AttributeDef {
+    AttributeDef::new(
+        ValueType::Ref,
+        Cardinality::One,
+        ResolutionMode::Lww,
+        Some(Arc::from(doc)),
+    )
+}
+
+/// Helper: LWW instant attribute definition for genesis schema.
+fn lww_instant(doc: &str) -> AttributeDef {
+    AttributeDef::new(
+        ValueType::Instant,
+        Cardinality::One,
+        ResolutionMode::Lww,
+        Some(Arc::from(doc)),
+    )
+}
+
+/// Build the deterministic genesis meta-schema with 19 axiomatic attributes.
+///
 /// INV-FERR-031: every call produces an identical schema. These 19
 /// attributes are the ONLY hardcoded elements in the engine. Every
 /// other attribute is defined by transacting datoms that reference
 /// these 19. This is the schema-as-data bootstrap (C3, C7).
 #[must_use]
-/// Helper: LWW keyword attribute definition for genesis schema.
-fn lww_kw(doc: &str) -> AttributeDef {
-    AttributeDef::new(ValueType::Keyword, Cardinality::One, ResolutionMode::Lww, Some(Arc::from(doc)))
-}
-
-/// Helper: LWW string attribute definition for genesis schema.
-fn lww_str(doc: &str) -> AttributeDef {
-    AttributeDef::new(ValueType::String, Cardinality::One, ResolutionMode::Lww, Some(Arc::from(doc)))
-}
-
-/// Helper: LWW boolean attribute definition for genesis schema.
-fn lww_bool(doc: &str) -> AttributeDef {
-    AttributeDef::new(ValueType::Boolean, Cardinality::One, ResolutionMode::Lww, Some(Arc::from(doc)))
-}
-
-/// Helper: LWW ref attribute definition for genesis schema.
-fn lww_ref(doc: &str) -> AttributeDef {
-    AttributeDef::new(ValueType::Ref, Cardinality::One, ResolutionMode::Lww, Some(Arc::from(doc)))
-}
-
-/// Helper: LWW instant attribute definition for genesis schema.
-fn lww_instant(doc: &str) -> AttributeDef {
-    AttributeDef::new(ValueType::Instant, Cardinality::One, ResolutionMode::Lww, Some(Arc::from(doc)))
-}
-
 pub(crate) fn genesis_schema() -> Schema {
     let mut schema = Schema::empty();
     define_meta_schema(&mut schema);
