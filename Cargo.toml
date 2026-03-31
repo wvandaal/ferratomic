@@ -5,6 +5,7 @@ members = [
     "ferratomic-datalog",
     "ferratomic-verify",
 ]
+exclude = ["fuzz"]
 resolver = "2"
 
 [workspace.package]

@@ -1,0 +1,59 @@
+[package]
+name = "ferratomic-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+arbitrary = { version = "1", features = ["derive"] }
+bincode = "1"
+tempfile = "3"
+
+[dependencies.ferratom]
+path = "../ferratom"
+features = ["test-utils"]
+
+[dependencies.ferratomic-core]
+path = "../ferratomic-core"
+features = ["test-utils"]
+
+# --- Fuzz targets ---
+
+[[bin]]
+name = "fuzz_checkpoint_bytes"
+path = "fuzz_targets/fuzz_checkpoint_bytes.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_wal_frames"
+path = "fuzz_targets/fuzz_wal_frames.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_wire_datom"
+path = "fuzz_targets/fuzz_wire_datom.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_nonnan_float"
+path = "fuzz_targets/fuzz_nonnan_float.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_merge_commutativity"
+path = "fuzz_targets/fuzz_merge_commutativity.rs"
+test = false
+doc = false
+bench = false
