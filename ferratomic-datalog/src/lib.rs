@@ -10,8 +10,8 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::all, missing_docs)]
 
+pub mod evaluator;
 pub mod parser;
 pub mod planner;
-pub mod evaluator;
 // pub mod incremental;
 // pub mod calm;

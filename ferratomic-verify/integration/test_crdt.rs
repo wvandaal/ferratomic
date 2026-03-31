@@ -168,8 +168,10 @@ fn inv_ferr_004_transact_grows_store() {
 
 /// INV-FERR-010: Three replicas converge when they receive the same datoms.
 #[test]
+#[allow(clippy::too_many_lines)]
+// Test complexity justified — three-replica convergence with different insertion orders
 fn inv_ferr_010_convergence_three_replicas() {
-    let datoms = vec![
+    let datoms = [
         Datom::new(
             EntityId::from_content(b"e1"),
             Attribute::from("user/name"),
@@ -256,6 +258,8 @@ fn inv_ferr_009_merge_exempt_from_schema() {
 /// Partition a concrete store into N shards by entity hash. Verify the union
 /// of all shards equals the original store.
 #[test]
+#[allow(clippy::too_many_lines)]
+// Test complexity justified — shard partition, union, and disjointness verification
 fn inv_ferr_017_shard_equivalence_concrete() {
     let datoms = BTreeSet::from([
         Datom::new(
@@ -333,7 +337,7 @@ fn inv_ferr_017_shard_equivalence_concrete() {
     }
 }
 
-/// INV-FERR-012: Content-addressed identity — same content, same EntityId.
+/// INV-FERR-012: Content-addressed identity -- same content, same `EntityId`.
 #[test]
 fn inv_ferr_012_same_content_same_id() {
     let content = b"hello world";
@@ -392,10 +396,10 @@ fn test_inv_ferr_004_monotonic_growth_database() {
     );
 }
 
-/// INV-FERR-022: NullAntiEntropy compiles and diff returns empty.
+/// INV-FERR-022: `NullAntiEntropy` compiles and diff returns empty.
 ///
 /// bd-7tb0: verifies the anti-entropy trait boundary works at the
-/// integration level. NullAntiEntropy is the no-op default for
+/// integration level. `NullAntiEntropy` is the no-op default for
 /// single-node operation.
 #[test]
 fn test_inv_ferr_022_anti_entropy_trait() {
@@ -440,7 +444,7 @@ fn test_inv_ferr_022_anti_entropy_trait() {
     );
 }
 
-/// INV-FERR-030: AcceptAll replica filter passes all datoms.
+/// INV-FERR-030: `AcceptAll` replica filter passes all datoms.
 ///
 /// bd-7tb0: verifies the ReplicaFilter trait boundary at integration level.
 /// AcceptAll is the default full-replica behavior.
@@ -451,7 +455,7 @@ fn test_inv_ferr_030_replica_filter() {
     let filter = AcceptAll;
 
     // Build several diverse datoms and verify all are accepted.
-    let datoms = vec![
+    let datoms = [
         Datom::new(
             EntityId::from_content(b"filter-e1"),
             Attribute::from("user/name"),

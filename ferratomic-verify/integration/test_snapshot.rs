@@ -68,7 +68,7 @@ fn inv_ferr_006_snapshot_stability() {
     let agent = AgentId::from_bytes([1u8; 16]);
 
     // Commit first transaction
-    let tx1 = Transaction::new(agent.clone())
+    let tx1 = Transaction::new(agent)
         .assert_datom(
             EntityId::from_content(b"e1"),
             Attribute::from("db/doc"),
@@ -76,7 +76,7 @@ fn inv_ferr_006_snapshot_stability() {
         )
         .commit(store.schema())
         .expect("valid tx");
-    store.transact(tx1).expect("transact failed");
+    store.transact_test(tx1).expect("transact failed");
 
     // Take snapshot
     let snap = store.snapshot();
@@ -91,7 +91,7 @@ fn inv_ferr_006_snapshot_stability() {
         )
         .commit(store.schema())
         .expect("valid tx");
-    store.transact(tx2).expect("transact failed");
+    store.transact_test(tx2).expect("transact failed");
 
     // Snapshot must NOT see the second transaction
     let snap_count_after = snap.datoms().count();
@@ -115,7 +115,7 @@ fn test_inv_ferr_005_bijection_after_transact() {
 
     // Transact several batches of datoms.
     for i in 0..5i64 {
-        let tx = Transaction::new(agent.clone())
+        let tx = Transaction::new(agent)
             .assert_datom(
                 EntityId::from_content(format!("bijection-e{}", i).as_bytes()),
                 Attribute::from("db/doc"),
@@ -123,7 +123,7 @@ fn test_inv_ferr_005_bijection_after_transact() {
             )
             .commit(store.schema())
             .expect("valid tx");
-        store.transact(tx).expect("transact failed");
+        store.transact_test(tx).expect("transact failed");
 
         // Verify bijection after every transaction.
         assert!(
@@ -180,7 +180,7 @@ fn inv_ferr_006_concurrent_read_write() {
         )
         .commit(store.schema())
         .expect("valid tx");
-    store.transact(tx).expect("transact failed");
+    store.transact_test(tx).expect("transact failed");
 
     // Snapshot after transaction
     let snap_after = store.snapshot();
@@ -211,7 +211,7 @@ fn inv_ferr_007_epoch_ordering() {
 
     let mut epochs = Vec::new();
     for i in 0..5i64 {
-        let tx = Transaction::new(agent.clone())
+        let tx = Transaction::new(agent)
             .assert_datom(
                 EntityId::from_content(format!("e{}", i).as_bytes()),
                 Attribute::from("tx/provenance"),
@@ -219,7 +219,7 @@ fn inv_ferr_007_epoch_ordering() {
             )
             .commit(store.schema())
             .expect("valid tx");
-        let receipt = store.transact(tx).expect("transact failed");
+        let receipt = store.transact_test(tx).expect("transact failed");
         epochs.push(receipt.epoch());
     }
 
@@ -246,7 +246,7 @@ fn inv_ferr_011_observer_epoch_monotonic() {
     let mut prev_epoch = 0u64;
 
     for i in 0..10i64 {
-        let tx = Transaction::new(agent.clone())
+        let tx = Transaction::new(agent)
             .assert_datom(
                 EntityId::from_content(format!("e{}", i).as_bytes()),
                 Attribute::from("tx/provenance"),
@@ -254,7 +254,7 @@ fn inv_ferr_011_observer_epoch_monotonic() {
             )
             .commit(store.schema())
             .expect("valid tx");
-        store.transact(tx).expect("transact failed");
+        store.transact_test(tx).expect("transact failed");
 
         let snap = observer.observe(&store);
         let epoch = snap.epoch();
@@ -338,6 +338,8 @@ fn inv_ferr_011_database_observer_commit_delivery() {
 ///
 /// bd-n1i: error-path test for epoch overflow.
 #[test]
+#[allow(clippy::too_many_lines)]
+// Test complexity justified — epoch overflow with error variant verification
 fn test_inv_ferr_007_epoch_overflow() {
     // Construct a store whose epoch is already at u64::MAX via
     // from_checkpoint — the only public constructor that accepts
@@ -360,7 +362,7 @@ fn test_inv_ferr_007_epoch_overflow() {
         )
         .commit_unchecked();
 
-    let result = store.transact(tx);
+    let result = store.transact_test(tx);
 
     // Must be an error, not a panic or silent wrap-around.
     assert!(
@@ -381,9 +383,7 @@ fn test_inv_ferr_007_epoch_overflow() {
             );
         }
         other => {
-            panic!(
-                "INV-FERR-007: expected InvariantViolation, got {other:?}"
-            );
+            panic!("INV-FERR-007: expected InvariantViolation, got {other:?}");
         }
     }
 
@@ -395,9 +395,9 @@ fn test_inv_ferr_007_epoch_overflow() {
     );
 }
 
-/// INV-FERR-015: HLC tick() produces strictly increasing TxIds.
+/// INV-FERR-015: HLC `tick()` produces strictly increasing `TxId` values.
 ///
-/// Concrete test: create an HLC, tick N times, verify each TxId is
+/// Concrete test: create an HLC, tick N times, verify each `TxId` is
 /// strictly greater than the previous one.
 #[test]
 fn inv_ferr_015_hlc_tick_monotonic() {
@@ -412,7 +412,10 @@ fn inv_ferr_015_hlc_tick_monotonic() {
         assert!(
             next > prev,
             "INV-FERR-015: tick {} ({:?}) not greater than tick {} ({:?})",
-            i, next, i - 1, prev
+            i,
+            next,
+            i - 1,
+            prev
         );
         prev = next;
     }
@@ -421,7 +424,7 @@ fn inv_ferr_015_hlc_tick_monotonic() {
 /// INV-FERR-015: HLC tick() is monotonic even when wall clock has not advanced.
 ///
 /// Two ticks taken in rapid succession (same millisecond) must still produce
-/// strictly increasing TxIds via the logical counter.
+/// strictly increasing `TxId` values via the logical counter.
 #[test]
 fn inv_ferr_015_hlc_same_millisecond_monotonic() {
     use ferratom::{AgentId, HybridClock};
@@ -461,7 +464,8 @@ fn inv_ferr_016_hlc_causality_two_agents() {
     assert!(
         b_tx > a_tx,
         "INV-FERR-016: B's tick ({:?}) must be causally after A's tick ({:?})",
-        b_tx, a_tx
+        b_tx,
+        a_tx
     );
 }
 
@@ -487,9 +491,18 @@ fn inv_ferr_016_hlc_causality_chain() {
     clocks[2].receive(&t1);
     let t2 = clocks[2].tick();
 
-    assert!(t1 > t0, "INV-FERR-016: agent 1 tick must exceed agent 0 tick");
-    assert!(t2 > t1, "INV-FERR-016: agent 2 tick must exceed agent 1 tick");
-    assert!(t2 > t0, "INV-FERR-016: agent 2 tick must exceed agent 0 tick (transitivity)");
+    assert!(
+        t1 > t0,
+        "INV-FERR-016: agent 1 tick must exceed agent 0 tick"
+    );
+    assert!(
+        t2 > t1,
+        "INV-FERR-016: agent 2 tick must exceed agent 1 tick"
+    );
+    assert!(
+        t2 > t0,
+        "INV-FERR-016: agent 2 tick must exceed agent 0 tick (transitivity)"
+    );
 }
 
 /// INV-FERR-018: Retraction adds a datom, never removes one.
@@ -510,7 +523,7 @@ fn inv_ferr_018_retract_adds_datom() {
         )
         .commit(store.schema())
         .expect("valid assert tx");
-    store.transact(tx1).expect("assert transact");
+    store.transact_test(tx1).expect("assert transact");
     let after_assert = store.len();
 
     // Retract the same fact.
@@ -521,14 +534,15 @@ fn inv_ferr_018_retract_adds_datom() {
             Value::String("to be retracted".into()),
         )
         .commit_unchecked();
-    store.transact(tx2).expect("retract transact");
+    store.transact_test(tx2).expect("retract transact");
     let after_retract = store.len();
 
     assert!(
         after_retract > after_assert,
         "INV-FERR-018: retraction must add datoms (append-only). \
          after_assert={}, after_retract={}",
-        after_assert, after_retract
+        after_assert,
+        after_retract
     );
 }
 
@@ -552,7 +566,7 @@ fn inv_ferr_018_append_only_concrete() {
             )
             .commit(store.schema())
             .expect("valid tx");
-        store.transact(tx).expect("transact failed");
+        store.transact_test(tx).expect("transact failed");
 
         let current_datoms: std::collections::BTreeSet<ferratom::Datom> =
             store.datoms().cloned().collect();
@@ -573,7 +587,7 @@ fn inv_ferr_018_append_only_concrete() {
 /// INV-FERR-020: All datoms from a committed transaction share one epoch.
 ///
 /// Transact a multi-datom transaction, verify all datoms in the receipt
-/// share the same TxId physical component (epoch).
+/// share the same `TxId` physical component (epoch).
 #[test]
 fn inv_ferr_020_transaction_epoch_atomicity() {
     let mut store = Store::genesis();
@@ -597,34 +611,40 @@ fn inv_ferr_020_transaction_epoch_atomicity() {
         )
         .commit(store.schema())
         .expect("valid multi-datom tx");
-    let receipt = store.transact(tx).expect("transact failed");
+    let receipt = store.transact_test(tx).expect("transact failed");
     let epoch = receipt.epoch();
 
     // All datoms at this epoch must share the same physical timestamp.
-    let tx_datoms: Vec<_> = store.datoms()
+    let tx_datoms: Vec<_> = store
+        .datoms()
         .filter(|d| d.tx().physical() == epoch)
         .collect();
 
     assert!(
         tx_datoms.len() >= 3,
         "INV-FERR-020: expected at least 3 datoms at epoch {}, got {}",
-        epoch, tx_datoms.len()
+        epoch,
+        tx_datoms.len()
     );
 
     for d in &tx_datoms {
         assert_eq!(
-            d.tx().physical(), epoch,
+            d.tx().physical(),
+            epoch,
             "INV-FERR-020: datom epoch {:?} differs from transaction epoch {}",
-            d.tx(), epoch
+            d.tx(),
+            epoch
         );
     }
 }
 
-/// INV-FERR-021: WriteLimiter correctly bounds concurrent writes.
+/// INV-FERR-021: `WriteLimiter` correctly bounds concurrent writes.
 ///
 /// Integration-level test: acquire to capacity, verify overflow rejected,
 /// release and re-acquire.
 #[test]
+#[allow(clippy::too_many_lines)]
+// Test complexity justified — full backpressure lifecycle: fill, overflow, release, re-acquire
 fn inv_ferr_021_backpressure_integration() {
     use ferratomic_core::backpressure::{BackpressurePolicy, WriteLimiter};
 
@@ -640,7 +660,11 @@ fn inv_ferr_021_backpressure_integration() {
     assert!(g1.is_some(), "INV-FERR-021: first acquire must succeed");
     assert!(g2.is_some(), "INV-FERR-021: second acquire must succeed");
     assert!(g3.is_some(), "INV-FERR-021: third acquire must succeed");
-    assert_eq!(limiter.active_count(), 3, "INV-FERR-021: active count must be 3");
+    assert_eq!(
+        limiter.active_count(),
+        3,
+        "INV-FERR-021: active count must be 3"
+    );
 
     // 4th acquire must fail.
     let overflow = limiter.try_acquire();
@@ -649,17 +673,29 @@ fn inv_ferr_021_backpressure_integration() {
         "INV-FERR-021: acquire beyond capacity must fail"
     );
     assert_eq!(
-        limiter.active_count(), 3,
+        limiter.active_count(),
+        3,
         "INV-FERR-021: failed acquire must not change active count"
     );
 
     // Drop one guard, re-acquire.
     drop(g3);
-    assert_eq!(limiter.active_count(), 2, "INV-FERR-021: active must drop to 2");
+    assert_eq!(
+        limiter.active_count(),
+        2,
+        "INV-FERR-021: active must drop to 2"
+    );
 
     let g4 = limiter.try_acquire();
-    assert!(g4.is_some(), "INV-FERR-021: acquire after release must succeed");
-    assert_eq!(limiter.active_count(), 3, "INV-FERR-021: active must return to 3");
+    assert!(
+        g4.is_some(),
+        "INV-FERR-021: acquire after release must succeed"
+    );
+    assert_eq!(
+        limiter.active_count(),
+        3,
+        "INV-FERR-021: active must return to 3"
+    );
 }
 
 /// INV-FERR-013: Corrupted checkpoint bytes must be detected and rejected.
@@ -671,6 +707,8 @@ fn inv_ferr_021_backpressure_integration() {
 ///
 /// bd-n1i: error-path test for checkpoint corruption.
 #[test]
+#[allow(clippy::too_many_lines)]
+// Test complexity justified — checkpoint corruption with error variant verification
 fn test_inv_ferr_013_checkpoint_corruption() {
     use ferratomic_core::checkpoint::{load_checkpoint, write_checkpoint};
 
@@ -685,7 +723,7 @@ fn test_inv_ferr_013_checkpoint_corruption() {
             Value::String("checkpoint corruption test".into()),
         )
         .commit_unchecked();
-    store.transact(tx).expect("setup transact failed");
+    store.transact_test(tx).expect("setup transact failed");
 
     let dir = tempfile::TempDir::new().expect("failed to create temp dir");
     let path = dir.path().join("corrupt.chkp");
@@ -729,21 +767,21 @@ fn test_inv_ferr_013_checkpoint_corruption() {
             );
         }
         other => {
-            panic!(
-                "INV-FERR-013: expected CheckpointCorrupted, got {other:?}"
-            );
+            panic!("INV-FERR-013: expected CheckpointCorrupted, got {other:?}");
         }
     }
 }
 
-/// INV-FERR-025: OrdMapBackend satisfies IndexBackend, bijection holds.
+/// INV-FERR-025: `OrdMapBackend` satisfies `IndexBackend`, bijection holds.
 ///
-/// bd-7tb0: verifies that the default OrdMap-based index backend maintains
+/// bd-7tb0: verifies that the default `OrdMap`-based index backend maintains
 /// bijection after multiple insertions. All four indexes must have
 /// identical cardinality to the primary datom set.
 #[test]
+#[allow(clippy::too_many_lines)]
+// Test complexity justified — four index backends plus bijection verification
 fn test_inv_ferr_025_index_backend_trait() {
-    use ferratomic_core::indexes::{IndexBackend, EavtKey, AevtKey, VaetKey, AvetKey};
+    use ferratomic_core::indexes::{AevtKey, AvetKey, EavtKey, IndexBackend, VaetKey};
     use im::OrdMap;
 
     // Verify OrdMap implements IndexBackend (compile-time check via usage).
@@ -786,22 +824,26 @@ fn test_inv_ferr_025_index_backend_trait() {
     // All four indexes must have identical cardinality (bijection).
     let expected = datoms.len();
     assert_eq!(
-        eavt.backend_len(), expected,
+        eavt.backend_len(),
+        expected,
         "INV-FERR-025: EAVT backend len {}, expected {expected}",
         eavt.backend_len()
     );
     assert_eq!(
-        aevt.backend_len(), expected,
+        aevt.backend_len(),
+        expected,
         "INV-FERR-025: AEVT backend len {}, expected {expected}",
         aevt.backend_len()
     );
     assert_eq!(
-        vaet.backend_len(), expected,
+        vaet.backend_len(),
+        expected,
         "INV-FERR-025: VAET backend len {}, expected {expected}",
         vaet.backend_len()
     );
     assert_eq!(
-        avet.backend_len(), expected,
+        avet.backend_len(),
+        expected,
         "INV-FERR-025: AVET backend len {}, expected {expected}",
         avet.backend_len()
     );
@@ -828,7 +870,7 @@ fn test_inv_ferr_025_index_backend_trait() {
             )
             .commit(store.schema())
             .expect("INV-FERR-025: valid tx");
-        store.transact(tx).expect("INV-FERR-025: transact ok");
+        store.transact_test(tx).expect("INV-FERR-025: transact ok");
     }
 
     assert!(
@@ -854,23 +896,27 @@ fn test_inv_ferr_029_live_resolution() {
 
     // Phase 1: Assert a fact.
     let tx1 = Transaction::new(agent)
-        .assert_datom(entity.clone(), attr.clone(), value.clone())
+        .assert_datom(entity, attr.clone(), value.clone())
         .commit(store.schema())
         .expect("INV-FERR-029: assert tx must commit");
-    store.transact(tx1).expect("INV-FERR-029: assert transact ok");
+    store
+        .transact_test(tx1)
+        .expect("INV-FERR-029: assert transact ok");
 
     // Compute live view: (e,a,v) triples where assert count > retract count.
     let live_before = compute_live_view(&store);
     assert!(
-        live_before.contains(&(entity.clone(), attr.clone(), value.clone())),
+        live_before.contains(&(entity, attr.clone(), value.clone())),
         "INV-FERR-029: asserted triple must be live before retraction"
     );
 
     // Phase 2: Retract the same fact.
     let tx2 = Transaction::new(agent)
-        .retract_datom(entity.clone(), attr.clone(), value.clone())
+        .retract_datom(entity, attr.clone(), value.clone())
         .commit_unchecked();
-    store.transact(tx2).expect("INV-FERR-029: retract transact ok");
+    store
+        .transact_test(tx2)
+        .expect("INV-FERR-029: retract transact ok");
 
     // Verify the triple is no longer live.
     let live_after = compute_live_view(&store);
@@ -885,6 +931,8 @@ fn test_inv_ferr_029_live_resolution() {
 /// bd-7tb0: strengthens INV-FERR-029 by testing multiple entities, attributes,
 /// and interleaved assert/retract sequences via the Database API.
 #[test]
+#[allow(clippy::too_many_lines)]
+// Test complexity justified — multi-entity assert/retract/re-assert sequence
 fn test_inv_ferr_032_live_correctness() {
     let db = Database::genesis();
     let agent = AgentId::from_bytes([32u8; 16]);
@@ -897,27 +945,27 @@ fn test_inv_ferr_032_live_correctness() {
 
     // Step 1: Assert fact A with old value.
     let tx1 = Transaction::new(agent)
-        .assert_datom(entity_a.clone(), attr.clone(), val_old.clone())
+        .assert_datom(entity_a, attr.clone(), val_old.clone())
         .commit(&db.schema())
         .expect("INV-FERR-032: tx1 commit");
     db.transact(tx1).expect("INV-FERR-032: tx1 transact");
 
     // Step 2: Assert fact B with new value.
     let tx2 = Transaction::new(agent)
-        .assert_datom(entity_b.clone(), attr.clone(), val_new.clone())
+        .assert_datom(entity_b, attr.clone(), val_new.clone())
         .commit(&db.schema())
         .expect("INV-FERR-032: tx2 commit");
     db.transact(tx2).expect("INV-FERR-032: tx2 transact");
 
     // Step 3: Retract fact A with old value.
     let tx3 = Transaction::new(agent)
-        .retract_datom(entity_a.clone(), attr.clone(), val_old.clone())
+        .retract_datom(entity_a, attr.clone(), val_old.clone())
         .commit_unchecked();
     db.transact(tx3).expect("INV-FERR-032: tx3 transact");
 
     // Step 4: Re-assert fact A with new value.
     let tx4 = Transaction::new(agent)
-        .assert_datom(entity_a.clone(), attr.clone(), val_new.clone())
+        .assert_datom(entity_a, attr.clone(), val_new.clone())
         .commit(&db.schema())
         .expect("INV-FERR-032: tx4 commit");
     db.transact(tx4).expect("INV-FERR-032: tx4 transact");
@@ -928,7 +976,7 @@ fn test_inv_ferr_032_live_correctness() {
 
     // Entity A: old value retracted, new value asserted => only new is live.
     assert!(
-        !live.contains(&(entity_a.clone(), attr.clone(), val_old)),
+        !live.contains(&(entity_a, attr.clone(), val_old)),
         "INV-FERR-032: retracted (entity_a, old_value) must not be live"
     );
     assert!(
@@ -951,12 +999,14 @@ fn test_inv_ferr_032_live_correctness() {
 ///
 /// Returns the set of (entity, attribute, value) triples that are currently
 /// asserted and not retracted. This mirrors the spec's `live_view` function.
-fn compute_live_view(
-    store: &Store,
-) -> std::collections::BTreeSet<(EntityId, Attribute, Value)> {
+fn compute_live_view(store: &Store) -> std::collections::BTreeSet<(EntityId, Attribute, Value)> {
     let mut live = std::collections::BTreeSet::new();
     for datom in store.datoms() {
-        let key = (datom.entity(), datom.attribute().clone(), datom.value().clone());
+        let key = (
+            datom.entity(),
+            datom.attribute().clone(),
+            datom.value().clone(),
+        );
         match datom.op() {
             ferratom::Op::Assert => {
                 live.insert(key);
@@ -975,7 +1025,11 @@ fn compute_live_view_from_snapshot(
 ) -> std::collections::BTreeSet<(EntityId, Attribute, Value)> {
     let mut live = std::collections::BTreeSet::new();
     for datom in snap.datoms() {
-        let key = (datom.entity(), datom.attribute().clone(), datom.value().clone());
+        let key = (
+            datom.entity(),
+            datom.attribute().clone(),
+            datom.value().clone(),
+        );
         match datom.op() {
             ferratom::Op::Assert => {
                 live.insert(key);

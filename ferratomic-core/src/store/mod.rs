@@ -453,6 +453,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn test_inv_ferr_031_genesis_schema_has_19_attributes() {
         let store = Store::genesis();
         assert_eq!(
@@ -632,7 +633,7 @@ mod tests {
         );
     }
 
-    /// bd-20j: ContentAddressed trait is usable via generic bounds.
+    /// bd-20j: `ContentAddressed` trait is usable via generic bounds.
     #[test]
     fn test_content_addressed_trait_bound() {
         use ferratom::traits::ContentAddressed;

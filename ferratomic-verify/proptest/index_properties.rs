@@ -311,7 +311,7 @@ proptest! {
 
         // backend_len must equal the number of unique keys.
         let unique_keys: BTreeSet<_> = datoms.iter()
-            .map(|d| EavtKey::from_datom(d))
+            .map(EavtKey::from_datom)
             .collect();
         prop_assert_eq!(
             backend.backend_len(),

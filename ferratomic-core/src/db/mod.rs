@@ -403,7 +403,7 @@ mod tests {
         );
     }
 
-    /// INV-FERR-006: from_store preserves the store's state.
+    /// INV-FERR-006: `from_store` preserves the store's state.
     #[test]
     fn test_inv_ferr_006_from_store() {
         let store = Store::genesis();
@@ -510,7 +510,7 @@ mod tests {
         assert_eq!(entries[0].epoch, 1, "bd-2w9: WAL entry epoch must be 1");
     }
 
-    /// Regression: bd-2w9 -- recover_from_wal restores state.
+    /// Regression: bd-2w9 -- `recover_from_wal` restores state.
     #[test]
     fn test_bug_bd_2w9_recover_from_wal() {
         let dir = tempfile::TempDir::new().unwrap();

@@ -255,6 +255,7 @@ mod tests {
     /// identifies the error category. This catches regressions where a new
     /// variant is added but its `Display` arm is missing or empty.
     #[test]
+    #[allow(clippy::too_many_lines)] // Exhaustive enum variant coverage requires listing all 12
     fn display_output_is_nonempty_and_contains_keyword() {
         let cases: Vec<(FerraError, &str)> = vec![
             (FerraError::WalWrite("disk full".into()), "WAL"),

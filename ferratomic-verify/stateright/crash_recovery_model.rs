@@ -336,10 +336,7 @@ mod tests {
 
     use stateright::{Checker, Model};
 
-    use super::{
-        super::crdt_model::Datom, CrashRecoveryAction, CrashRecoveryModel, CrashRecoveryState,
-        Phase,
-    };
+    use super::{super::crdt_model::Datom, CrashRecoveryAction, CrashRecoveryModel, Phase};
 
     fn datom(seed: u64) -> Datom {
         Datom::from_seed(seed)

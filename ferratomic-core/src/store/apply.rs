@@ -77,50 +77,12 @@ impl Store {
     /// least as current as either input.
     #[must_use]
     pub fn from_merge(a: &Store, b: &Store) -> Self {
-        // im::OrdSet::union is O(n+m) with structural sharing.
         let datoms = a.datoms.clone().union(b.datoms.clone());
         let indexes = Indexes::from_datoms(datoms.iter());
-
-        // Union schemas: all attributes from both stores.
-        // INV-FERR-043: shared attributes must have identical definitions.
-        // INV-FERR-001: schema merge must be commutative. When both stores
-        // define the same attribute with different definitions, we keep the
-        // one that sorts first (by Ord) for deterministic symmetry.
-        // A debug_assert flags the conflict for diagnosis.
-        let mut schema = Schema::empty();
-        for (attr, def) in a.schema.iter().chain(b.schema.iter()) {
-            match schema.get(attr) {
-                None => {
-                    schema.define(attr.clone(), def.clone());
-                }
-                Some(existing) => {
-                    if existing != def {
-                        // INV-FERR-043: conflicting definitions detected.
-                        // Deterministic resolution: keep whichever sorts first
-                        // (commutativity: min(a,b) == min(b,a)).
-                        eprintln!(
-                            "WARN [ferratomic-core] INV-FERR-043: merge found conflicting \
-                             schema for {attr:?}: {existing:?} vs {def:?}. \
-                             Keeping first in sort order.",
-                        );
-                        if def < existing {
-                            schema.define(attr.clone(), def.clone());
-                        }
-                    }
-                    // If equal, no-op -- already installed.
-                }
-            }
-        }
-
+        let schema = merge_schemas(&a.schema, &b.schema);
         let epoch = a.epoch.max(b.epoch);
-
-        // HI-014: genesis_agent must be resolved deterministically for
-        // INV-FERR-001 (commutativity). Using a.genesis_agent unconditionally
-        // makes merge(A,B) != merge(B,A) when agents differ. min() by Ord
-        // is commutative: min(a,b) == min(b,a).
+        // HI-014: min() is commutative: min(a,b) == min(b,a).
         let genesis_agent = std::cmp::min(a.genesis_agent, b.genesis_agent);
-
-        // INV-FERR-029: rebuild LIVE set from merged datom set.
         let live_set = super::build_live_set(datoms.iter());
 
         Self {
@@ -216,6 +178,39 @@ impl Store {
         let tx_id = ferratom::TxId::with_agent(self.epoch.wrapping_add(1), 0, agent);
         self.transact(transaction, tx_id)
     }
+}
+
+// ---------------------------------------------------------------------------
+// Schema merge helper (private)
+// ---------------------------------------------------------------------------
+
+/// INV-FERR-043: Union two schemas with deterministic conflict resolution.
+///
+/// INV-FERR-001: schema merge must be commutative. When both schemas
+/// define the same attribute with different definitions, keep the one
+/// that sorts first by `Ord` (commutativity: `min(a,b) == min(b,a)`).
+fn merge_schemas(a: &Schema, b: &Schema) -> Schema {
+    let mut schema = Schema::empty();
+    for (attr, def) in a.iter().chain(b.iter()) {
+        match schema.get(attr) {
+            None => {
+                schema.define(attr.clone(), def.clone());
+            }
+            Some(existing) => {
+                if existing != def {
+                    eprintln!(
+                        "WARN [ferratomic-core] INV-FERR-043: merge found conflicting \
+                         schema for {attr:?}: {existing:?} vs {def:?}. \
+                         Keeping first in sort order.",
+                    );
+                    if def < existing {
+                        schema.define(attr.clone(), def.clone());
+                    }
+                }
+            }
+        }
+    }
+    schema
 }
 
 // ---------------------------------------------------------------------------
@@ -324,7 +319,7 @@ mod tests {
         );
     }
 
-    /// Regression: bd-10p -- merge() must preserve schema from both stores.
+    /// Regression: bd-10p -- `merge()` must preserve schema from both stores.
     #[test]
     fn test_bug_bd_10p_merge_preserves_schema() {
         use crate::merge::merge;
@@ -345,7 +340,7 @@ mod tests {
         );
     }
 
-    /// Regression: bd-10p -- merge() must take max epoch.
+    /// Regression: bd-10p -- `merge()` must take max epoch.
     #[test]
     fn test_bug_bd_10p_merge_preserves_epoch() {
         use crate::{merge::merge, writer::Transaction};
@@ -373,7 +368,7 @@ mod tests {
         );
     }
 
-    /// Regression: bd-1n6 -- transact() must stamp real TxId, not placeholder.
+    /// Regression: bd-1n6 -- `transact()` must stamp real `TxId`, not placeholder.
     #[test]
     fn test_bug_bd_1n6_transact_stamps_real_tx_id() {
         use crate::writer::Transaction;
@@ -398,8 +393,7 @@ mod tests {
                 datom.tx(),
                 placeholder,
                 "bd-1n6: datom has placeholder TxId(0,0,0) -- transact must stamp real TxId. \
-                 datom={:?}",
-                datom
+                 datom={datom:?}"
             );
         }
 
@@ -421,6 +415,8 @@ mod tests {
 
     /// Regression: bd-3n6 -- merge stores with disjoint schemas unions all attributes.
     #[test]
+    #[allow(clippy::too_many_lines)]
+    // Test complexity justified — schema evolution on two stores then merge verification
     fn test_bug_bd_3n6_merge_disjoint_schemas() {
         use crate::merge::merge;
 

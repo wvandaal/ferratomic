@@ -19,15 +19,9 @@ fn write_limiter_capacity_enforcement() {
 
     // Acquire 3 slots — all must succeed.
     let g1 = limiter.try_acquire();
-    assert!(
-        g1.is_some(),
-        "INV-FERR-021: first acquire must succeed"
-    );
+    assert!(g1.is_some(), "INV-FERR-021: first acquire must succeed");
     let g2 = limiter.try_acquire();
-    assert!(
-        g2.is_some(),
-        "INV-FERR-021: second acquire must succeed"
-    );
+    assert!(g2.is_some(), "INV-FERR-021: second acquire must succeed");
     let g3 = limiter.try_acquire();
     assert!(
         g3.is_some(),
@@ -64,7 +58,10 @@ fn write_limiter_release_on_drop() {
 
     // Second attempt must fail.
     let g2 = limiter.try_acquire();
-    assert!(g2.is_none(), "INV-FERR-021: limit=1 must reject second attempt");
+    assert!(
+        g2.is_none(),
+        "INV-FERR-021: limit=1 must reject second attempt"
+    );
 
     // Drop the first guard.
     drop(g1);

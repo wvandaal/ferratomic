@@ -59,6 +59,7 @@ mod tests {
     /// bd-rdvs: Verifies `Store::from_checkpoint_bytes(&store.to_checkpoint_bytes()?)` produces
     /// a store with identical datom set, epoch, schema length, and valid index bijection.
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn test_inv_ferr_013_store_bytes_roundtrip() {
         use crate::writer::Transaction;
 

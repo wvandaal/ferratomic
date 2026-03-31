@@ -227,17 +227,52 @@ Core domain code depends on `asupersync` only (ADR-FERR-002).
 This is NOT auto-configured. Omitting it uses /tmp (RAM-backed, will fill up).
 Every cargo command must use this target dir.
 
+### Fast Gate (interactive feedback loop, ~30 seconds)
+
+Use this during development. Catches logic bugs, compilation errors, lint violations.
+
 ```bash
 export CARGO_TARGET_DIR=/data/cargo-target
-cargo check --workspace
-cargo clippy --workspace -- -D warnings
-cargo test --workspace
+cargo check --workspace --all-targets
+cargo clippy --workspace --all-targets -- -D warnings
+cargo fmt --all -- --check
+PROPTEST_CASES=1000 cargo test --workspace     # 1K cases — fast
 ```
 
-Lean proofs:
+### Strict Gate (production code only, ~15 seconds)
+
+NEG-FERR-001 enforcement. Verifies zero unwrap/expect/panic in production code.
+Test code is exempt (unwrap in tests is acceptable per testing standards).
+
 ```bash
-cd ferratomic-verify/lean && lake build
+cargo clippy --workspace --lib -- -D warnings \
+  -D clippy::unwrap_used -D clippy::expect_used -D clippy::panic
 ```
+
+### Full Verification (pre-tag / nightly, ~10 minutes)
+
+Use before phase gate closure or tagging a release. Runs 10K proptest cases in
+release mode for statistical confidence on algebraic properties + meaningful
+performance threshold assertions.
+
+```bash
+cargo test --workspace --release                           # 10K cases, optimized
+cargo bench --package ferratomic-verify                    # criterion benchmarks
+cd ferratomic-verify/lean && lake build                    # Lean proofs (0 sorry)
+```
+
+### Why Two Modes?
+
+Proptests run 10,000 randomized cases per property. In debug mode (unoptimized),
+checkpoint/WAL round-trip tests take 30-40 minutes. In release mode, the same
+suite finishes in 5-10 minutes. Debug mode catches logic bugs in the first
+100-1000 cases; the remaining 9,000 provide statistical confidence on subtle
+algebraic properties (commutativity over the full input space) — that confidence
+matters in release mode where the optimizer may introduce subtle differences.
+
+The `PROPTEST_CASES` environment variable overrides the hardcoded case count.
+The proptest crate checks this at runtime. Use `PROPTEST_CASES=1000` for fast
+iteration and the default 10,000 for pre-tag verification.
 
 ---
 

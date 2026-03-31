@@ -77,5 +77,70 @@ fn bench_index_backend(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_index_backend);
+/// PERF-3: Hard assertion that trait-dispatched lookup overhead < 50%
+/// compared to direct `OrdMap::get`.
+///
+/// Unlike the Criterion benchmarks above (which measure and report but do
+/// not fail), this function performs wall-clock timing with enough
+/// iterations to be stable and panics if the trait path is slower than
+/// 1.5x the direct path. This provides a CI-enforceable regression gate.
+///
+/// Registered as a Criterion benchmark so it runs during `cargo bench`.
+/// The assertion fires inside the benchmark body on the first iteration.
+fn bench_perf3_overhead_assertion(c: &mut Criterion) {
+    use std::time::Instant;
+
+    let mut group = c.benchmark_group("perf3_overhead_assertion");
+
+    const DATOM_COUNT: usize = 1_000;
+    const LOOKUP_ITERATIONS: usize = 10_000;
+    // 1.5x generous bound to avoid flaky CI on loaded machines
+    const MAX_OVERHEAD_RATIO: f64 = 1.5;
+
+    let store = common::build_store(DATOM_COUNT);
+    let direct = build_direct_ordmap(DATOM_COUNT);
+    let key = common::lookup_key(DATOM_COUNT / 2);
+
+    // --- Wall-clock comparison with hard assertion ---
+    // Warm up both paths first to avoid cold-cache bias.
+    for _ in 0..1_000 {
+        black_box(store.indexes().eavt().backend_get(black_box(&key)));
+        black_box(direct.get(black_box(&key)));
+    }
+
+    let trait_start = Instant::now();
+    for _ in 0..LOOKUP_ITERATIONS {
+        black_box(store.indexes().eavt().backend_get(black_box(&key)));
+    }
+    let trait_elapsed = trait_start.elapsed();
+
+    let direct_start = Instant::now();
+    for _ in 0..LOOKUP_ITERATIONS {
+        black_box(direct.get(black_box(&key)));
+    }
+    let direct_elapsed = direct_start.elapsed();
+
+    let ratio = trait_elapsed.as_nanos() as f64 / direct_elapsed.as_nanos().max(1) as f64;
+
+    assert!(
+        ratio < MAX_OVERHEAD_RATIO,
+        "PERF-3 / INV-FERR-025: trait-dispatched lookup is {ratio:.2}x \
+         slower than direct OrdMap::get (limit: {MAX_OVERHEAD_RATIO}x). \
+         trait={trait_elapsed:?}, direct={direct_elapsed:?}, \
+         iterations={LOOKUP_ITERATIONS}"
+    );
+
+    // Also register a Criterion benchmark so the comparison appears in
+    // the HTML report alongside the existing groups.
+    group.throughput(Throughput::Elements(LOOKUP_ITERATIONS as u64));
+    group.bench_function("trait_vs_direct_ratio", |b| {
+        b.iter(|| {
+            black_box(store.indexes().eavt().backend_get(black_box(&key)));
+        });
+    });
+
+    group.finish();
+}
+
+criterion_group!(benches, bench_index_backend, bench_perf3_overhead_assertion);
 criterion_main!(benches);

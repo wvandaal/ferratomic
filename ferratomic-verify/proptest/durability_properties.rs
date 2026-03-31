@@ -281,7 +281,7 @@ proptest! {
 
     /// INV-FERR-028: Cold-start recovery produces correct state.
     ///
-    /// Checkpoint a store, then recover via cold_start. The recovered
+    /// Checkpoint a store, then recover via `cold_start`. The recovered
     /// database must contain all datoms from the checkpointed store
     /// and have the correct epoch. This tests correctness, not timing
     /// (the < 5s target at 100M datoms is a benchmark concern).

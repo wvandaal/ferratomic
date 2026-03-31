@@ -84,20 +84,22 @@ fn inv_ferr_009_reject_wrong_type() {
 
 /// INV-FERR-009: Schema evolution — define new attribute then use it.
 #[test]
+#[allow(clippy::too_many_lines)]
+// Test complexity justified — schema evolution: define attribute then use it
 fn inv_ferr_009_schema_evolution() {
     let mut store = Store::genesis();
     let agent = AgentId::from_bytes([1u8; 16]);
     let new_attr_entity = EntityId::from_content(b"new-attr-entity");
 
     // First transaction: define a new attribute
-    let define_tx = Transaction::new(agent.clone())
+    let define_tx = Transaction::new(agent)
         .assert_datom(
-            new_attr_entity.clone(),
+            new_attr_entity,
             Attribute::from("db/ident"),
             Value::Keyword("user/email".into()),
         )
         .assert_datom(
-            new_attr_entity.clone(),
+            new_attr_entity,
             Attribute::from("db/valueType"),
             Value::Keyword("db.type/string".into()),
         )
@@ -166,12 +168,14 @@ fn inv_ferr_009_atomic_rejection() {
     );
 }
 
-/// INV-FERR-019: Every FerraError variant can be constructed and exhaustively matched.
+/// INV-FERR-019: Every `FerraError` variant can be constructed and exhaustively matched.
 ///
 /// This test enumerates ALL variants of `FerraError` without using a wildcard (`_ =>`).
 /// If a new variant is added to the enum, this test will fail to compile until it is
 /// updated — which is the point.
 #[test]
+#[allow(clippy::too_many_lines)]
+// Test complexity justified — exhaustive match over all FerraError variants
 fn test_inv_ferr_019_error_exhaustiveness() {
     use ferratom::FerraError;
 

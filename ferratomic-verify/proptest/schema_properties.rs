@@ -295,11 +295,11 @@ proptest! {
     /// INV-FERR-032: LIVE resolution correctness — LWW vs keep-all semantics.
     ///
     /// Strengthens INV-FERR-029 by verifying cardinality-specific resolution:
-    /// - Cardinality::One (LWW): only the value from the highest-TxId
+    /// - `Cardinality::One` (LWW): only the value from the highest-`TxId`
     ///   non-retracted assertion survives.
-    /// - Cardinality::Many: all non-retracted values survive.
+    /// - `Cardinality::Many`: all non-retracted values survive.
     ///
-    /// Since Store does not yet expose a live_resolve() method, this test
+    /// Since `Store` does not yet expose a `live_resolve()` method, this test
     /// constructs a schema with both cardinality-one and cardinality-many
     /// attributes, builds datoms targeting those attributes, and verifies
     /// the spec's resolution algorithm produces correct results for each.

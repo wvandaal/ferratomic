@@ -378,7 +378,7 @@ proptest! {
     fn inv_ferr_043_schema_conflict_merge_commutativity(
         seed in any::<u64>(),
     ) {
-        use std::sync::Arc;
+
         use ferratom::{AgentId, Attribute, Value};
 
         // Build two genesis stores with divergent schema definitions.

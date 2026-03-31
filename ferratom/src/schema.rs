@@ -253,6 +253,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn test_inv_ferr_031_schema_iter_is_deterministic() {
         let schema_a = Schema::from_attrs([
             (

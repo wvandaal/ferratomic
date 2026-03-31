@@ -167,9 +167,9 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::all, missing_docs)]
 // ME-016 / NEG-FERR-001: No panics in production code.
-#![deny(clippy::unwrap_used)]
-#![deny(clippy::expect_used)]
-#![deny(clippy::panic)]
+// unwrap_used / expect_used / panic enforced via CI:
+//   cargo clippy --workspace --lib -- -D clippy::unwrap_used -D clippy::expect_used -D clippy::panic
+// NOT as crate-level attributes, because those also block test code.
 #![warn(clippy::pedantic)]
 
 pub mod anti_entropy;

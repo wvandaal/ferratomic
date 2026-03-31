@@ -80,6 +80,7 @@ proptest! {
     }
 
     /// INV-FERR-016: causality is transitive across a chain of agents.
+    #[allow(clippy::too_many_lines, clippy::needless_range_loop)]
     #[test]
     fn inv_ferr_016_hlc_causality_chain(
         chain_length in 2usize..10,

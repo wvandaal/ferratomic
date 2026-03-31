@@ -387,8 +387,7 @@ mod tests {
         let result = tx.commit(&schema);
         assert!(
             matches!(result, Err(TxValidationError::UnknownAttribute(_))),
-            "INV-FERR-009: unknown attribute should be rejected, got {:?}",
-            result
+            "INV-FERR-009: unknown attribute should be rejected, got {result:?}"
         );
     }
 
@@ -408,8 +407,7 @@ mod tests {
         let result = tx.commit(&schema);
         assert!(
             matches!(result, Err(TxValidationError::SchemaViolation { .. })),
-            "INV-FERR-009: wrong value type should be rejected, got {:?}",
-            result
+            "INV-FERR-009: wrong value type should be rejected, got {result:?}"
         );
     }
 
@@ -512,9 +510,7 @@ mod tests {
         for (value, vtype) in &pairs {
             assert!(
                 value_matches_type(value, vtype),
-                "value_matches_type should return true for matching pair: {:?} vs {:?}",
-                value,
-                vtype
+                "value_matches_type should return true for matching pair: {value:?} vs {vtype:?}"
             );
         }
 
@@ -567,7 +563,7 @@ mod tests {
 
     // -- Regression tests for cleanroom review defects -------------------------
 
-    /// Regression: bd-79n — retract_datom creates Op::Retract datoms.
+    /// Regression: bd-79n — `retract_datom` creates `Op::Retract` datoms.
     #[test]
     fn test_bug_bd_79n_retract_datom() {
         let agent = AgentId::from_bytes([0u8; 16]);
@@ -589,7 +585,7 @@ mod tests {
         );
     }
 
-    /// Regression: bd-79n — mixed assert + retract transaction.
+    /// Regression: bd-79n — mixed assert and retract transaction.
     #[test]
     fn test_bug_bd_79n_mixed_assert_retract() {
         let agent = AgentId::from_bytes([0u8; 16]);
