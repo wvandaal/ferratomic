@@ -13,9 +13,12 @@ fn kani_sources() -> [(&'static str, &'static str); 5] {
 
 #[test]
 fn test_bug_bd_1kh_kani_public_access() {
+    // Patterns that indicate direct field access (internal API).
+    // Method calls like `store.datoms()` are public API and allowed.
+    // Use patterns that exclude the method-call parens.
     let forbidden = [
-        "store.indexes",
-        "store.datoms",
+        "store.indexes.",    // field access (vs. store.indexes() method)
+        ".datoms.",          // field-chained access (not method call)
         ".tx_epoch",
         "Datom {",
         ".entity.as_bytes()",
