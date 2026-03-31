@@ -137,17 +137,21 @@ impl HybridClock {
     /// Extracted as a separate method so that future test harnesses can
     /// override it (e.g., via a clock trait or feature flag).
     #[must_use]
-    #[allow(clippy::cast_possible_truncation)]
     fn wall_clock() -> u64 {
-        // as_millis() returns u128 but u64 millis covers 584 million years
-        // from epoch — truncation is physically unreachable.
-        std::time::SystemTime::now()
+        // u64::try_from is infallible here: u64 millis covers 584 million
+        // years from epoch. We saturate instead of truncating to make the
+        // intent explicit.
+        let millis_u128 = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             // duration_since only fails if UNIX_EPOCH is in the future,
             // which is physically impossible on any real system. Fallback
             // to 0 rather than panicking (NEG-FERR-001: no panics).
             .unwrap_or_default()
-            .as_millis() as u64
+            .as_millis();
+        // Saturate to u64::MAX rather than silently truncating. In practice
+        // this never fires (584 million years), but it satisfies clippy and
+        // makes the overflow behavior explicit.
+        u64::try_from(millis_u128).unwrap_or(u64::MAX)
     }
 }
 

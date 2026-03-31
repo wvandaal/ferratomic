@@ -229,9 +229,12 @@ test names, or metrics from Phase 1.
 
 - A: All hard limits met (500 LOC/file, 50 LOC/fn, complexity 10, 5 params).
   `#![forbid(unsafe_code)]` in all crates. No `unwrap()` in production code.
+  Zero `#[allow(clippy::...)]` or `#[allow(dead_code)]` in production code.
   <5 open defects.
 - C: Most limits met. <15 open defects. Minor violations tracked.
+  1-3 clippy suppressions with documented justification.
 - F: Hard limit violations untracked. >20 open defects. `unsafe` present.
+  Clippy suppressions used to hide structural problems.
 
 #### 5. Architecture (Weight: 1.5×)
 

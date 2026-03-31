@@ -129,12 +129,16 @@ impl Store {
     /// Returns `FerraError::EmptyTransaction` if the committed transaction
     /// carries no datoms (should not happen for validly committed
     /// transactions, but defended against per NEG-FERR-001).
-    #[allow(clippy::needless_pass_by_value)] // Transaction consumed semantically -- applied once
     pub fn transact(
         &mut self,
         transaction: Transaction<Committed>,
     ) -> Result<TxReceipt, FerraError> {
+        // INV-FERR-020: extract datoms and agent, then consume the transaction.
+        // Ownership transfer enforces single-application: a committed transaction
+        // cannot be applied twice.
         let datoms = transaction.datoms().to_vec();
+        let agent = transaction.agent();
+        drop(transaction);
         if datoms.is_empty() {
             return Err(FerraError::EmptyTransaction);
         }
@@ -149,13 +153,9 @@ impl Store {
             })?;
 
         // INV-FERR-015: stamp datoms with real TxId + append tx metadata.
-        let real_tx_id = ferratom::TxId::with_agent(self.epoch, 0, transaction.agent());
+        let real_tx_id = ferratom::TxId::with_agent(self.epoch, 0, agent);
         let mut all_datoms = stamp_datoms(datoms, real_tx_id);
-        all_datoms.extend(create_tx_metadata(
-            self.epoch,
-            transaction.agent(),
-            real_tx_id,
-        ));
+        all_datoms.extend(create_tx_metadata(self.epoch, agent, real_tx_id));
 
         // INV-FERR-009: evolve schema from schema-defining datoms.
         crate::schema_evolution::evolve_schema(&mut self.schema, &all_datoms)?;
@@ -201,11 +201,13 @@ fn create_tx_metadata(epoch: u64, agent: AgentId, tx_id: ferratom::TxId) -> Vec<
     let tx_entity = ferratom::EntityId::from_content(
         &format!("tx-{epoch}-{}", agent.as_bytes()[0]).into_bytes(),
     );
-    #[allow(clippy::cast_possible_truncation)]
-    let now_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as i64;
+    let now_ms = i64::try_from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis(),
+    )
+    .unwrap_or(i64::MAX);
 
     vec![
         Datom::new(

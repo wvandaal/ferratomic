@@ -23,7 +23,6 @@ use ferratom::{
 /// other attribute is defined by transacting datoms that reference
 /// these 19. This is the schema-as-data bootstrap (C3, C7).
 #[must_use]
-#[allow(clippy::too_many_lines)] // 19 attribute definitions are inherently verbose
 pub(crate) fn genesis_schema() -> Schema {
     let mut schema = Schema::empty();
 
@@ -82,7 +81,6 @@ pub(crate) fn genesis_schema() -> Schema {
 /// Returns `FerraError::SchemaViolation` if a single entity carries
 /// conflicting values for `db/ident`, `db/valueType`, or `db/cardinality`
 /// within the same transaction (bd-ty5 / CR-037).
-#[allow(clippy::too_many_lines)]
 pub(crate) fn evolve_schema(schema: &mut Schema, datoms: &[Datom]) -> Result<(), FerraError> {
     let mut by_entity: HashMap<EntityId, Vec<&Datom>> = HashMap::new();
     for datom in datoms {

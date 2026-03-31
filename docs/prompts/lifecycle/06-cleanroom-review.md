@@ -81,15 +81,18 @@ Do the tests actually verify the invariants?
 - Are there tests that can never fail? (Tautological assertions, trivial inputs.)
 - Do integration tests cover error paths, not just happy paths?
 
-### Phase 6: Error Handling
+### Phase 6: Error Handling & Lint Discipline
 
-Can the system fail gracefully?
+Can the system fail gracefully? Is static analysis uncompromised?
 
 - Are all `?` propagations correct? (Not swallowing context, not converting
   specific errors to generic ones.)
 - Are there any `unwrap()` or `expect()` in production code?
 - Does `FerraError::InvariantViolation` contain enough context to diagnose?
 - Are I/O errors (disk full, permission denied) handled or silently propagated?
+- **Are there any `#[allow(clippy::...)]` or `#[allow(dead_code)]` in production
+  code?** Zero suppressions is a hard constraint. Every suppression is a defect.
+  If clippy is wrong, restructure the code — do not silence the lint.
 
 ### Phase 7: Documentation
 

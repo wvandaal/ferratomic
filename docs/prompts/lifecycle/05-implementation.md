@@ -153,6 +153,14 @@ CARGO_TARGET_DIR=/data/cargo-target cargo test --workspace
 
 A commit that fails any gate is a defect.
 
+**Zero clippy suppressions.** Never add `#[allow(clippy::...)]` or `#[allow(dead_code)]`
+to production code. If clippy flags something, fix the root cause:
+- `too_many_lines` -> decompose the function
+- `cast_possible_truncation` -> use `try_from` with explicit overflow handling
+- `needless_pass_by_value` -> actually consume the value or take a reference
+- `dead_code` -> remove the dead code or use it
+Suppressions are defects. They defeat the purpose of static analysis.
+
 ---
 
 ## Subagent Orchestration

@@ -51,18 +51,6 @@ use crate::{
 // Typestate markers
 // ---------------------------------------------------------------------------
 
-/// Marker: database is being initialized (genesis, WAL recovery, checkpoint
-/// recovery). Not yet available for reads or writes.
-///
-/// This is a conceptual marker for the state space. In the current design all
-/// constructors complete initialization in one step and return `Database<Ready>`
-/// directly, so user code never holds a `Database<Opening>`. The marker exists
-/// to make the two lifecycle phases explicit in the type system and to
-/// support future phased-initialization flows (e.g., async recovery).
-#[derive(Debug)]
-#[allow(dead_code)] // Typestate marker — exists for the type system, not for construction.
-pub(crate) struct Opening;
-
 /// Marker: database initialization is complete. Reads (`snapshot`, `schema`,
 /// `epoch`) and writes (`transact`, `register_observer`) are available.
 ///
