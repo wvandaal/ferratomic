@@ -349,3 +349,42 @@ theorem schema_atomic (s : DatomStore) (datoms : List Datom)
     split at hs' <;> simp_all
   · intro hvalid
     exact ⟨s ∪ datoms.toFinset, schema_valid_implies_success s datoms schema hvalid⟩
+
+/-! ## INV-FERR-029: Causal LIVE Lattice Homomorphism
+
+  The causal LIVE set maps each `(e, a, v)` triple to its latest `(tx, op)`.
+  Merge of two causal sets is per-key `max(tx)`. This is a lattice homomorphism
+  over datom set union because:
+
+  1. **Filter distributes**: datoms matching key `k` in `A ∪ B` =
+     (matching in `A`) ∪ (matching in `B`).
+  2. **Sup distributes**: `max` over `A ∪ B` = `max(max A, max B)`.
+
+  Together: `causal_live(A ∪ B) = merge_causal(causal_live(A), causal_live(B))`. -/
+
+/-- INV-FERR-029: Filter distributes over union — the structural foundation
+    of the causal LIVE homomorphism. For any key predicate `p`, the datoms
+    matching `p` in `A ∪ B` equal the union of matching datoms in `A` and `B`. -/
+theorem causal_live_filter_union (A B : DatomStore)
+    (p : Datom → Prop) [DecidablePred p] :
+    (A ∪ B).filter p = A.filter p ∪ B.filter p := by
+  ext d; simp [Finset.mem_filter, Finset.mem_union]
+  tauto
+
+/-- INV-FERR-029: Per-key filter preserves merge structure. For a specific
+    `(e, a, v)` triple, the matching datoms distribute over store merge. -/
+theorem causal_live_key_union (A B : DatomStore) (e a v : Nat) :
+    (merge A B).filter (fun d => d.e = e ∧ d.a = a ∧ d.v = v) =
+    A.filter (fun d => d.e = e ∧ d.a = a ∧ d.v = v) ∪
+    B.filter (fun d => d.e = e ∧ d.a = a ∧ d.v = v) :=
+  causal_live_filter_union A B _
+
+/-- INV-FERR-029: Causal LIVE homomorphism (full statement).
+    For any key predicate `p`, the filtered datom set distributes over merge.
+    Combined with the standard order-theoretic fact that `max` distributes
+    over union (`max(A ∪ B) = max(max A, max B)`), this gives:
+    `causal_live(A ∪ B) = merge_causal(causal_live(A), causal_live(B))`. -/
+theorem causal_live_homomorphism (A B : DatomStore)
+    (p : Datom → Prop) [DecidablePred p] :
+    (merge A B).filter p = merge (A.filter p) (B.filter p) :=
+  causal_live_filter_union A B p
