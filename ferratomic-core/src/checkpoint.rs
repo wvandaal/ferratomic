@@ -11,11 +11,11 @@
 //! +------------------+
 //! | Magic    (4B)    | 0x43484B50 ("CHKP")
 //! +------------------+
-//! | Version  (2B)    | 0x0001 (little-endian)
+//! | Version  (2B)    | 0x0002 (little-endian, V2)
 //! +------------------+
 //! | Epoch    (8B)    | u64 little-endian
 //! +------------------+
-//! | Length   (4B)    | u32 byte count of bincode payload
+//! | Length   (8B)    | u64 byte count of bincode payload
 //! +------------------+
 //! | Payload  (N)     | bincode: { schema, genesis_agent, datoms }
 //! +------------------+
@@ -46,11 +46,11 @@ mod tests;
 /// Checkpoint file magic bytes: ASCII "CHKP".
 const CHECKPOINT_MAGIC: [u8; 4] = *b"CHKP";
 
-/// Checkpoint format version. Little-endian u16.
-const CHECKPOINT_VERSION: u16 = 1;
+/// Checkpoint format version. Little-endian u16. V2: u64 length field.
+const CHECKPOINT_VERSION: u16 = 2;
 
-/// Fixed header size: magic(4) + version(2) + epoch(8) + length(4) = 18 bytes.
-const HEADER_SIZE: usize = 18;
+/// Fixed header size: magic(4) + version(2) + epoch(8) + length(8) = 22 bytes.
+const HEADER_SIZE: usize = 22;
 
 /// BLAKE3 hash size: 32 bytes.
 const HASH_SIZE: usize = 32;
@@ -112,12 +112,9 @@ pub(crate) fn serialize_checkpoint_bytes(store: &Store) -> Result<Vec<u8>, Ferra
     let epoch = store.epoch();
     let payload_bytes = build_payload_bytes(store)?;
 
-    let payload_len = u32::try_from(payload_bytes.len()).map_err(|_| {
-        FerraError::CheckpointWrite(format!(
-            "payload too large: {} bytes exceeds u32::MAX",
-            payload_bytes.len()
-        ))
-    })?;
+    // V2: u64 length field supports payloads > 4GB (INV-FERR-028: 100M datoms).
+    // usize→u64 is lossless on all Rust-supported platforms (min 32-bit).
+    let payload_len = payload_bytes.len() as u64;
 
     let total_size = HEADER_SIZE + payload_bytes.len() + HASH_SIZE;
     let mut buf = Vec::with_capacity(total_size);
@@ -375,7 +372,7 @@ fn parse_version(content: &[u8]) -> Result<u16, FerraError> {
 fn validate_version(version: u16) -> Result<(), FerraError> {
     if version != CHECKPOINT_VERSION {
         return Err(FerraError::CheckpointCorrupted {
-            expected: format!("version {CHECKPOINT_VERSION}"),
+            expected: format!("version {CHECKPOINT_VERSION} (V2)"),
             actual: format!("version {version}"),
         });
     }
@@ -391,8 +388,11 @@ fn parse_epoch(content: &[u8]) -> Result<u64, FerraError> {
 }
 
 fn parse_payload_len(content: &[u8]) -> Result<usize, FerraError> {
-    // u32→usize: lossless on 32+ bit platforms (Rust minimum).
-    Ok(u32::from_le_bytes(read_header_bytes(content, 14, "4-byte payload length")?) as usize)
+    let len = u64::from_le_bytes(read_header_bytes(content, 14, "8-byte payload length")?);
+    usize::try_from(len).map_err(|_| FerraError::CheckpointCorrupted {
+        expected: "payload length within usize range".to_string(),
+        actual: format!("{len} bytes"),
+    })
 }
 
 fn payload_slice(content: &[u8], payload_len: usize) -> Result<&[u8], FerraError> {

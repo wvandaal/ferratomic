@@ -41,16 +41,50 @@ impl Database<Ready> {
     /// Returns other `FerraError` variants if the transaction application
     /// itself fails (e.g., `EmptyTransaction`, `InvariantViolation`).
     pub fn transact(&self, transaction: Transaction<Committed>) -> Result<TxReceipt, FerraError> {
-        // INV-FERR-021: pre-check concurrency limit before trying the lock.
+        // INV-FERR-021: pre-check concurrency limit.
         let write_slot = self
             .write_limiter
             .try_acquire()
             .ok_or(FerraError::Backpressure)?;
 
-        // INV-FERR-007: serialize writes. try_lock returns immediately
-        // rather than blocking, so callers can shed load under contention.
-        // ME-001: Distinguish poisoned mutex (InvariantViolation) from
-        // contention (Backpressure). A poisoned mutex is permanently broken.
+        // INV-FERR-007: serialize writes + INV-FERR-015: tick HLC.
+        let (guard, tx_id) = self.acquire_write_lock_and_tick()?;
+
+        // Step 1: Apply transaction to a cloned store with HLC-derived TxId.
+        let current = self.current.load();
+        let mut new_store = Store::clone(&current);
+        let receipt = new_store.transact(transaction, tx_id)?;
+        let new_datoms = receipt.datoms().to_vec();
+
+        // Step 2: INV-FERR-008: WAL before publish.
+        self.write_wal(receipt.epoch(), &new_datoms)?;
+
+        // Step 3: Atomic swap.
+        self.publish_and_check(new_store);
+
+        // INV-FERR-005: release-mode bijection canary.
+        #[cfg(feature = "release_bijection_check")]
+        self.verify_bijection_canary()?;
+
+        // Release write lock and backpressure slot BEFORE observer delivery.
+        // WAL + ArcSwap are already committed.
+        drop(guard);
+        drop(write_slot);
+
+        // Step 4: HI-004: Observer delivery is advisory-only.
+        let _ = self.notify_observers(receipt.epoch(), &new_datoms);
+
+        Ok(receipt)
+    }
+
+    /// Acquire the write lock and tick the HLC under it.
+    ///
+    /// INV-FERR-007: Write serialization via `try_lock` (non-blocking).
+    /// INV-FERR-015: HLC tick under the write lock ensures causal ordering.
+    /// ME-001: Poisoned mutex → `InvariantViolation`, not `Backpressure`.
+    fn acquire_write_lock_and_tick(
+        &self,
+    ) -> Result<(std::sync::MutexGuard<'_, ()>, ferratom::TxId), FerraError> {
         let guard = self.write_lock.try_lock().map_err(|e| match e {
             std::sync::TryLockError::Poisoned(_) => FerraError::InvariantViolation {
                 invariant: "INV-FERR-007".to_string(),
@@ -59,8 +93,6 @@ impl Database<Ready> {
             std::sync::TryLockError::WouldBlock => FerraError::Backpressure,
         })?;
 
-        // HI-011: Tick the HLC under the write lock to produce a causally-
-        // ordered TxId. INV-FERR-015: monotonicity guaranteed by HybridClock.
         let tx_id = {
             let mut clock = self
                 .clock
@@ -72,30 +104,7 @@ impl Database<Ready> {
             clock.tick()
         };
 
-        // Step 1: Apply transaction to a cloned store with HLC-derived TxId.
-        let current = self.current.load();
-        let mut new_store = Store::clone(&current);
-        let receipt = new_store.transact(transaction, tx_id)?;
-        let new_datoms = receipt.datoms().to_vec();
-
-        // Step 2: INV-FERR-008: WAL before publish.
-        self.write_wal(receipt.epoch(), &new_datoms)?;
-
-        // Step 3: Atomic swap + bijection canary.
-        self.publish_and_check(new_store);
-
-        // Release write lock and backpressure slot BEFORE observer delivery
-        // (bd-jxi / CR-032). WAL + ArcSwap are already committed.
-        drop(guard);
-        drop(write_slot);
-
-        // Step 4: Observer delivery (outside write lock scope).
-        // HI-004: Observer delivery failure is advisory-only. The transaction
-        // IS already committed (WAL fsynced + ArcSwap stored). Propagating
-        // observer errors would mislead callers into retrying a committed tx.
-        let _ = self.notify_observers(receipt.epoch(), &new_datoms);
-
-        Ok(receipt)
+        Ok((guard, tx_id))
     }
 
     /// Write stamped datoms to the WAL and fsync before publish.
@@ -127,33 +136,42 @@ impl Database<Ready> {
         Ok(())
     }
 
-    /// Atomic-swap the new store and run the release-mode bijection canary.
+    /// Atomic-swap the new store into the shared reference.
     ///
     /// INV-FERR-006: readers loading after the swap see the new state.
-    /// INV-FERR-005: every 100th transaction checks index bijection in
-    /// release builds (when `release_bijection_check` feature is enabled).
     fn publish_and_check(&self, new_store: Store) {
         self.current.store(Arc::new(new_store));
 
         // ME-010: AcqRel ensures the counter increment is visible to
         // other threads checking the bijection canary.
-        let count = self.transaction_count.fetch_add(1, Ordering::AcqRel) + 1;
-        #[cfg(feature = "release_bijection_check")]
-        {
-            if count % 100 == 0 {
-                let published_store = self.current.load();
-                if !published_store.indexes().verify_bijection() {
-                    eprintln!(
-                        "WARN [ferratomic-core] INV-FERR-005 violation: \
-                         index bijection check failed at transaction count {count}, \
-                         epoch {}",
-                        published_store.epoch(),
-                    );
-                }
+        self.transaction_count.fetch_add(1, Ordering::AcqRel);
+    }
+
+    /// INV-FERR-005: release-mode bijection canary.
+    ///
+    /// Every 100th transaction verifies that secondary indexes remain in
+    /// bijection with the primary datom set. Only active when the
+    /// `release_bijection_check` feature is enabled.
+    ///
+    /// # Errors
+    ///
+    /// Returns `FerraError::InvariantViolation` if the bijection check fails.
+    #[cfg(feature = "release_bijection_check")]
+    fn verify_bijection_canary(&self) -> Result<(), FerraError> {
+        let count = self.transaction_count.load(Ordering::Acquire);
+        if count % 100 == 0 {
+            let published_store = self.current.load();
+            if !published_store.indexes().verify_bijection() {
+                return Err(FerraError::InvariantViolation {
+                    invariant: "INV-FERR-005".to_string(),
+                    details: format!(
+                        "index bijection check failed at transaction count {count}, epoch {}",
+                        published_store.epoch()
+                    ),
+                });
             }
         }
-        // Suppress unused-variable warning when the feature is not enabled.
-        let _ = count;
+        Ok(())
     }
 
     /// Deliver commit notification to registered observers.

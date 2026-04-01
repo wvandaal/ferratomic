@@ -17,8 +17,8 @@ fn test_bug_bd_1kh_kani_public_access() {
     // Method calls like `store.datoms()` are public API and allowed.
     // Use patterns that exclude the method-call parens.
     let forbidden = [
-        "store.indexes.",    // field access (vs. store.indexes() method)
-        ".datoms.",          // field-chained access (not method call)
+        "store.indexes.", // field access (vs. store.indexes() method)
+        ".datoms.",       // field-chained access (not method call)
         ".tx_epoch",
         "Datom {",
         ".entity.as_bytes()",

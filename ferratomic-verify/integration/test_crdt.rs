@@ -491,6 +491,240 @@ fn test_inv_ferr_030_replica_filter() {
     assert_send_sync::<AcceptAll>();
 }
 
+/// INV-FERR-010: Convergence verified at all four index levels.
+///
+/// bd-7fub.23.1: Two stores with identical datoms applied in different
+/// insertion order must produce identical EAVT, AEVT, AVET, and VAET
+/// index iteration sequences. Field-by-field datom comparison.
+#[test]
+fn test_inv_ferr_010_convergence_index_level() {
+    let datoms = [
+        Datom::new(
+            EntityId::from_content(b"conv-e1"),
+            Attribute::from("user/name"),
+            Value::String("Alice".into()),
+            TxId::new(1, 0, 0),
+            Op::Assert,
+        ),
+        Datom::new(
+            EntityId::from_content(b"conv-e1"),
+            Attribute::from("user/age"),
+            Value::Long(30),
+            TxId::new(2, 0, 0),
+            Op::Assert,
+        ),
+        Datom::new(
+            EntityId::from_content(b"conv-e2"),
+            Attribute::from("user/name"),
+            Value::String("Bob".into()),
+            TxId::new(3, 0, 0),
+            Op::Assert,
+        ),
+        Datom::new(
+            EntityId::from_content(b"conv-e2"),
+            Attribute::from("user/role"),
+            Value::String("admin".into()),
+            TxId::new(4, 0, 0),
+            Op::Assert,
+        ),
+        Datom::new(
+            EntityId::from_content(b"conv-e3"),
+            Attribute::from("user/name"),
+            Value::String("Carol".into()),
+            TxId::new(5, 0, 0),
+            Op::Assert,
+        ),
+        Datom::new(
+            EntityId::from_content(b"conv-e3"),
+            Attribute::from("user/name"),
+            Value::String("Carol".into()),
+            TxId::new(6, 0, 0),
+            Op::Retract,
+        ),
+    ];
+
+    // Apply in forward order.
+    let mut forward = Store::genesis();
+    for d in &datoms {
+        forward.insert(d);
+    }
+
+    // Apply in reverse order.
+    let mut reverse = Store::genesis();
+    for d in datoms.iter().rev() {
+        reverse.insert(d);
+    }
+
+    // Primary datom set must match.
+    assert_eq!(
+        forward.datom_set(),
+        reverse.datom_set(),
+        "INV-FERR-010: primary datom sets must be identical regardless of insertion order"
+    );
+
+    // EAVT index iteration must match datom-by-datom.
+    let eavt_f: Vec<&Datom> = forward.indexes().eavt_datoms().collect();
+    let eavt_r: Vec<&Datom> = reverse.indexes().eavt_datoms().collect();
+    assert_eq!(
+        eavt_f.len(),
+        eavt_r.len(),
+        "INV-FERR-010: EAVT index cardinality diverged"
+    );
+    for (i, (f, r)) in eavt_f.iter().zip(eavt_r.iter()).enumerate() {
+        assert_eq!(
+            f.entity(),
+            r.entity(),
+            "INV-FERR-010: EAVT entity diverged at position {i}"
+        );
+        assert_eq!(
+            f.attribute(),
+            r.attribute(),
+            "INV-FERR-010: EAVT attribute diverged at position {i}"
+        );
+        assert_eq!(
+            f.value(),
+            r.value(),
+            "INV-FERR-010: EAVT value diverged at position {i}"
+        );
+        assert_eq!(
+            f.tx(),
+            r.tx(),
+            "INV-FERR-010: EAVT tx diverged at position {i}"
+        );
+    }
+
+    // AEVT index iteration must match.
+    let aevt_f: Vec<&Datom> = forward.indexes().aevt_datoms().collect();
+    let aevt_r: Vec<&Datom> = reverse.indexes().aevt_datoms().collect();
+    assert_eq!(
+        aevt_f.len(),
+        aevt_r.len(),
+        "INV-FERR-010: AEVT index cardinality diverged"
+    );
+    for (i, (f, r)) in aevt_f.iter().zip(aevt_r.iter()).enumerate() {
+        assert_eq!(f, r, "INV-FERR-010: AEVT index diverged at position {i}");
+    }
+
+    // AVET index iteration must match.
+    let avet_f: Vec<&Datom> = forward.indexes().avet_datoms().collect();
+    let avet_r: Vec<&Datom> = reverse.indexes().avet_datoms().collect();
+    assert_eq!(
+        avet_f.len(),
+        avet_r.len(),
+        "INV-FERR-010: AVET index cardinality diverged"
+    );
+    for (i, (f, r)) in avet_f.iter().zip(avet_r.iter()).enumerate() {
+        assert_eq!(f, r, "INV-FERR-010: AVET index diverged at position {i}");
+    }
+
+    // VAET index iteration must match.
+    let vaet_f: Vec<&Datom> = forward.indexes().vaet_datoms().collect();
+    let vaet_r: Vec<&Datom> = reverse.indexes().vaet_datoms().collect();
+    assert_eq!(
+        vaet_f.len(),
+        vaet_r.len(),
+        "INV-FERR-010: VAET index cardinality diverged"
+    );
+    for (i, (f, r)) in vaet_f.iter().zip(vaet_r.iter()).enumerate() {
+        assert_eq!(f, r, "INV-FERR-010: VAET index diverged at position {i}");
+    }
+}
+
+/// INV-FERR-017: Shard partition + merge = original store.
+///
+/// bd-7fub.23.2: Partition a store into shards by entity hash, create
+/// Store objects from each shard, merge all shards via Store::from_merge,
+/// verify the merged result equals the original at the datom level.
+#[test]
+fn test_inv_ferr_017_shard_union_via_merge() {
+    let datoms = BTreeSet::from([
+        Datom::new(
+            EntityId::from_content(b"shard-m1"),
+            Attribute::from("user/name"),
+            Value::String("Alice".into()),
+            TxId::new(1, 0, 0),
+            Op::Assert,
+        ),
+        Datom::new(
+            EntityId::from_content(b"shard-m1"),
+            Attribute::from("user/age"),
+            Value::Long(28),
+            TxId::new(2, 0, 0),
+            Op::Assert,
+        ),
+        Datom::new(
+            EntityId::from_content(b"shard-m2"),
+            Attribute::from("user/name"),
+            Value::String("Bob".into()),
+            TxId::new(3, 0, 0),
+            Op::Assert,
+        ),
+        Datom::new(
+            EntityId::from_content(b"shard-m3"),
+            Attribute::from("user/role"),
+            Value::String("admin".into()),
+            TxId::new(4, 0, 0),
+            Op::Assert,
+        ),
+        Datom::new(
+            EntityId::from_content(b"shard-m4"),
+            Attribute::from("user/name"),
+            Value::String("Dave".into()),
+            TxId::new(5, 0, 0),
+            Op::Assert,
+        ),
+    ]);
+    let original = Store::from_datoms(datoms);
+    let shard_count = 3usize;
+
+    // Partition into N shards by entity hash.
+    let mut shard_datoms: Vec<BTreeSet<Datom>> =
+        (0..shard_count).map(|_| BTreeSet::new()).collect();
+    for d in original.datoms() {
+        let entity = d.entity();
+        let bytes = entity.as_bytes();
+        let mut buf = [0u8; 8];
+        let len = bytes.len().min(8);
+        buf[..len].copy_from_slice(&bytes[..len]);
+        let shard_id = (u64::from_le_bytes(buf) as usize) % shard_count;
+        shard_datoms[shard_id].insert(d.clone());
+    }
+
+    // Create Store from each shard.
+    let shard_stores: Vec<Store> = shard_datoms.into_iter().map(Store::from_datoms).collect();
+
+    // Merge all shard stores.
+    let mut merged = shard_stores[0].clone();
+    for shard in &shard_stores[1..] {
+        merged = merge(&merged, shard).expect("INV-FERR-017: shard merge must succeed");
+    }
+
+    // Verify datom-level equality.
+    assert_eq!(
+        merged.datom_set(),
+        original.datom_set(),
+        "INV-FERR-017: merged shards must equal original store at datom level"
+    );
+
+    // Verify cardinality.
+    assert_eq!(
+        merged.len(),
+        original.len(),
+        "INV-FERR-017: merged shard cardinality must match original"
+    );
+
+    // Verify each datom from original is present in merged result.
+    for d in original.datoms() {
+        assert!(
+            merged.datom_set().contains(d),
+            "INV-FERR-017: datom missing from merged result: entity={:?}, attr={}, val={:?}",
+            d.entity(),
+            d.attribute().as_str(),
+            d.value()
+        );
+    }
+}
+
 /// INV-FERR-031: Two genesis databases produce identical datom sets.
 ///
 /// bd-7tb0: integration-level genesis determinism test. Creates two

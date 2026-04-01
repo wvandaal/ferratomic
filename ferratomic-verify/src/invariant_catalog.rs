@@ -10,10 +10,8 @@
 
 /// Verification stage for phased gate closure.
 ///
-/// Stage boundaries align with the phase gate beads:
-/// - Stage 0: core + concurrency + performance (INV-FERR-001..032)
-/// - Stage 1: decisions + federation + prolly tree (INV-FERR-033..050)
-/// - Stage 2: VKN + verification infrastructure (INV-FERR-051..059)
+/// Stage values mirror the canonical spec headers in `spec/*.md`.
+/// The partition is not guaranteed to be a contiguous numeric range.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Stage {
     /// Core, concurrency, and performance invariants.
@@ -392,12 +390,12 @@ pub const CATALOG: &[Invariant] = &[
         integration_test: Some("test_inv_ferr_032_live_correctness"),
     },
     // -----------------------------------------------------------------------
-    // 04-decisions-and-constraints.md: INV-FERR-033..036 (Stage 1)
+    // 04-decisions-and-constraints.md: INV-FERR-033..036 (Stage 0)
     // -----------------------------------------------------------------------
     Invariant {
         id: "INV-FERR-033",
         name: "Cross-Shard Query Correctness",
-        stage: Stage::Stage1,
+        stage: Stage::Stage0,
         lean_theorem: Some("cross_shard_query"),
         proptest_fn: None,
         kani_harness: None,
@@ -407,8 +405,8 @@ pub const CATALOG: &[Invariant] = &[
     Invariant {
         id: "INV-FERR-034",
         name: "Partition Detection",
-        stage: Stage::Stage1,
-        lean_theorem: None,
+        stage: Stage::Stage0,
+        lean_theorem: Some("partition_detected_in_two_rounds"),
         proptest_fn: None,
         kani_harness: None,
         stateright_model: None,
@@ -417,8 +415,8 @@ pub const CATALOG: &[Invariant] = &[
     Invariant {
         id: "INV-FERR-035",
         name: "Partition-Safe Operation",
-        stage: Stage::Stage1,
-        lean_theorem: None,
+        stage: Stage::Stage0,
+        lean_theorem: Some("partition_safe_write"),
         proptest_fn: None,
         kani_harness: None,
         stateright_model: None,
@@ -427,7 +425,7 @@ pub const CATALOG: &[Invariant] = &[
     Invariant {
         id: "INV-FERR-036",
         name: "Partition Recovery",
-        stage: Stage::Stage1,
+        stage: Stage::Stage0,
         lean_theorem: Some("partition_recovery"),
         proptest_fn: None,
         kani_harness: None,
@@ -435,12 +433,12 @@ pub const CATALOG: &[Invariant] = &[
         integration_test: None,
     },
     // -----------------------------------------------------------------------
-    // 05-federation.md: INV-FERR-037..044 (Stage 1)
+    // 05-federation.md: INV-FERR-037..044 (mixed stages 0/1)
     // -----------------------------------------------------------------------
     Invariant {
         id: "INV-FERR-037",
         name: "Federated Query Correctness",
-        stage: Stage::Stage1,
+        stage: Stage::Stage0,
         lean_theorem: Some("federated_query_two"),
         proptest_fn: None,
         kani_harness: None,
@@ -450,8 +448,8 @@ pub const CATALOG: &[Invariant] = &[
     Invariant {
         id: "INV-FERR-038",
         name: "Federation Substrate Transparency",
-        stage: Stage::Stage1,
-        lean_theorem: None,
+        stage: Stage::Stage0,
+        lean_theorem: Some("transport_transparency"),
         proptest_fn: None,
         kani_harness: None,
         stateright_model: None,
@@ -460,7 +458,7 @@ pub const CATALOG: &[Invariant] = &[
     Invariant {
         id: "INV-FERR-039",
         name: "Selective Merge (Knowledge Transfer)",
-        stage: Stage::Stage1,
+        stage: Stage::Stage0,
         lean_theorem: Some("selective_merge_mono"),
         proptest_fn: None,
         kani_harness: None,
@@ -470,7 +468,7 @@ pub const CATALOG: &[Invariant] = &[
     Invariant {
         id: "INV-FERR-040",
         name: "Merge Provenance Preservation",
-        stage: Stage::Stage1,
+        stage: Stage::Stage0,
         lean_theorem: Some("merge_provenance"),
         proptest_fn: None,
         kani_harness: None,
@@ -480,8 +478,8 @@ pub const CATALOG: &[Invariant] = &[
     Invariant {
         id: "INV-FERR-041",
         name: "Transport Latency Tolerance",
-        stage: Stage::Stage1,
-        lean_theorem: None,
+        stage: Stage::Stage0,
+        lean_theorem: Some("partial_subset_full"),
         proptest_fn: None,
         kani_harness: None,
         stateright_model: None,
@@ -500,7 +498,7 @@ pub const CATALOG: &[Invariant] = &[
     Invariant {
         id: "INV-FERR-043",
         name: "Schema Compatibility Check",
-        stage: Stage::Stage1,
+        stage: Stage::Stage0,
         lean_theorem: Some("schema_compat_symmetric"),
         proptest_fn: Some("inv_ferr_043_schema_conflict_merge_commutativity"),
         kani_harness: None,
@@ -510,7 +508,7 @@ pub const CATALOG: &[Invariant] = &[
     Invariant {
         id: "INV-FERR-044",
         name: "Namespace Isolation",
-        stage: Stage::Stage1,
+        stage: Stage::Stage0,
         lean_theorem: Some("ns_filter_sound"),
         proptest_fn: None,
         kani_harness: None,
@@ -581,12 +579,12 @@ pub const CATALOG: &[Invariant] = &[
         integration_test: None,
     },
     // -----------------------------------------------------------------------
-    // 05-federation.md (VKN section): INV-FERR-051..055 (Stage 2)
+    // 05-federation.md (VKN section): INV-FERR-051..055 (Stage 1)
     // -----------------------------------------------------------------------
     Invariant {
         id: "INV-FERR-051",
         name: "Signed Transactions",
-        stage: Stage::Stage2,
+        stage: Stage::Stage1,
         lean_theorem: Some("signed_verify_roundtrip"),
         proptest_fn: None,
         kani_harness: None,
@@ -596,7 +594,7 @@ pub const CATALOG: &[Invariant] = &[
     Invariant {
         id: "INV-FERR-052",
         name: "Merkle Proof of Inclusion",
-        stage: Stage::Stage2,
+        stage: Stage::Stage1,
         lean_theorem: None,
         proptest_fn: None,
         kani_harness: None,
@@ -606,7 +604,7 @@ pub const CATALOG: &[Invariant] = &[
     Invariant {
         id: "INV-FERR-053",
         name: "Light Client Protocol",
-        stage: Stage::Stage2,
+        stage: Stage::Stage1,
         lean_theorem: Some("light_client_completeness"),
         proptest_fn: None,
         kani_harness: None,
@@ -616,7 +614,7 @@ pub const CATALOG: &[Invariant] = &[
     Invariant {
         id: "INV-FERR-054",
         name: "Trust Gradient Query",
-        stage: Stage::Stage2,
+        stage: Stage::Stage1,
         lean_theorem: Some("trust_all_identity"),
         proptest_fn: None,
         kani_harness: None,
@@ -626,7 +624,7 @@ pub const CATALOG: &[Invariant] = &[
     Invariant {
         id: "INV-FERR-055",
         name: "Verifiable Knowledge Commitment (VKC)",
-        stage: Stage::Stage2,
+        stage: Stage::Stage1,
         lean_theorem: Some("vkc_authentic"),
         proptest_fn: None,
         kani_harness: None,
@@ -634,14 +632,14 @@ pub const CATALOG: &[Invariant] = &[
         integration_test: None,
     },
     // -----------------------------------------------------------------------
-    // 08-verification-infrastructure.md: INV-FERR-056..059 (Stage 2)
+    // 08-verification-infrastructure.md: INV-FERR-056..059 (mixed stages 0/1/2)
     // -----------------------------------------------------------------------
     Invariant {
         id: "INV-FERR-056",
         name: "Crash Recovery Under Adversarial Fault Model",
-        stage: Stage::Stage2,
+        stage: Stage::Stage0,
         lean_theorem: None,
-        proptest_fn: None,
+        proptest_fn: Some("inv_ferr_056_checkpoint_corruption_detected"),
         kani_harness: None,
         stateright_model: None,
         integration_test: None,
@@ -649,7 +647,7 @@ pub const CATALOG: &[Invariant] = &[
     Invariant {
         id: "INV-FERR-057",
         name: "Sustained Load Invariant Preservation",
-        stage: Stage::Stage2,
+        stage: Stage::Stage1,
         lean_theorem: None,
         proptest_fn: None,
         kani_harness: None,
@@ -669,7 +667,7 @@ pub const CATALOG: &[Invariant] = &[
     Invariant {
         id: "INV-FERR-059",
         name: "Optimization Behavioral Preservation",
-        stage: Stage::Stage2,
+        stage: Stage::Stage1,
         lean_theorem: None,
         proptest_fn: None,
         kani_harness: None,
@@ -808,22 +806,22 @@ mod tests {
     fn test_coverage_by_stage() {
         let counts = coverage_by_stage();
 
-        // Stage 0: INV-FERR-001..032 (32) + CI-FERR-001..002 (2) = 34
+        // Stage 0: all invariants currently marked Stage 0 in the spec = 46
         assert_eq!(
-            counts[0].2, 34,
-            "Stage 0 total: expected 34, got {}",
+            counts[0].2, 46,
+            "Stage 0 total: expected 46, got {}",
             counts[0].2
         );
-        // Stage 1: INV-FERR-033..050 = 18
+        // Stage 1: all invariants currently marked Stage 1 in the spec = 14
         assert_eq!(
-            counts[1].2, 18,
-            "Stage 1 total: expected 18, got {}",
+            counts[1].2, 14,
+            "Stage 1 total: expected 14, got {}",
             counts[1].2
         );
-        // Stage 2: INV-FERR-051..059 = 9
+        // Stage 2: all invariants currently marked Stage 2 in the spec = 1
         assert_eq!(
-            counts[2].2, 9,
-            "Stage 2 total: expected 9, got {}",
+            counts[2].2, 1,
+            "Stage 2 total: expected 1, got {}",
             counts[2].2
         );
 

@@ -110,18 +110,39 @@ impl WireValue {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WireDatom {
     /// Entity (unverified wire format).
-    pub entity: WireEntityId,
+    entity: WireEntityId,
     /// Attribute (safe — just `Arc<str>`).
-    pub attribute: Attribute,
+    attribute: Attribute,
     /// Value (may contain unverified `WireEntityId` via `Ref`).
-    pub value: WireValue,
+    value: WireValue,
     /// Transaction ID (safe — just integers + agent bytes).
-    pub tx: TxId,
+    tx: TxId,
     /// Assert or Retract (safe — enum).
-    pub op: Op,
+    op: Op,
 }
 
 impl WireDatom {
+    /// Construct an opaque wire datom.
+    ///
+    /// ADR-FERR-010: callers may build a `WireDatom`, but they cannot mutate
+    /// its contents after construction. Deserialization is the other entry path.
+    #[must_use]
+    pub fn new(
+        entity: WireEntityId,
+        attribute: Attribute,
+        value: WireValue,
+        tx: TxId,
+        op: Op,
+    ) -> Self {
+        Self {
+            entity,
+            attribute,
+            value,
+            tx,
+            op,
+        }
+    }
+
     /// Convert to core `Datom` after trust boundary verification.
     ///
     /// ADR-FERR-010: Caller MUST have verified source integrity
@@ -198,13 +219,13 @@ mod tests {
         let tx = TxId::new(1, 0, 0);
         let original = Datom::new(entity, attr.clone(), value.clone(), tx, Op::Assert);
 
-        let wire = WireDatom {
-            entity: WireEntityId(*entity.as_bytes()),
-            attribute: attr,
-            value: WireValue::String(Arc::from("hello")),
+        let wire = WireDatom::new(
+            WireEntityId(*entity.as_bytes()),
+            attr,
+            WireValue::String(Arc::from("hello")),
             tx,
-            op: Op::Assert,
-        };
+            Op::Assert,
+        );
         let recovered = wire.into_trusted();
         assert_eq!(
             original, recovered,

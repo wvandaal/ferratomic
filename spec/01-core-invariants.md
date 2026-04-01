@@ -182,11 +182,11 @@ Proof: merge(A, A) = A ∪ A = A
 
 #### Level 1 (State Invariant)
 Merging a store with itself produces no change to the datom set, the indexes, or any
-derived state. This property is essential for at-least-once delivery semantics (PD-004):
+derived state. This property is essential for at-least-once delivery semantics:
 if a merge message is delivered twice (network retry, process restart), the second delivery
 is a no-op. Without idempotency, retry logic would need deduplication infrastructure
 external to the store, violating the principle that all protocol-relevant state lives
-in `D` (ADR-FOUNDATION-003).
+in the datom set itself.
 
 #### Level 2 (Implementation Contract)
 ```rust
@@ -357,7 +357,7 @@ theorem merge_monotone_right (a b : DatomStore) : b ⊆ merge a b := by
 
 ### INV-FERR-005: Index Bijection
 
-**Traces to**: SEED.md 4, INV-STORE-012, ADRS SR-001, SR-002
+**Traces to**: SEED.md 4, INV-STORE-012
 **Verification**: `V:PROP`, `V:KANI`
 **Stage**: 0
 
@@ -497,7 +497,8 @@ theorem index_membership_after_apply (s : DatomStore) (d : Datom) :
 
 ### INV-FERR-006: Snapshot Isolation
 
-**Traces to**: SEED.md 4 Axiom 3 (Snapshots), INV-STORE-013, ADRS PD-001
+**Traces to**: SEED.md 4 Axiom 3 (Snapshots), INV-STORE-013,
+ADR-FERR-001 (Persistent Data Structures), ADR-FERR-003 (Concurrency Model)
 **Verification**: `V:PROP`, `V:KANI`, `V:MODEL`
 **Stage**: 0
 
@@ -656,7 +657,8 @@ theorem snapshot_stable (s : DatomStore) (d : Datom) (epoch : Nat)
 
 ### INV-FERR-007: Write Linearizability
 
-**Traces to**: SEED.md 4, INV-STORE-010, INV-STORE-011, ADRS SR-004
+**Traces to**: SEED.md 4, INV-STORE-010, INV-STORE-011,
+ADR-FERR-003 (Concurrency Model)
 **Verification**: `V:PROP`, `V:KANI`, `V:MODEL`
 **Stage**: 0
 
@@ -784,7 +786,7 @@ theorem sequential_apply_distinct (s : DatomStore) (d1 d2 : Datom)
 
 ### INV-FERR-008: WAL Fsync Ordering
 
-**Traces to**: SEED.md 5 (Harvest/Seed Lifecycle — durability), C1, INV-STORE-009, ADRS PD-003
+**Traces to**: SEED.md 5 (Harvest/Seed Lifecycle — durability), C1, INV-STORE-009
 **Verification**: `V:PROP`, `V:MODEL`
 **Stage**: 0
 
@@ -1103,7 +1105,9 @@ theorem valid_preserves_monotonicity (s : DatomStore) (schema : Schema) (d : Dat
 
 ### INV-FERR-010: Merge Convergence
 
-**Traces to**: SEED.md 4 Axiom 2 (Store), C4, ADRS AS-001, PD-004
+**Traces to**: SEED.md 4 Axiom 2 (Store), C4,
+INV-FERR-001 (Merge Commutativity), INV-FERR-002 (Merge Associativity),
+INV-FERR-003 (Merge Idempotency)
 **Verification**: `V:PROP`, `V:KANI`, `V:LEAN`, `V:MODEL`
 **Stage**: 0
 
@@ -1301,7 +1305,8 @@ theorem convergence_symmetric (a b : DatomStore) :
 
 ### INV-FERR-011: Observer Monotonicity
 
-**Traces to**: SEED.md 5, INV-STORE-011 (HLC Monotonicity), ADRS SR-004
+**Traces to**: SEED.md 5, INV-FERR-006 (Snapshot Isolation),
+INV-FERR-007 (Write Linearizability)
 **Verification**: `V:PROP`, `V:KANI`
 **Stage**: 0
 
@@ -1446,7 +1451,8 @@ theorem epoch_monotone (s : DatomStore) (e1 e2 : Nat) (h : e1 ≤ e2) :
 
 ### INV-FERR-012: Content-Addressed Identity
 
-**Traces to**: SEED.md 4 Axiom 1 (Identity), C2, INV-STORE-003, ADRS FD-007, ADR-STORE-013
+**Traces to**: SEED.md 4 Axiom 1 (Identity), C2, INV-STORE-003,
+ADR-FERR-010 (Deserialization Trust Boundary)
 **Verification**: `V:TYPE`, `V:PROP`, `V:KANI`, `V:LEAN`
 **Stage**: 0
 
@@ -1651,4 +1657,3 @@ theorem merge_dedup (a : DatomStore) (d : Datom) (h : d ∈ a) :
 ```
 
 ---
-

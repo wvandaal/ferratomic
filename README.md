@@ -39,7 +39,9 @@ The store is a grow-only set of datoms under set union. This single equation giv
 │  │ tree      │ │ group commit │ │    actor-based writer, chunked store
 │  └───────────┘ └──────────────┘ │
 ├─────────────────────────────────┤
-│       ferratom                   │  ← Core types (zero dependencies)
+│       ferratom                   │  ← Core datom/types facade
+├─────────────────────────────────┤
+│     ferratom-clock               │  ← HLC, TxId, AgentId, Frontier
 └─────────────────────────────────┘
 ```
 
@@ -47,7 +49,8 @@ The store is a grow-only set of datoms under set union. This single equation giv
 
 | Crate | Role | Dependencies |
 |-------|------|-------------|
-| `ferratom` | Core types: Datom, EntityId, Value, Schema, HLC | blake3, ordered-float, serde |
+| `ferratom-clock` | Clock primitives: HybridClock, TxId, AgentId, Frontier | serde |
+| `ferratom` | Core types: Datom, EntityId, Value, Schema; re-exports clock types | ferratom-clock, blake3, ordered-float, serde |
 | `ferratomic-core` | Phase 4a (current): Store, MVCC snapshots, Mutex writer, WAL, checkpoint, observers. Phase 4b+ (planned): actor writer, prolly tree, federation | ferratom, im, arc-swap |
 | `ferratomic-datalog` | Query: Datalog parser, planner, evaluator, CALM classification | ferratom, ferratomic-core |
 | `ferratomic-verify` | Proofs: Lean 4, Stateright, Kani, proptest | ferratom, ferratomic-core |
@@ -78,7 +81,7 @@ Every invariant is verified at three levels before implementation begins:
 | **Property testing** | proptest | Round-trip, monotonicity, Lean-Rust conformance |
 | **Integration** | E2E tests | Lifecycle, recovery, observer delivery, federation |
 
-**55 invariants. 9 ADRs. 5 negative cases.** [Full specification →](spec/README.md)
+**59 invariants. 14 ADRs. 6 negative cases. 2 coupling invariants.** [Full specification →](spec/README.md)
 
 ## Performance Targets
 
@@ -129,8 +132,10 @@ No phase N+1 until phase N passes its isomorphism check. A gap between spec, alg
 | [Concurrency](spec/02-concurrency.md) | INV-FERR-013..024 | Checkpoint, recovery, HLC, atomicity, substrate |
 | [Performance](spec/03-performance.md) | INV-FERR-025..032 | Write amplification, tail latency, LIVE resolution |
 | [Decisions](spec/04-decisions-and-constraints.md) | INV-FERR-033..036 | ADRs, NEGs, cross-shard query, partition tolerance |
-| [Federation + VKN](spec/05-federation.md) | INV-FERR-037..055 | Federated query, selective merge, cryptographic provenance |
+| [Federation + VKN](spec/05-federation.md) | INV-FERR-037..044, 051..055 | Federated query, selective merge, cryptographic provenance |
 | [Prolly Tree](spec/06-prolly-tree.md) | INV-FERR-045..050 | Chunk addressing, O(d) diff, block store |
+| [Refinement](spec/07-refinement.md) | CI-FERR-001..002 | Lean-Rust coupling invariant, refinement tower |
+| [Verification Infrastructure](spec/08-verification-infrastructure.md) | INV-FERR-056..059 | Fault injection, soak testing, metamorphic testing, optimization preservation |
 
 ## License
 

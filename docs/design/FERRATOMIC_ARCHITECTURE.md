@@ -2,7 +2,8 @@
 
 > Canonical architecture reference for the Ferratomic embedded datom database engine.
 > This document is the implementation blueprint for adversarial cleanroom audit.
-> Every claim traces to `spec/23-ferratomic.md`, `SEED.md`, or `docs/design/ADRS.md`.
+> Every claim traces to the canonical modular spec in `spec/README.md` and `spec/*.md`,
+> plus `SEED.md` and `docs/design/ADRS.md`.
 
 ---
 
@@ -11,7 +12,8 @@
 ### What Ferratomic Is
 
 Ferratomic is an embedded, append-only datom database engine that reifies the algebraic
-store `(P(D), ∪)` specified in `spec/01-store.md` as a production-grade storage system.
+store `(P(D), ∪)` specified in the canonical modular spec (`spec/01-core-invariants.md`,
+`spec/02-concurrency.md`, `spec/03-performance.md`) as a production-grade storage system.
 It stores atomic facts called datoms -- five-tuples of the form
 `[entity, attribute, value, transaction, operation]` -- in a grow-only set with conflict-free
 merge semantics. It is the persistence, concurrency, and distribution substrate for all
@@ -54,13 +56,13 @@ that uses it, or InnoDB vs. MySQL's query layer.
 
 **Traceability**:
 - `SEED.md` section 4 (Core Abstraction: Datoms) defines the algebraic model.
-- `spec/01-store.md` formalizes the five lattice laws L1-L5.
-- `spec/23-ferratomic.md` specifies how those laws hold under real-world failure modes.
-- This document specifies the engineering architecture that implements the spec.
+- `spec/01-core-invariants.md`, `spec/02-concurrency.md`, and `spec/03-performance.md`
+  formalize the Stage 0 store laws and their engineering contracts.
+- `spec/README.md` defines the canonical modular phase map across 4a/4b/4c/4d.
+- This document specifies the engineering architecture that implements that spec.
 
-The refinement chain is: SEED.md (vision) -> `spec/01-store.md` (algebra) ->
-`spec/23-ferratomic.md` (engineering spec) -> this document (implementation architecture)
--> code (realization).
+The refinement chain is: SEED.md (vision) -> modular `spec/*.md` (canonical engineering
+spec) -> this document (implementation architecture) -> code (realization).
 
 ---
 
@@ -160,14 +162,15 @@ Ferratomic's verification strategy is grounded in the Curry-Howard-Lambek corres
 | Categories (Lean 4) | The algebraic structure those proofs inhabit |
 
 Concretely:
-- `EntityId`'s private inner field (ADR-STORE-014) is a **type-level proof** that every
+- `EntityId`'s private inner field is a **type-level proof** that every
   entity identifier was produced by BLAKE3 hashing. The impossibility of constructing an
   `EntityId` from raw bytes (outside `pub(crate)` deserialization) means the content-addressing
   invariant (INV-FERR-012) is enforced by the type system, not by runtime checks.
 - The `Transaction<Building> -> Transaction<Committed> -> Transaction<Applied>` typestate
   (sealed trait, `PhantomData<S>`) is a **type-level proof** that transactions follow the
   correct lifecycle. Invalid state transitions are compile errors.
-- The Lean 4 theorems in `spec/23-ferratomic.md` are **mechanically checkable proofs** of
+- The Lean 4 theorems in the modular Ferratomic spec and `ferratomic-verify/lean/` are
+  **mechanically checkable proofs** of
   the same properties at the algebraic level (`DatomStore := Finset Datom`).
 - The proptest strategies and Kani harnesses are **empirical and bounded-model proofs** that
   the implementation matches the specification.
@@ -186,18 +189,30 @@ proptest (operational model), enforce it in the type system (compile-time model)
                          ferratomic-verify (dev-dependency only)
                         /           |              \
                        v            v               v
-ferratomic-datalog  <--  ferratomic-core  <--  ferratom
-     (facade)               (core)              (leaf)
+ferratomic-datalog  <--  ferratomic-core  <--  ferratom  <--  ferratom-clock
+     (facade)               (core)              (leaf)         (clock leaf)
 ```
 
 The dependency direction is strict and acyclic: leaf -> core -> facade -> binary.
 `ferratomic-verify` depends on all three but is a dev-dependency only -- it is never
 compiled into release binaries.
 
+### ferratom-clock (Bottom Leaf Crate)
+
+**Purpose**: Clock primitives with zero project-internal dependencies.
+
+**Contents**:
+- `HybridClock`
+- `TxId`
+- `AgentId`
+- `Frontier`
+
+**Dependencies**: External crates only.
+
 ### ferratom (Leaf Crate)
 
-**Purpose**: Primitive types with zero dependencies. No I/O. No allocation beyond type
-construction.
+**Purpose**: Primitive core datom/schema/value/wire types. No storage I/O. Minimal
+allocation beyond type construction.
 
 **Contents**:
 - `Datom` -- the five-tuple `[entity, attribute, value, tx, op]`
@@ -207,13 +222,15 @@ construction.
 - `Op` -- `Assert | Retract`
 - `Attribute` -- namespaced keyword (`:namespace/name`)
 
-**Dependencies**: Zero. Not even `serde`. Pure types that can be depended on by anything.
+**Dependencies**: `ferratom-clock` plus external crates (`blake3`, `ordered-float`,
+`serde`). `ferratom` remains the stable core-type surface consumed by the rest of the
+workspace.
 
-**Design rationale**: The leaf crate defines the language that all other crates speak. By
-having zero dependencies, it compiles in milliseconds and can be depended on by any crate
-in the workspace without pulling a dependency subgraph. The types are `Clone`, `Debug`,
-`Hash`, `Eq`, `Ord` -- the full complement needed for use in sorted containers and hash
-maps.
+**Design rationale**: The leaf crate defines the language that all other crates speak.
+Clock concerns now live one layer lower in `ferratom-clock`, allowing `ferratom` to stay
+small while preserving a stable re-export facade for the rest of the workspace. The types
+are `Clone`, `Debug`, `Hash`, `Eq`, `Ord` -- the full complement needed for use in sorted
+containers and hash maps.
 
 ### ferratomic-core (Core Crate)
 
@@ -221,23 +238,28 @@ maps.
 
 **Contents**:
 ```
-src/store.rs       -- Store struct, transact, merge, genesis
-src/index.rs       -- EAVT, AEVT, VAET, AVET, LIVE indexes
-src/wal.rs         -- Write-ahead log with fsync ordering
-src/snapshot.rs    -- Point-in-time snapshot materialization
-src/schema.rs      -- Schema-as-data validation
-src/merge.rs       -- CRDT merge (set union + cascade)
-src/observer.rs    -- DatomObserver trait + broadcast
-src/clock.rs       -- Hybrid Logical Clock implementation
-src/transport.rs   -- Transport trait (Local/Network)
-src/error.rs       -- FerraError enum
+src/db/                 -- Database typestate, transact path, recovery constructors
+src/store/              -- Store struct, apply/merge/query logic, genesis
+src/indexes.rs          -- EAVT, AEVT, VAET, AVET index ordering
+src/wal/                -- Write-ahead log with fsync ordering and replay
+src/checkpoint.rs       -- Durable checkpoint serialization
+src/checkpoint/         -- Checkpoint format helpers
+src/storage/            -- Data directory management and cold-start recovery
+src/merge.rs            -- CRDT merge facade
+src/observer.rs         -- DatomObserver trait + broadcast
+src/backpressure.rs     -- Write admission and saturation control
+src/topology.rs         -- Replica filtering and topology traits
+src/writer/             -- Transaction typestate builder
+src/schema_evolution.rs -- Genesis meta-schema and transact-time schema evolution
+src/transport.rs        -- Federation transport trait boundary
 ```
 
 **Dependencies**: `ferratom`, `blake3`, `serde`, `im` (persistent data structures),
 `arc-swap` (lock-free reads).
 
 **Design rationale**: The core crate is the engine. It owns the concurrency model (ArcSwap
-for reads, single writer actor for writes), the durability model (WAL with fsync ordering),
+for reads, `Mutex`-serialized single-writer commits in Phase 4a; actorized batching planned
+for Phase 4b), the durability model (WAL with fsync ordering),
 and the distribution model (CRDT merge via set union). Everything above it (query, CLI,
 daemon, application logic) depends on the guarantees this crate provides.
 
@@ -328,63 +350,32 @@ each reader performs a single atomic load, with no increment/decrement cycle. Th
 is that writers must construct a complete new snapshot before publishing, but this is
 amortized by group commit (below).
 
-### Single Writer Actor (asupersync mpsc Channel, Group Commit)
+### Serialized Writer in Phase 4a, Actor Writer in Phase 4b
 
-All write operations are serialized through a single writer actor that receives transactions
-via an `asupersync::channel::mpsc` channel. This eliminates write contention without locks.
-The two-phase reserve/commit pattern ensures cancel-safety: a caller reserves a slot
-(cancel-safe, nothing committed), then sends (infallible, committed).
+Phase 4a serializes writes through `Database::transact()`, which holds a mutex for the
+duration of WAL append, store application, epoch advance, and snapshot publication. This
+delivers write linearizability today without requiring a background runtime.
+
+Phase 4b upgrades that path to a dedicated writer actor fed by an
+`asupersync::channel::mpsc` channel. That future design preserves the single-writer
+invariant while enabling explicit group commit and structured batching.
 
 ```rust
-use asupersync::channel::mpsc;
-
-struct WriterActor {
-    rx: mpsc::Receiver<WriteRequest>,
-    store: Store,
-    wal: Wal,
-    epoch: u64,
-}
-
-struct WriteRequest {
-    tx: Transaction<Committed>,
-    reply: oneshot::Sender<TxReceipt>,
-}
-
-impl WriterActor {
-    async fn run(&mut self, cx: &Cx) {
-        while let Some(req) = self.rx.recv(cx).await {
-            cx.checkpoint().await;  // Cancel-aware checkpoint
-
-            // Collect batch: drain all pending writes
-            let mut batch = vec![req];
-            while let Ok(req) = self.rx.try_recv() {
-                batch.push(req);
-            }
-
-            // Group commit: one WAL fsync for the entire batch
-            for req in &batch {
-                self.epoch += 1;
-                self.wal.append(self.epoch, &req.tx);
-            }
-            self.wal.fsync();  // single fsync for N transactions
-
-            // Apply to in-memory store
-            for req in batch {
-                self.store.apply(req.tx);
-                let _ = req.reply.send(TxReceipt { epoch: self.epoch });
-            }
-
-            // Publish new snapshot (readers see the update)
-            self.publish_snapshot();
-        }
+impl Database<Ready> {
+    fn transact(&self, tx: Transaction<Committed>) -> Result<TxReceipt, FerraError> {
+        let _guard = self.write_lock.lock()?;
+        self.append_and_fsync_wal(&tx)?;
+        let receipt = self.apply_transaction(tx)?;
+        self.publish_snapshot();
+        Ok(receipt)
     }
 }
 ```
 
-**Group commit** amortizes the cost of `fsync()` across multiple transactions. If 10
-transactions arrive within the same batch window, they share a single fsync -- reducing
-the per-transaction durability cost by 10x. The FrankenSQLite paper (see section 17)
-demonstrates that this pattern achieves 90%+ of theoretical disk throughput.
+**Why single-writer**: The G-Set CRDT semantics make concurrent writes algebraically safe,
+but serialization is still required to assign a total order to epochs, maintain index
+bijection, and provide snapshot isolation. Phase 4a uses a mutex to enforce that property;
+the Phase 4b actor path preserves the same invariant while improving batching.
 
 ### Epoch-Based Snapshot Versioning
 
@@ -444,7 +435,7 @@ reference counting ensures old nodes are freed only when no reader references th
 | **PostgreSQL MVCC** | Shared-lock on tuple header | Row-level lock, WAL | Heap scan, VACUUM needed |
 | **Redis** | Single-threaded, blocking | Single-threaded, AOF/RDB | fork() COW |
 | **FrankenSQLite** | Page-level MVCC, lock-free | WAL with group commit | Page copy (~4KB granularity) |
-| **Ferratomic** | ArcSwap, wait-free | Single writer actor, group commit | im::OrdMap structural sharing |
+| **Ferratomic** | ArcSwap, wait-free | `Mutex`-serialized writes (4a), actor writer planned (4b) | im::OrdMap structural sharing |
 
 **Why CRDT makes this strictly simpler than all reference systems**: PostgreSQL needs MVCC
 tuple headers, visibility checks, and VACUUM to handle the possibility that concurrent writes
@@ -502,8 +493,9 @@ The group commit protocol ensures durability with minimal fsync overhead:
 
 ```
 Phase 1: COLLECT
-  - Writer drains all pending transactions from the mpsc channel
-  - Batch = [T1, T2, ..., Tn]
+  - Phase 4a: serialized writer takes the next transaction and executes the commit path
+  - Phase 4b target: writer actor drains pending transactions from the mpsc channel
+  - Batch = [T1, T2, ..., Tn] in the actorized form
 
 Phase 2: WAL WRITE
   - For each Ti in batch:
@@ -1071,7 +1063,7 @@ pub enum FerraError {
     InvalidPredecessor { tx_id: String },
 
     // --- Concurrency errors (transient, retryable) ---
-    /// Write lock contention (should not occur with single-writer actor).
+    /// Write lock contention on the serialized Phase 4a write path.
     WriteLockContention,
     /// Observer registration failed (duplicate name).
     DuplicateObserver { name: String },
@@ -1380,7 +1372,7 @@ Ferratomic inverts the traditional TDD cycle. Instead of Red-Green-Refactor:
 ```
 SPEC -> LEAN -> TESTS -> TYPES -> IMPLEMENTATION
 
-1. SPEC:  Write the invariant in spec/23-ferratomic.md (Level 0: algebraic law)
+1. SPEC:  Write the invariant in the canonical modular spec (`spec/*.md`) (Level 0: algebraic law)
 2. LEAN:  Prove the algebraic law holds for DatomStore := Finset Datom
 3. TESTS: Write proptest + Kani harnesses (Level 2: implementation contract)
 4. TYPES: Design the Rust types to make violations uncompilable
@@ -1583,8 +1575,8 @@ needed (but is not deleted -- C1 applies to all artifacts).
 
 ### INV-STORE to INV-FERR Mapping
 
-Every INV-STORE invariant from `spec/01-store.md` has a corresponding INV-FERR invariant in
-`spec/23-ferratomic.md` that refines it:
+Every historical INV-STORE invariant has a corresponding INV-FERR invariant in the canonical
+modular Ferratomic spec that refines it:
 
 | INV-STORE | INV-FERR | Relationship |
 |-----------|----------|-------------|
@@ -1615,7 +1607,7 @@ Every INV-STORE invariant from `spec/01-store.md` has a corresponding INV-FERR i
 - WAL with fsync ordering and group commit
 - Checkpoint with BLAKE3 integrity
 - ArcSwap snapshot isolation
-- Single writer actor with mpsc channel
+- `Mutex`-serialized single-writer commit path
 - Schema validation at transact boundary
 - Genesis bootstrap (19 meta-schema attributes)
 - DatomObserver trait + broadcast
@@ -1722,7 +1714,8 @@ only a new `IndexBackend` implementation.
 
 **Risk**: The team may lack Lean 4 expertise for writing and maintaining formal proofs.
 
-**Mitigation**: The Lean proofs in `spec/23-ferratomic.md` are deliberately simple --
+**Mitigation**: The Lean proofs in the modular Ferratomic spec and `ferratomic-verify/lean/`
+are deliberately simple --
 they use `Finset.union_comm`, `Finset.union_assoc`, `Finset.union_idempotent` from
 mathlib, which are standard library one-liners. The CRDT proofs reduce to set-theoretic
 properties that are already proven in mathlib. Custom proofs (snapshot stability, observer
@@ -1808,7 +1801,9 @@ advance) but with a simpler frame format (no page-level granularity needed becau
 model is datoms, not pages).
 
 **Group commit**: PostgreSQL batches multiple commits into a single fsync. Ferratomic's
-single writer actor naturally produces group commits by draining the mpsc channel.
+Phase 4a path already enforces WAL-before-visible ordering on a serialized writer, and the
+planned Phase 4b writer actor is where explicit queue draining and group commit become the
+steady-state implementation.
 
 **Buffer pool**: PostgreSQL's shared buffer pool mediates between disk and memory. Ferratomic
 replaces this with im::OrdMap persistent data structures, which provide the same benefit
@@ -1829,8 +1824,9 @@ achieves a weaker form of this via the `Transport` trait: the storage mechanism
 ### From Redis: Single-Writer, AOF/RDB, Pub/Sub
 
 **Single-writer**: Redis processes all writes in a single thread, eliminating write
-contention. Ferratomic's single writer actor follows the same principle but allows
-concurrent reads (Redis blocks reads during writes; Ferratomic does not).
+contention. Ferratomic's serialized write path follows the same principle while allowing
+concurrent reads (Redis blocks reads during writes; Ferratomic does not). Phase 4b moves
+that serialized path into an explicit writer actor.
 
 **AOF/RDB duality**: Redis offers two persistence modes: AOF (append-only file, similar to
 WAL) and RDB (point-in-time snapshot, similar to checkpoint). Ferratomic uses both: WAL for
@@ -1873,12 +1869,12 @@ the WAL is the recovery point. No partial state needs to be repaired.
 
 ### From Actor Model: Actors as Concurrency Unit, Mailbox, Location Transparency
 
-**Actors as concurrency unit**: The single writer actor owns the mutable store state. All
-communication is via messages (mpsc channel). No shared mutable state between the writer
-and readers.
+**Actors as concurrency unit**: This is the planned Phase 4b refinement. The writer actor
+will own the mutable store state and communicate via messages, preserving the same
+single-writer invariant that Phase 4a currently enforces with a mutex.
 
-**Mailbox**: The mpsc channel is the writer's mailbox. Messages (transactions) are processed
-in order. The actor processes one batch at a time, then publishes the result.
+**Mailbox**: In the actorized design, the mpsc channel is the writer's mailbox. Messages
+(transactions) are processed in order and published as a batch.
 
 **Location transparency**: The `Transport` trait provides location transparency -- the writer
 actor does not know whether its storage is local or remote. The same actor logic works in

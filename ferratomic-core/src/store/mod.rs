@@ -27,15 +27,23 @@
 //!
 //! - [`apply`] -- transaction application, WAL replay, merge construction.
 //! - [`checkpoint`] -- byte serialization convenience methods.
+//! - [`merge`] -- merge-specific reconstruction helpers.
+//! - [`query`] -- snapshot and LIVE-set query helpers.
 
 mod apply;
 mod checkpoint;
+mod merge;
+mod query;
+
+#[cfg(test)]
+mod tests;
 
 use std::collections::BTreeSet;
 
-use ferratom::{AgentId, Attribute, AttributeDef, Datom, EntityId, Op, Schema, Value};
+use ferratom::{AgentId, Attribute, AttributeDef, Datom, EntityId, Op, Schema, TxId, Value};
 use im::{OrdMap, OrdSet};
 
+pub use self::merge::SchemaConflict;
 use crate::indexes::Indexes;
 
 // ---------------------------------------------------------------------------
@@ -93,25 +101,6 @@ pub struct Snapshot {
     epoch: u64,
 }
 
-impl Snapshot {
-    /// Iterate over all datoms visible in this snapshot.
-    ///
-    /// INV-FERR-006: the iterator yields exactly the datoms that
-    /// were present when the snapshot was created -- no more, no fewer.
-    pub fn datoms(&self) -> impl Iterator<Item = &Datom> {
-        self.datoms.iter()
-    }
-
-    /// The epoch at which this snapshot was taken.
-    ///
-    /// INV-FERR-011: observer epochs derived from snapshots are
-    /// monotonically non-decreasing.
-    #[must_use]
-    pub fn epoch(&self) -> u64 {
-        self.epoch
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Store
 // ---------------------------------------------------------------------------
@@ -141,12 +130,20 @@ pub struct Store {
     /// The agent identity used for genesis transactions.
     /// Stored so callers can create transactions against this store.
     pub(crate) genesis_agent: AgentId,
-    /// INV-FERR-029/032: Incrementally maintained LIVE view.
+    /// INV-FERR-029: Incrementally maintained LIVE view.
     /// Maps (entity, attribute) → set of non-retracted values.
-    /// Card-one: `live_resolve` returns the LWW (highest-epoch) value.
-    /// Card-many: `live_resolve` returns all non-retracted values.
-    /// Updated O(k) per transaction, O(1) read.
     pub(crate) live_set: OrdMap<(EntityId, Attribute), OrdSet<Value>>,
+    /// INV-FERR-032: Per-value assertion epochs for surviving LIVE values.
+    /// Maps (entity, attribute) → value → latest assert `TxId` for that value.
+    ///
+    /// Retractions remove the value from this map. `live_resolve` consults the
+    /// map to choose the LWW survivor by `TxId` rather than `Value::Ord`.
+    pub(crate) live_txids: OrdMap<(EntityId, Attribute), OrdMap<Value, TxId>>,
+    /// INV-FERR-043: Deterministic schema conflicts discovered during merge.
+    ///
+    /// Non-merge construction paths leave this empty. `from_merge` populates it
+    /// so callers can diagnose schema drift without changing merge semantics.
+    pub(crate) schema_conflicts: Vec<SchemaConflict>,
 }
 
 impl Store {
@@ -163,7 +160,8 @@ impl Store {
     pub fn from_datoms(datoms: BTreeSet<Datom>) -> Self {
         let ord_set: OrdSet<Datom> = datoms.into_iter().collect();
         let indexes = Indexes::from_datoms(ord_set.iter());
-        let live_set = build_live_set(ord_set.iter());
+        let live_set = query::build_live_set(ord_set.iter());
+        let live_txids = query::build_live_txids(ord_set.iter());
         Self {
             datoms: ord_set,
             indexes,
@@ -171,6 +169,8 @@ impl Store {
             epoch: 0,
             genesis_agent: AgentId::from_bytes([0u8; 16]),
             live_set,
+            live_txids,
+            schema_conflicts: Vec::new(),
         }
     }
 
@@ -192,7 +192,8 @@ impl Store {
         }
         let ord_set: OrdSet<Datom> = datoms.into_iter().collect();
         let indexes = Indexes::from_datoms(ord_set.iter());
-        let live_set = build_live_set(ord_set.iter());
+        let live_set = query::build_live_set(ord_set.iter());
+        let live_txids = query::build_live_txids(ord_set.iter());
         Self {
             datoms: ord_set,
             indexes,
@@ -200,6 +201,8 @@ impl Store {
             epoch,
             genesis_agent,
             live_set,
+            live_txids,
+            schema_conflicts: Vec::new(),
         }
     }
 
@@ -218,6 +221,8 @@ impl Store {
             epoch: 0,
             genesis_agent: AgentId::from_bytes([0u8; 16]),
             live_set: OrdMap::new(),
+            live_txids: OrdMap::new(),
+            schema_conflicts: Vec::new(),
         }
     }
 
@@ -290,40 +295,30 @@ impl Store {
         self.epoch
     }
 
-    /// Resolve the LIVE value(s) for an entity-attribute pair.
+    /// Schema conflicts recorded during the most recent merge reconstruction.
     ///
-    /// INV-FERR-029: Returns the set of non-retracted values.
-    /// INV-FERR-032: For card-one attributes, the caller should take the
-    /// value with the highest `TxId` epoch (LWW). For card-many, all values
-    /// are current. This method returns the raw set; callers apply
-    /// cardinality resolution.
+    /// INV-FERR-043: conflicting attribute definitions are resolved
+    /// deterministically, but every conflict is also recorded here for
+    /// diagnostics. Non-merge stores return an empty slice.
     #[must_use]
-    pub fn live_values(&self, entity: EntityId, attribute: &Attribute) -> Option<&OrdSet<Value>> {
-        self.live_set.get(&(entity, attribute.clone()))
-    }
-
-    /// Resolve a single LIVE value for a card-one entity-attribute pair.
-    ///
-    /// INV-FERR-032: For cardinality-one, returns the latest (highest in
-    /// `OrdSet` iteration order) non-retracted value, or `None` if fully
-    /// retracted or never asserted.
-    #[must_use]
-    pub fn live_resolve(&self, entity: EntityId, attribute: &Attribute) -> Option<&Value> {
-        self.live_set
-            .get(&(entity, attribute.clone()))
-            .and_then(|vals| vals.get_max())
+    pub fn schema_conflicts(&self) -> &[SchemaConflict] {
+        &self.schema_conflicts
     }
 
     /// Update the LIVE set for a single datom (incremental maintenance).
     ///
-    /// INV-FERR-029: O(1) per datom. Assertions insert into the value set;
-    /// retractions remove from it. Empty sets are pruned.
+    /// INV-FERR-029/032: O(1) per datom. Assertions insert into the value set
+    /// and update the per-value `TxId`; retractions remove both. Empty
+    /// per-key maps are pruned.
     pub(crate) fn live_apply(&mut self, datom: &Datom) {
         let key = (datom.entity(), datom.attribute().clone());
         match datom.op() {
             Op::Assert => {
-                let vals = self.live_set.entry(key).or_default();
-                vals.insert(datom.value().clone());
+                let value = datom.value().clone();
+                let vals = self.live_set.entry(key.clone()).or_default();
+                vals.insert(value.clone());
+                let txids = self.live_txids.entry(key).or_default();
+                txids.insert(value, datom.tx());
             }
             Op::Retract => {
                 if let Some(vals) = self.live_set.get_mut(&key) {
@@ -332,51 +327,15 @@ impl Store {
                         self.live_set.remove(&key);
                     }
                 }
-            }
-        }
-    }
-
-    /// Take an immutable point-in-time snapshot of the store.
-    ///
-    /// INV-FERR-006: the returned snapshot is frozen. Subsequent
-    /// calls to `transact` or `insert` do not affect it.
-    #[must_use]
-    pub fn snapshot(&self) -> Snapshot {
-        // O(1) via im::OrdSet structural sharing (ADR-FERR-001).
-        // No Arc wrapper needed -- im::OrdSet clone shares the tree spine.
-        Snapshot {
-            datoms: self.datoms.clone(),
-            epoch: self.epoch,
-        }
-    }
-}
-
-/// Build a LIVE set from an iterator of datoms (full rebuild).
-///
-/// INV-FERR-029: Used during cold start, checkpoint load, and merge.
-/// Processes datoms in iteration order (EAVT by `Datom::Ord`).
-fn build_live_set<'a>(
-    datoms: impl Iterator<Item = &'a Datom>,
-) -> OrdMap<(EntityId, Attribute), OrdSet<Value>> {
-    let mut live: OrdMap<(EntityId, Attribute), OrdSet<Value>> = OrdMap::new();
-    for datom in datoms {
-        let key = (datom.entity(), datom.attribute().clone());
-        match datom.op() {
-            Op::Assert => {
-                let vals = live.entry(key).or_default();
-                vals.insert(datom.value().clone());
-            }
-            Op::Retract => {
-                if let Some(vals) = live.get_mut(&key) {
-                    vals.remove(datom.value());
-                    if vals.is_empty() {
-                        live.remove(&key);
+                if let Some(txids) = self.live_txids.get_mut(&key) {
+                    txids.remove(datom.value());
+                    if txids.is_empty() {
+                        self.live_txids.remove(&key);
                     }
                 }
             }
         }
     }
-    live
 }
 
 // ---------------------------------------------------------------------------
@@ -394,259 +353,3 @@ impl ferratom::traits::Semilattice for Store {
 // Note: ContentAddressed for Datom must be impl'd in ferratom crate
 // (orphan rule). See ferratom/src/datom.rs -- Datom::content_hash()
 // already provides the INV-FERR-012 contract.
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
-
-#[cfg(test)]
-mod tests {
-    use std::sync::Arc;
-
-    use ferratom::{Attribute, Cardinality, EntityId, Op, TxId, Value, ValueType};
-
-    use super::*;
-    use crate::schema_evolution::{parse_cardinality, parse_value_type};
-
-    /// Helper: build a sample datom for testing.
-    fn sample_datom(seed: &str) -> Datom {
-        Datom::new(
-            EntityId::from_content(seed.as_bytes()),
-            Attribute::from("test/name"),
-            Value::String(Arc::from(seed)),
-            TxId::new(1, 0, 0),
-            Op::Assert,
-        )
-    }
-
-    #[test]
-    fn test_from_datoms_preserves_set() {
-        let mut set = BTreeSet::new();
-        set.insert(sample_datom("a"));
-        set.insert(sample_datom("b"));
-
-        let store = Store::from_datoms(set.clone());
-        // Compare by converting BTreeSet to OrdSet for type compatibility.
-        let expected: im::OrdSet<Datom> = set.into_iter().collect();
-        assert_eq!(*store.datom_set(), expected);
-        assert_eq!(store.len(), 2);
-    }
-
-    #[test]
-    fn test_from_datoms_empty() {
-        let store = Store::from_datoms(BTreeSet::new());
-        assert!(store.is_empty());
-        assert_eq!(store.len(), 0);
-    }
-
-    #[test]
-    fn test_inv_ferr_031_genesis_determinism() {
-        let a = Store::genesis();
-        let b = Store::genesis();
-        assert_eq!(
-            a.schema(),
-            b.schema(),
-            "INV-FERR-031: genesis() must produce identical schemas"
-        );
-        assert_eq!(a.datom_set(), b.datom_set());
-        assert_eq!(a.epoch(), b.epoch());
-    }
-
-    #[test]
-    #[allow(clippy::too_many_lines)]
-    fn test_inv_ferr_031_genesis_schema_has_19_attributes() {
-        let store = Store::genesis();
-        assert_eq!(
-            store.schema().len(),
-            19,
-            "INV-FERR-031: genesis schema must have exactly 19 axiomatic attributes"
-        );
-        // Core meta-schema (1-9)
-        assert!(store.schema().get(&Attribute::from("db/ident")).is_some());
-        assert!(store
-            .schema()
-            .get(&Attribute::from("db/valueType"))
-            .is_some());
-        assert!(store
-            .schema()
-            .get(&Attribute::from("db/cardinality"))
-            .is_some());
-        assert!(store.schema().get(&Attribute::from("db/doc")).is_some());
-        assert!(store.schema().get(&Attribute::from("db/unique")).is_some());
-        assert!(store
-            .schema()
-            .get(&Attribute::from("db/isComponent"))
-            .is_some());
-        assert!(store
-            .schema()
-            .get(&Attribute::from("db/resolutionMode"))
-            .is_some());
-        assert!(store
-            .schema()
-            .get(&Attribute::from("db/latticeOrder"))
-            .is_some());
-        assert!(store
-            .schema()
-            .get(&Attribute::from("db/lwwClock"))
-            .is_some());
-        // Lattice (10-14)
-        assert!(store
-            .schema()
-            .get(&Attribute::from("lattice/ident"))
-            .is_some());
-        assert!(store
-            .schema()
-            .get(&Attribute::from("lattice/elements"))
-            .is_some());
-        assert!(store
-            .schema()
-            .get(&Attribute::from("lattice/comparator"))
-            .is_some());
-        assert!(store
-            .schema()
-            .get(&Attribute::from("lattice/bottom"))
-            .is_some());
-        assert!(store
-            .schema()
-            .get(&Attribute::from("lattice/top"))
-            .is_some());
-        // Transaction metadata (15-19)
-        assert!(store.schema().get(&Attribute::from("tx/time")).is_some());
-        assert!(store.schema().get(&Attribute::from("tx/agent")).is_some());
-        assert!(store
-            .schema()
-            .get(&Attribute::from("tx/provenance"))
-            .is_some());
-        assert!(store
-            .schema()
-            .get(&Attribute::from("tx/rationale"))
-            .is_some());
-        assert!(store
-            .schema()
-            .get(&Attribute::from("tx/coherence-override"))
-            .is_some());
-    }
-
-    #[test]
-    fn test_inv_ferr_005_index_bijection_from_datoms() {
-        let mut set = BTreeSet::new();
-        set.insert(sample_datom("x"));
-        set.insert(sample_datom("y"));
-        set.insert(sample_datom("z"));
-
-        let store = Store::from_datoms(set);
-        let primary: BTreeSet<&Datom> = store.datoms().collect();
-        let eavt: BTreeSet<&Datom> = store.indexes().eavt_datoms().collect();
-        let aevt: BTreeSet<&Datom> = store.indexes().aevt_datoms().collect();
-        let vaet: BTreeSet<&Datom> = store.indexes().vaet_datoms().collect();
-        let avet: BTreeSet<&Datom> = store.indexes().avet_datoms().collect();
-
-        assert_eq!(primary, eavt, "INV-FERR-005: EAVT must match primary");
-        assert_eq!(primary, aevt, "INV-FERR-005: AEVT must match primary");
-        assert_eq!(primary, vaet, "INV-FERR-005: VAET must match primary");
-        assert_eq!(primary, avet, "INV-FERR-005: AVET must match primary");
-    }
-
-    #[test]
-    fn test_genesis_is_empty_of_datoms() {
-        let store = Store::genesis();
-        assert!(store.is_empty(), "genesis store must have zero datoms");
-    }
-
-    #[test]
-    fn test_snapshot_is_frozen() {
-        let mut store = Store::from_datoms(BTreeSet::new());
-        store.insert(&sample_datom("before"));
-
-        let snap = store.snapshot();
-        let snap_set_before: BTreeSet<&Datom> = snap.datoms().collect();
-
-        store.insert(&sample_datom("after"));
-
-        // bd-3bg regression: compare datom SETS, not counts.
-        let snap_set_after: BTreeSet<&Datom> = snap.datoms().collect();
-        assert_eq!(
-            snap_set_before, snap_set_after,
-            "INV-FERR-006: snapshot datom set must not change after later inserts"
-        );
-        assert_eq!(
-            snap_set_before.len(),
-            1,
-            "snapshot should have exactly 1 datom"
-        );
-    }
-
-    #[test]
-    fn test_parse_value_type_all_variants() {
-        assert_eq!(
-            parse_value_type("db.type/keyword"),
-            Some(ValueType::Keyword)
-        );
-        assert_eq!(parse_value_type("db.type/string"), Some(ValueType::String));
-        assert_eq!(parse_value_type("db.type/long"), Some(ValueType::Long));
-        assert_eq!(parse_value_type("db.type/double"), Some(ValueType::Double));
-        assert_eq!(
-            parse_value_type("db.type/boolean"),
-            Some(ValueType::Boolean)
-        );
-        assert_eq!(
-            parse_value_type("db.type/instant"),
-            Some(ValueType::Instant)
-        );
-        assert_eq!(parse_value_type("db.type/uuid"), Some(ValueType::Uuid));
-        assert_eq!(parse_value_type("db.type/bytes"), Some(ValueType::Bytes));
-        assert_eq!(parse_value_type("db.type/ref"), Some(ValueType::Ref));
-        assert_eq!(parse_value_type("db.type/bigint"), Some(ValueType::BigInt));
-        assert_eq!(parse_value_type("db.type/bigdec"), Some(ValueType::BigDec));
-        assert_eq!(parse_value_type("db.type/unknown"), None);
-    }
-
-    #[test]
-    fn test_parse_cardinality_variants() {
-        assert_eq!(
-            parse_cardinality("db.cardinality/one"),
-            Some(Cardinality::One)
-        );
-        assert_eq!(
-            parse_cardinality("db.cardinality/many"),
-            Some(Cardinality::Many)
-        );
-        assert_eq!(parse_cardinality("db.cardinality/unknown"), None);
-    }
-
-    /// bd-20j: Semilattice trait is usable via generic bounds.
-    #[test]
-    fn test_semilattice_trait_bound() {
-        use ferratom::traits::Semilattice;
-
-        fn requires_semilattice<T: Semilattice>(a: &T, b: &T) -> Result<T, ferratom::FerraError> {
-            a.merge(b)
-        }
-
-        let a = Store::genesis();
-        let b = Store::genesis();
-        let merged = requires_semilattice(&a, &b).expect("merge should succeed");
-        assert_eq!(
-            merged.epoch(),
-            0,
-            "bd-20j: Semilattice merge of genesis stores"
-        );
-    }
-
-    /// bd-20j: `ContentAddressed` trait is usable via generic bounds.
-    #[test]
-    fn test_content_addressed_trait_bound() {
-        use ferratom::traits::ContentAddressed;
-
-        fn requires_content_addressed<T: ContentAddressed>(x: &T) -> [u8; 32] {
-            x.content_hash()
-        }
-
-        let datom = sample_datom("trait-test");
-        let hash = requires_content_addressed(&datom);
-        assert_ne!(
-            hash, [0u8; 32],
-            "bd-20j: ContentAddressed must produce non-zero hash"
-        );
-    }
-}

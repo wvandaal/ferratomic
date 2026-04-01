@@ -34,7 +34,7 @@ enables INV-FERR-006 and INV-FERR-027 without any locking on the read path.
 and `std::BTreeSet`. All index structures use `im-rs`. Snapshot creation is
 `store.clone()` which takes O(1) time. Writers pay a ~50% throughput penalty.
 
-**Source**: SEED.md §4 Axiom 3 (Snapshots), ADR-STORE-003
+**Source**: SEED.md §4 Axiom 3 (Snapshots), INV-FERR-006, INV-FERR-027
 
 ---
 
@@ -132,7 +132,7 @@ is deallocated.
 to atomically update. Old snapshots are reference-counted and deallocated when no longer
 referenced.
 
-**Source**: INV-FERR-006, INV-FERR-027, ADR-STORE-006
+**Source**: INV-FERR-006, INV-FERR-027, ADR-FERR-001
 
 **Phase 4a Amendment: Write Serialization via Mutex**
 
@@ -173,7 +173,8 @@ The upgrade path is:
 
 ### ADR-FERR-004: Observer Delivery Semantics
 
-**Traces to**: INV-FERR-003 (Merge Idempotency), INV-FERR-010 (Merge Convergence), ADRS PD-004
+**Traces to**: INV-FERR-003 (Merge Idempotency), INV-FERR-010 (Merge Convergence),
+INV-FERR-022 (Anti-Entropy Convergence)
 **Stage**: 0
 
 **Problem**: When a store publishes events to observers (e.g., after a successful transact),
@@ -187,27 +188,31 @@ what delivery guarantees should be provided?
 | B: Exactly-once | Each event delivered exactly once, even across crashes. | Clean semantics. No duplicate handling needed. | Requires distributed consensus or transactional outbox. Significant complexity. |
 | C: Best-effort | Events may be lost. No delivery guarantee. | Simplest implementation. Zero overhead. | Observers can miss events. Data inconsistency. |
 
-**Decision**: **Option A: At-least-once**
+**Decision**: **Option C: Best-effort delivery with anti-entropy fallback**
 
-At-least-once delivery aligns with the CRDT semantics of the store. Since merge is
-idempotent (INV-FERR-003), receiving the same datoms twice is harmless — the second
-delivery is a no-op. This makes observer delivery crash-safe without complex distributed
-consensus: if a delivery fails, retry. If the retry delivers a duplicate, idempotency
-absorbs it.
+Observer delivery is a post-commit notification channel, not part of the commit protocol.
+Once WAL fsync completes (INV-FERR-008), the transaction is already durable and visible.
+Delivery failures therefore must not propagate back into `transact()`. The correct
+semantics are best-effort push delivery plus anti-entropy repair (INV-FERR-022) as the
+convergence mechanism.
+
+CRDT idempotency (INV-FERR-003) still matters: if a subscriber receives the same datoms
+twice through retry, replay, or anti-entropy, the duplicate is harmless. But the write
+path itself does not synchronously retry observer delivery and does not block on it.
 
 **Rejected**:
 - Option B: Exactly-once requires either distributed consensus (Paxos/Raft) or a
   transactional outbox with deduplication. Both add significant complexity and latency.
   Since the underlying data model is CRDT (idempotent merge), exactly-once provides
   no additional correctness benefit.
-- Option C: Best-effort delivery means observers can miss events permanently. This
-  would require a separate synchronization mechanism (e.g., periodic full-state
-  reconciliation), which is more expensive than at-least-once retry.
+- Option A: Synchronous at-least-once retry couples observer failures to the write path.
+  This creates the committed-but-reported-as-failed bug identified in the cleanroom audit.
+  Convergence is better handled by anti-entropy than by blocking `transact()` on retries.
 
-**Consequence**: Observer delivery uses a simple retry loop with exponential backoff.
-Observers must be idempotent (which they are, since they process datoms via merge).
-The anti-entropy protocol (INV-FERR-022) serves as a fallback: even if observer delivery
-fails permanently, anti-entropy eventually synchronizes all nodes.
+**Consequence**: Observer delivery is best-effort and advisory-only. Failures are logged
+or surfaced as diagnostics, but the caller still receives `Ok(TxReceipt)` for a committed
+transaction. Observers must be idempotent, and anti-entropy (INV-FERR-022) serves as the
+authoritative convergence path when push delivery is missed.
 
 **Phase 4a Amendment: Advisory-Only Error Propagation**
 
@@ -228,7 +233,8 @@ with anti-entropy as the convergence guarantee. No synchronous retry loop blocks
 writer. Observer implementations that require guaranteed delivery should poll via
 anti-entropy rather than relying on push delivery.
 
-**Source**: INV-FERR-003, INV-FERR-010, PD-004, Cleanroom Audit HI-004
+**Source**: INV-FERR-003, INV-FERR-010, INV-FERR-022,
+docs/reviews/2026-03-31-cleanroom-audit-phase4a.md (HI-004 / DEFECT-P2-006)
 
 ---
 
@@ -269,7 +275,7 @@ local event (tick) and on every message receipt (receive). Epoch ordering in the
 is derived from HLC values. Time-range queries use the physical component. Causal
 ordering uses the full HLC.
 
-**Source**: INV-FERR-015, INV-FERR-016, SR-004
+**Source**: INV-FERR-015, INV-FERR-016, ADR-FERR-005
 
 ---
 
@@ -434,7 +440,8 @@ inlines and erases the conversion. Benchmarks show no regression.
 - Option B: Creates a viral type parameter problem. Every function signature must choose
   between `EntityId` and `TrustedEntityId`, and the boundary is never fully enforced.
 
-**Source**: Cleanroom Audit 2026-03-31 (Section 14: Architecture C), DEFECT-P3-001, DEFECT-P3-002
+**Source**: docs/reviews/2026-03-31-cleanroom-audit-phase4a.md
+(Section 14: Architecture C; DEFECT-P3-001, DEFECT-P3-002)
 
 ---
 
@@ -442,7 +449,7 @@ inlines and erases the conversion. Benchmarks show no regression.
 
 ### NEG-FERR-001: No Panics in Production Code
 
-**Traces to**: INV-FERR-019 (Error Exhaustiveness), ADRS FD-001
+**Traces to**: INV-FERR-019 (Error Exhaustiveness), SEED.md §4
 **Stage**: 0
 
 **Statement**: No Ferratomic crate uses `unwrap()`, `expect()`, `panic!()`,
@@ -1306,4 +1313,3 @@ The following metrics and alerts support partition tolerance in production:
 | Convergence failure | Two nodes with same update set have different Merkle roots | **Critical**: indicates CRDT invariant violation (INV-FERR-001 through INV-FERR-003). Halt and investigate. |
 
 ---
-

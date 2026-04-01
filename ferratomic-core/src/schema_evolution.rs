@@ -232,31 +232,33 @@ fn extract_attribute_def(
             }
             ident = Some(kw);
         } else if attr == db_value_type {
-            if let Some(vt) = parse_value_type(kw) {
-                if let Some(ref prev) = vtype {
-                    if *prev != vt {
-                        return Err(schema_violation(
-                            "db/valueType",
-                            &format!("{prev:?}"),
-                            &format!("{vt:?}"),
-                        ));
-                    }
+            let vt = parse_value_type(kw).ok_or_else(|| {
+                schema_violation("db/valueType", "recognized db.type/* keyword", kw)
+            })?;
+            if let Some(ref prev) = vtype {
+                if *prev != vt {
+                    return Err(schema_violation(
+                        "db/valueType",
+                        &format!("{prev:?}"),
+                        &format!("{vt:?}"),
+                    ));
                 }
-                vtype = Some(vt);
             }
+            vtype = Some(vt);
         } else if attr == db_cardinality {
-            if let Some(c) = parse_cardinality(kw) {
-                if let Some(ref prev) = card {
-                    if *prev != c {
-                        return Err(schema_violation(
-                            "db/cardinality",
-                            &format!("{prev:?}"),
-                            &format!("{c:?}"),
-                        ));
-                    }
+            let c = parse_cardinality(kw).ok_or_else(|| {
+                schema_violation("db/cardinality", "recognized db.cardinality/* keyword", kw)
+            })?;
+            if let Some(ref prev) = card {
+                if *prev != c {
+                    return Err(schema_violation(
+                        "db/cardinality",
+                        &format!("{prev:?}"),
+                        &format!("{c:?}"),
+                    ));
                 }
-                card = Some(c);
             }
+            card = Some(c);
         }
     }
 
@@ -284,7 +286,8 @@ fn schema_violation(field: &str, expected: &str, got: &str) -> FerraError {
 /// `db/valueType` keyword into the typed `ValueType` enum that
 /// governs transact-time validation.
 ///
-/// Returns `None` for unrecognized type keywords.
+/// Returns `None` for unrecognized type keywords; callers decide whether to
+/// treat that as absence or a schema violation.
 #[must_use]
 pub(crate) fn parse_value_type(keyword: &str) -> Option<ValueType> {
     match keyword {
@@ -309,7 +312,8 @@ pub(crate) fn parse_value_type(keyword: &str) -> Option<ValueType> {
 /// `db/cardinality` keyword. Cardinality governs whether an
 /// entity-attribute pair holds one value or many.
 ///
-/// Returns `None` for unrecognized cardinality keywords.
+/// Returns `None` for unrecognized cardinality keywords; callers decide whether
+/// to treat that as absence or a schema violation.
 #[must_use]
 pub(crate) fn parse_cardinality(keyword: &str) -> Option<Cardinality> {
     match keyword {

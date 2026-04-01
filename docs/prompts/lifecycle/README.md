@@ -21,10 +21,14 @@ Optimized prompts for driving every phase of ferratomic development with AI agen
 | 13 | [Progress Review](13-progress-review.md) | Any | Varies | Holistic project assessment with scored vectors |
 | 14 | [Bead Audit](14-bead-audit.md) | Any | Varies | Audit and harden all open beads to lab-grade |
 | 15 | [Prompt Forge](15-prompt-forge.md) | Any | Varies | Design new lifecycle prompts from first principles |
+| 16 | [Spec Authoring](16-spec-authoring.md) | 0 | High→Low | Writing new INV-FERR, ADR-FERR, NEG-FERR, spec sections |
+| 17 | [Spec Audit](17-spec-audit.md) | Any | High→Low | Audit and harden spec sections to lab-grade |
 
 ## Usage Pattern
 
 ```
+New phase → 16-spec-authoring.md (formalize) → 17-spec-audit.md (verify)
+  ↓
 Session start → 01-session-init.md
   ↓
 Phase work → 02/03/04/05 (depending on current phase)

@@ -2,7 +2,8 @@
 
 ### INV-FERR-025: Index Backend Interchangeability
 
-**Traces to**: C8 (Substrate Independence), ADRS SR-001, SR-002
+**Traces to**: C8 (Substrate Independence), INV-FERR-005 (Index Bijection),
+ADR-FERR-001 (Persistent Data Structures)
 **Verification**: `V:TYPE`, `V:PROP`
 **Stage**: 0
 
@@ -25,6 +26,15 @@ sequence of operations. They differ only in performance characteristics
 
 Store<B: IndexBackend> is parameterized by the index backend.
 Switching backends does not change correctness — only performance.
+
+Proof sketch: Let `index_view(S, key)` be the extensional mapping from an index
+key to the set of datoms in store `S` that satisfy that key. Any correct backend
+implementation must realize exactly `index_view(S, key)` for every lookup and
+range query, and it must maintain one index entry per datom (INV-FERR-005). If
+two backends `B₁` and `B₂` both satisfy that contract, then every observable
+query result is equal by set extensionality. The remaining differences are
+strictly operational: insertion cost, range-scan cost, cache locality, and
+memory overhead.
 ```
 
 #### Level 1 (State Invariant)
@@ -126,24 +136,28 @@ proptest! {
 
 **Lean theorem**:
 ```lean
-/-- Index backend interchangeability: the mathematical model of indexes
-    is a function from keys to sets of datoms. Any implementation of this
-    function produces the same results. -/
-
-def index_model (s : DatomStore) (key : Nat) : DatomStore :=
+/-- Extensional index view for attribute-key lookups. -/
+def index_view (s : DatomStore) (key : Nat) : DatomStore :=
   s.filter (fun d => d.a = key)
 
--- The index model is deterministic: same store + same key = same result.
--- Any implementation that matches this model is interchangeable.
-theorem index_deterministic (s : DatomStore) (key : Nat) :
-    index_model s key = index_model s key := by rfl
+/-- Any two backend models that realize the same extensional index view of a
+    store are observationally interchangeable for that key. -/
+theorem index_backend_interchangeable
+    (s : DatomStore)
+    (b1 b2 : Nat → DatomStore)
+    (h1 : ∀ key, b1 key = index_view s key)
+    (h2 : ∀ key, b2 key = index_view s key)
+    (key : Nat) :
+    b1 key = b2 key := by
+  rw [h1 key, h2 key]
 ```
 
 ---
 
 ### INV-FERR-026: Write Amplification Bound
 
-**Traces to**: SEED.md §10, ADRS SR-001
+**Traces to**: SEED.md §10, INV-FERR-008 (WAL Fsync Ordering),
+INV-FERR-013 (Checkpoint Equivalence)
 **Verification**: `V:PROP`
 **Stage**: 0
 
@@ -283,7 +297,8 @@ theorem write_amplification_model (s : DatomStore) (d : Datom) (h : d ∉ s) :
 
 ### INV-FERR-027: Read P99.99 Latency
 
-**Traces to**: SEED.md §10, ADRS SR-001, SR-002
+**Traces to**: SEED.md §10, INV-FERR-006 (Snapshot Isolation),
+ADR-FERR-001 (Persistent Data Structures), ADR-FERR-003 (Concurrency Model)
 **Verification**: `V:PROP`
 **Stage**: 0
 
@@ -1393,4 +1408,3 @@ theorem live_correct_retract (datoms : Finset Datom) (e a v tx_a tx_r : Nat)
 ```
 
 ---
-

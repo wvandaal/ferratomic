@@ -46,7 +46,7 @@ algebraic properties using `BTreeSet`. Implementation uses `im::OrdSet`/`im::Ord
 
 The canonical specification lives in `spec/` in THIS repository.
 
-- **Formal spec**: `spec/` (55 INV, 10 ADR, 5 NEG) — modular files, see `spec/README.md`
+- **Formal spec**: `spec/` (59 INV, 14 ADR, 6 NEG, 2 CI-FERR) — canonical modular files, see `spec/README.md`
 - **Architecture**: `docs/design/FERRATOMIC_ARCHITECTURE.md`
 - **Design decisions**: `docs/design/`
 
@@ -56,13 +56,14 @@ The canonical specification lives in `spec/` in THIS repository.
 
 ```
 ferratomic/
-├── ferratom/           # Leaf: core types (ZERO project deps)
+├── ferratom-clock/     # Leaf: HLC clock types (ZERO project deps, ADR-FERR-015)
+├── ferratom/           # Leaf: core types (depends on ferratom-clock only)
 ├── ferratomic-core/    # Core: storage + concurrency engine
 ├── ferratomic-datalog/ # Facade: query engine
 └── ferratomic-verify/  # Verification: Lean 4 + Stateright + Kani + proptest
 ```
 
-Dependency direction: leaf → core → facade. No cycles.
+Dependency direction: clock → leaf → core → facade. No cycles.
 
 ---
 
@@ -79,6 +80,7 @@ Dependency direction: leaf → core → facade. No cycles.
 - **Max 5 parameters.** More → introduce a config/params struct.
 
 ### Crate-level
+- **ferratom-clock**: < 1,000 LOC (HLC, TxId, AgentId, Frontier — extracted ADR-FERR-015)
 - **ferratom**: < 2,000 LOC (pure types, should be small)
 - **ferratomic-core**: < 10,000 LOC. If approaching, split into sub-crates.
 - **ferratomic-datalog**: < 5,000 LOC.
@@ -165,10 +167,13 @@ too-many-lines-threshold = 50
 ### Dependency Discipline
 
 - **Minimal dependencies.** Every dependency is a liability. Justify each one.
-- **ferratom has ZERO project-internal dependencies.** It depends only on blake3,
-  ordered-float, serde. Adding a dependency to ferratom requires an ADR.
-- **No transitive dependency on tokio from ferratom.** The leaf crate must be
-  runtime-agnostic. Only ferratomic-core may depend on async runtime.
+- **ferratom-clock has ZERO project-internal dependencies.** It is the bottom leaf:
+  HLC, TxId, AgentId, Frontier, plus external crates only.
+- **ferratom may depend only on ferratom-clock plus external crates.** Additional
+  project-internal dependencies require an ADR because `ferratom` remains the
+  stable core-type surface for the rest of the workspace.
+- **No transitive dependency on tokio from ferratom-clock or ferratom.** The leaf
+  layers must remain runtime-agnostic. Only ferratomic-core may depend on async runtime.
 - **Pin major versions.** `im = "15"` not `im = "*"`. Reproducible builds.
 - **Audit new dependencies.** Check for `unsafe`, check maintenance status,
   check license compatibility.

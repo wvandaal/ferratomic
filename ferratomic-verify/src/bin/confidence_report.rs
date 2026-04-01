@@ -62,9 +62,21 @@ struct InvReport {
 }
 
 fn build_report(inv: &Invariant, proptest_cases: usize) -> InvReport {
-    let lean = if inv.lean_theorem.is_some() { "proven" } else { "-" };
-    let kani = if inv.kani_harness.is_some() { "verified" } else { "-" };
-    let stateright = if inv.stateright_model.is_some() { "checked" } else { "-" };
+    let lean = if inv.lean_theorem.is_some() {
+        "proven"
+    } else {
+        "-"
+    };
+    let kani = if inv.kani_harness.is_some() {
+        "verified"
+    } else {
+        "-"
+    };
+    let stateright = if inv.stateright_model.is_some() {
+        "checked"
+    } else {
+        "-"
+    };
 
     let (proptest_conf, gate) = if inv.proptest_fn.is_some() {
         let (lower, _) = compute_beta_posterior(proptest_cases, 0, 1.0, 1.0);

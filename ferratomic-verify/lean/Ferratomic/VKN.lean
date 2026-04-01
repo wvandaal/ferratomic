@@ -226,7 +226,7 @@ theorem vkc_authentic (vkc : VKC) (root : CryptoHash)
     vkc.calibration_root = root := by
   unfold verify_vkc at h
   simp [Bool.and_eq_true, decide_eq_true_eq] at h
-  exact h
+  exact ⟨h.1.1, h.1.2, h.2⟩
 
 /-- VKC independent verification: two VKCs can be verified in parallel
     with no shared state beyond their respective expected roots. -/
@@ -245,4 +245,4 @@ theorem vkc_create_verify (sk : SigningKey) (msg root : CryptoHash) :
                , context_root := root
                , calibration_root := root } root = true := by
   unfold verify_vkc
-  simp [signed_verify_roundtrip, decide_eq_true_eq]
+  simp [signed_verify_roundtrip]

@@ -122,6 +122,7 @@ impl Store {
         for datom in &all_datoms {
             self.datoms.insert(datom.clone());
             self.indexes.insert(datom);
+            self.live_apply(datom);
         }
 
         Ok(TxReceipt {

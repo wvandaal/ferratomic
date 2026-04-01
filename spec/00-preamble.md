@@ -10,13 +10,29 @@ This specification traces to two foundational documents that live outside this r
   §4 (Core Abstraction: Datoms, identity, snapshots, schema-as-data), §5 (Harvest/Seed
   Lifecycle: durability, recovery), §10 (The Bootstrap: self-hosting, genesis).
 
-- **01-store.md** (STORE namespace) — The algebraic datom store specification defining the
-  five lattice laws preserved verbatim in FERR:
+- **Historical STORE algebra** — the precursor STORE namespace defined the five lattice
+  laws preserved verbatim in Ferratomic. In this repository, that algebra now lives across
+  [01-core-invariants.md](01-core-invariants.md), [02-concurrency.md](02-concurrency.md),
+  and [03-performance.md](03-performance.md):
   - **L1**: Merge commutativity (`merge(A, B) = merge(B, A)`)
   - **L2**: Merge associativity (`merge(merge(A, B), C) = merge(A, merge(B, C))`)
   - **L3**: Merge idempotency (`merge(A, A) = A`)
   - **L4**: Monotonic growth (`S ⊆ apply(S, d)`)
   - **L5**: Strict growth for transactions (`|transact(S, T)| > |S|`)
+
+### Traceability Conventions
+
+Canonical trace targets in this repository are:
+- `SEED.md §N` for external design axioms
+- `INV-STORE-*` and `L1`..`L5` for historical STORE algebra
+- `INV-FERR-*`, `ADR-FERR-*`, `NEG-FERR-*`, and `CI-FERR-*` for current Ferratomic elements
+
+`Source` blocks may also cite local review artifacts and bead records, but they must do
+so by explicit artifact name or file path, for example
+`docs/reviews/2026-03-31-cleanroom-audit-phase4a.md (HI-004)`.
+
+Deprecated shorthand such as `SR-*`, `PD-*`, `FD-*`, `AS-*`, `ADR-STORE-*`, and
+`ADR-FOUNDATION-*` is not canonical and must not appear in edited spec content.
 
 ### Constraints
 
@@ -43,8 +59,10 @@ Referenced as `C1`, `C2`, etc. throughout the spec:
 ### 23.0.1 Overview
 
 Ferratomic is the embedded datom database engine that reifies the algebraic store `(P(D), ∪)`
-specified in [01-store.md](01-store.md) as a production-grade storage system. Where `01-store.md`
-defines the mathematical object — the G-Set CvRDT, the five lattice laws, the transaction
+specified across [01-core-invariants.md](01-core-invariants.md),
+[02-concurrency.md](02-concurrency.md), and [03-performance.md](03-performance.md) as a
+production-grade storage system. Where those modules define the mathematical object — the
+G-Set CvRDT, the five lattice laws, the transaction
 algebra — Ferratomic specifies the **engineering substrate** that makes those laws hold under
 real-world conditions: concurrent writers, crash recovery, disk corruption, memory pressure,
 and multi-process access.
@@ -91,43 +109,67 @@ SEED.md 10 (The Bootstrap)
 
 ```
 ferratomic/                          -- workspace root
-├── ferratom/                        -- Primitive types: Datom, EntityId, TxId, Value, Op
-│   └── src/lib.rs                   -- Zero dependencies. No I/O. No allocation.
-├── ferratomic-core/                 -- Storage engine: Store, indexes, WAL, snapshots, merge
-│   ├── src/store.rs                 -- Store struct, transact, merge, genesis
-│   ├── src/index.rs                 -- EAVT, AEVT, VAET, AVET, LIVE indexes
-│   ├── src/wal.rs                   -- Write-ahead log with fsync ordering
-│   ├── src/snapshot.rs              -- Point-in-time snapshot materialization
-│   ├── src/schema.rs                -- Schema-as-data validation
-│   └── src/merge.rs                 -- CRDT merge (set union + cascade)
+├── ferratom-clock/                  -- HLC, TxId, AgentId, Frontier
+│   └── src/lib.rs                   -- Zero project-internal dependencies
+├── ferratom/                        -- Primitive datom/schema/value/wire types
+│   ├── src/lib.rs                   -- Re-export facade for clock/datom/schema types
+│   ├── src/clock/                   -- Clock re-exports and leaf integration
+│   ├── src/datom/                   -- Datom, EntityId, Value, Op
+│   ├── src/error.rs                 -- Typed FerraError surface
+│   ├── src/schema.rs                -- Schema and AttributeDef
+│   ├── src/traits.rs                -- Shared trait boundaries
+│   └── src/wire.rs                  -- Wire/core trust boundary
+├── ferratomic-core/                 -- Storage engine: Store, WAL, recovery, observers
+│   ├── src/lib.rs                   -- Public module surface
+│   ├── src/db/                      -- Database, transact path, recovery constructors
+│   ├── src/store/                   -- Store struct, apply/merge/query logic
+│   ├── src/storage/                 -- Backend abstraction + cold start cascade
+│   ├── src/wal/                     -- Write-ahead log with fsync ordering
+│   ├── src/writer/                  -- Transaction builder + validation
+│   ├── src/anti_entropy.rs          -- Anti-entropy trait boundary
+│   ├── src/backpressure.rs          -- Write limiter
+│   ├── src/checkpoint.rs            -- Durable snapshot format
+│   ├── src/indexes.rs               -- Secondary index key types
+│   ├── src/merge.rs                 -- CRDT merge facade
+│   ├── src/observer.rs              -- Observer trait
+│   ├── src/schema_evolution.rs      -- Genesis/schema evolution helpers
+│   ├── src/snapshot.rs              -- Snapshot types
+│   ├── src/topology.rs              -- Replica filter/topology surface
+│   └── src/transport.rs             -- Federation transport boundary
 ├── ferratomic-datalog/              -- Query engine: Datalog dialect, semi-naive evaluation
 │   ├── src/parser.rs                -- EDN-based Datalog parser
 │   ├── src/planner.rs               -- Query plan generation with stratum classification
-│   └── src/eval.rs                  -- Semi-naive evaluation with CALM compliance
+│   └── src/evaluator.rs             -- Semi-naive evaluation with CALM compliance
 └── ferratomic-verify/               -- Verification harnesses: proptest, kani, stateright
-    ├── src/proptest_strategies.rs    -- Arbitrary instances for all core types
-    ├── src/kani_harnesses.rs         -- Bounded model checking proofs
-    └── src/stateright_models.rs      -- Protocol model checking (multi-node CRDT)
+    ├── src/generators.rs            -- Arbitrary instances for core types
+    ├── kani/                        -- Bounded model checking proofs
+    ├── proptest/                    -- Property tests and conformance checks
+    └── stateright/                  -- Protocol model checking
 ```
 
 **Dependency DAG** (acyclic, strict):
 ```
-ferratom  <--  ferratomic-core  <--  ferratomic-datalog
-                    ^                       ^
-                    |                       |
-                    +-------  ferratomic-verify  (dev-dependency only)
+ferratom-clock  <--  ferratom  <--  ferratomic-core  <--  ferratomic-datalog
+                         ^              ^
+                         |              |
+                         +--------------+-------  ferratomic-verify  (dev-dependency only)
 ```
 
-`ferratom` has zero project-internal dependencies (it depends on blake3, ordered-float,
-serde as external crates). `ferratomic-core` depends on `ferratom`, `im`, `arc-swap`,
-`blake3`, `bincode`, `serde`, `asupersync`. `ferratomic-datalog` depends on `ferratomic-core`. `ferratomic-verify`
-is a dev-dependency workspace member that imports all three for testing.
+`ferratom-clock` has zero project-internal dependencies. `ferratom` depends on
+`ferratom-clock` plus external crates (`blake3`, `ordered-float`, `serde`).
+`ferratomic-core` depends on `ferratom`, `im`, `arc-swap`, `blake3`, `bincode`,
+`serde`, `asupersync`, and optional `tokio` adapter support. `ferratomic-datalog`
+depends on `ferratom` and `ferratomic-core`. `ferratomic-verify` is a
+dev-dependency workspace member that currently imports `ferratom` and
+`ferratomic-core` directly for testing.
 
-### 23.0.3 Relationship to spec/01-store.md
+### 23.0.3 Relationship to the Historical STORE Algebra
 
-The STORE namespace (spec/01-store.md) defines the algebraic specification: the datom type,
-the store as `(P(D), ∪)`, the five lattice laws L1-L5, the transaction algebra, the value
-domain, and the index invariants. Those definitions are **preserved verbatim** in Ferratomic.
+The historical STORE namespace defines the algebraic specification: the datom type, the
+store as `(P(D), ∪)`, the five lattice laws L1-L5, the transaction algebra, the value
+domain, and the index invariants. In this repository, those preserved foundations are
+distributed across [01-core-invariants.md](01-core-invariants.md),
+[02-concurrency.md](02-concurrency.md), and [03-performance.md](03-performance.md).
 The FERR namespace adds:
 
 | STORE provides | FERR adds |
@@ -236,4 +278,3 @@ enum CrdtAction {
 ```
 
 ---
-

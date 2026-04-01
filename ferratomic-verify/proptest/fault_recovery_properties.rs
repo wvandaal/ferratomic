@@ -4,6 +4,7 @@
 //! faults correctly: no silent data corruption, no phantom datoms,
 //! no panics. Uses `FaultInjectingBackend` (ADR-FERR-011).
 
+use ferratom::{AgentId, Attribute, EntityId, Value};
 use ferratomic_core::{
     checkpoint::{load_checkpoint, write_checkpoint, write_checkpoint_to_writer},
     storage::{cold_start_with_backend, InMemoryBackend},
@@ -12,8 +13,6 @@ use ferratomic_core::{
 };
 use ferratomic_verify::fault_injection::{FaultInjectingBackend, FaultSpec};
 use proptest::prelude::*;
-
-use ferratom::{AgentId, Attribute, EntityId, Value};
 
 // ---------------------------------------------------------------------------
 // Helpers

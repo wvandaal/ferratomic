@@ -7,8 +7,8 @@
 //! (replica filter), and INV-FERR-032 (LIVE resolution correctness).
 //!
 //! Phase 4a: all tests passing against ferratomic-core implementation.
-//! INV-FERR-029/032 tests exercise the spec's resolution algebra directly
-//! (Store does not yet expose a live_view/live_resolve API).
+//! INV-FERR-029/032 tests cross-check the spec's resolution algebra against
+//! the native `Store` LIVE query APIs.
 
 use std::collections::BTreeSet;
 
@@ -192,12 +192,9 @@ proptest! {
     // -----------------------------------------------------------------------
     // INV-FERR-029 / INV-FERR-032: LIVE view resolution properties
     //
-    // The LIVE resolution API (live_view / live_resolve on Store) is not yet
-    // implemented. These tests verify the algebraic properties from the spec
-    // by computing LIVE resolution directly from raw store datoms. When the
-    // Store gains a native live_view() method, these tests should be updated
-    // to assert equivalence between the native result and this reference
-    // computation.
+    // These tests compute a reference LIVE model from raw store datoms and
+    // cross-check the native `Store::live_values` / `Store::live_resolve`
+    // results against that model.
     // -----------------------------------------------------------------------
 
     /// INV-FERR-029: LIVE view resolution returns correct datoms.
@@ -299,10 +296,9 @@ proptest! {
     ///   non-retracted assertion survives.
     /// - `Cardinality::Many`: all non-retracted values survive.
     ///
-    /// Since `Store` does not yet expose a `live_resolve()` method, this test
-    /// constructs a schema with both cardinality-one and cardinality-many
-    /// attributes, builds datoms targeting those attributes, and verifies
-    /// the spec's resolution algorithm produces correct results for each.
+    /// This test constructs card-one and card-many datoms, computes the spec's
+    /// reference result, and then checks `Store::live_resolve()` /
+    /// `Store::live_values()` against that reference.
     ///
     /// Falsification: LWW picks a non-latest value, or keep-all omits a
     /// non-retracted value.
@@ -429,6 +425,31 @@ proptest! {
                 );
             }
         }
+
+        let store = Store::from_datoms(
+            card_one_datoms
+                .iter()
+                .chain(card_many_datoms.iter())
+                .cloned()
+                .collect(),
+        );
+        let actual_many: BTreeSet<_> = store
+            .live_values(entity, &card_many_attr)
+            .map(|values| values.iter().cloned().collect())
+            .unwrap_or_default();
+
+        prop_assert_eq!(
+            store.live_resolve(entity, &card_one_attr),
+            lww_result.as_ref(),
+            "INV-FERR-032 violated: Store::live_resolve() must return the highest-TxId \
+             surviving card-one value"
+        );
+        prop_assert_eq!(
+            actual_many,
+            live_many,
+            "INV-FERR-032 violated: Store::live_values() must match the reference \
+             keep-all result for card-many attributes"
+        );
 
         // Cross-check: the schema types are well-formed (sanity).
         let def_one = AttributeDef::new(

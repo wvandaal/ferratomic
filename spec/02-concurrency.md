@@ -2,7 +2,8 @@
 
 ### INV-FERR-013: Checkpoint Equivalence
 
-**Traces to**: SEED.md §5 (Harvest/Seed Lifecycle — durability), INV-STORE-009, ADRS PD-003
+**Traces to**: SEED.md §5 (Harvest/Seed Lifecycle — durability), INV-STORE-009,
+INV-FERR-005 (Index Bijection), INV-FERR-008 (WAL Fsync Ordering)
 **Verification**: `V:PROP`, `V:KANI`, `V:LEAN`
 **Stage**: 0
 
@@ -271,7 +272,8 @@ writer task context.
 
 ### INV-FERR-014: Recovery Correctness
 
-**Traces to**: SEED.md §5 (Harvest/Seed Lifecycle — durability), C1, INV-STORE-009, ADRS PD-003
+**Traces to**: SEED.md §5 (Harvest/Seed Lifecycle — durability), C1, INV-STORE-009,
+INV-FERR-008 (WAL Fsync Ordering), INV-FERR-013 (Checkpoint Equivalence)
 **Verification**: `V:PROP`, `V:KANI`, `V:MODEL`
 **Stage**: 0
 
@@ -492,7 +494,8 @@ theorem recovery_no_loss (s uncommitted : DatomStore) (d : Datom)
 
 ### INV-FERR-015: HLC Monotonicity
 
-**Traces to**: SEED.md §4 (Core Abstraction: Temporal Ordering), INV-STORE-011, ADRS SR-004
+**Traces to**: SEED.md §4 (Core Abstraction: Temporal Ordering), INV-STORE-011,
+ADR-FERR-005 (Clock Model)
 **Verification**: `V:PROP`, `V:KANI`, `V:LEAN`
 **Stage**: 0
 
@@ -727,7 +730,8 @@ theorem hlc_tick_monotone (prev : HlcModel) (wall_clock : Nat) :
 
 ### INV-FERR-016: HLC Causality
 
-**Traces to**: SEED.md §4 (Core Abstraction: Temporal Ordering), INV-STORE-011, ADRS SR-004
+**Traces to**: SEED.md §4 (Core Abstraction: Temporal Ordering), INV-STORE-011,
+ADR-FERR-005 (Clock Model)
 **Verification**: `V:PROP`, `V:KANI`, `V:LEAN`, `V:MODEL`
 **Stage**: 0
 
@@ -940,7 +944,8 @@ theorem hlc_causality_transitive (a b c : HlcModel)
 
 ### INV-FERR-017: Shard Equivalence
 
-**Traces to**: SEED.md §4 Axiom 2 (Store), C4, INV-STORE-004, ADRS AS-001
+**Traces to**: SEED.md §4 Axiom 2 (Store), C4, INV-STORE-004,
+ADR-FERR-006 (Sharding Strategy)
 **Verification**: `V:PROP`, `V:KANI`, `V:LEAN`
 **Stage**: 0
 
@@ -1336,7 +1341,7 @@ theorem append_only_card_merge (a b : DatomStore) :
 
 ### INV-FERR-019: Error Exhaustiveness
 
-**Traces to**: NEG-FERR-001 (No panics), SEED.md §4, ADRS FD-001
+**Traces to**: NEG-FERR-001 (No Panics in Production Code), SEED.md §4
 **Verification**: `V:TYPE`, `V:PROP`
 **Stage**: 0
 
@@ -1785,7 +1790,8 @@ theorem atomic_all_or_nothing (s : DatomStore) (schema : Schema) (batch : Finset
 
 ### INV-FERR-021: Backpressure Safety
 
-**Traces to**: SEED.md §4, NEG-FERR-005 (No unbounded memory growth), ADRS FD-001
+**Traces to**: SEED.md §4, NEG-FERR-005 (No Unbounded Memory Growth),
+ADR-FERR-002 (Async Runtime)
 **Verification**: `V:PROP`, `V:MODEL`
 **Stage**: 0
 
@@ -1989,7 +1995,7 @@ theorem rejected_means_unchanged (s : DatomStore) (d : Datom) (capacity : Nat)
 
 ### INV-FERR-022: Anti-Entropy Convergence
 
-**Traces to**: SEED.md §4, C4, INV-FERR-010 (Merge Convergence), ADRS PD-004
+**Traces to**: SEED.md §4, C4, INV-FERR-010 (Merge Convergence)
 **Verification**: `V:PROP`, `V:MODEL`
 **Stage**: 0
 
@@ -2236,7 +2242,7 @@ theorem anti_entropy_complete (a b : DatomStore) (d : Datom) (h : d ∈ a ∨ d 
 
 ### INV-FERR-023: No Unsafe Code
 
-**Traces to**: SEED.md §4 (Implementation Architecture), NEG-FERR-002, ADRS FD-001
+**Traces to**: SEED.md §4 (Implementation Architecture), NEG-FERR-002
 **Verification**: `V:TYPE`
 **Stage**: 0
 

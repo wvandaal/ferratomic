@@ -5,10 +5,27 @@
 //! INV-FERR-009: merged stores preserve the union of both schemas.
 //! INV-FERR-010: merge convergence — SEC follows from 001+002+003.
 
-use ferratom::Schema;
+use ferratom::{Attribute, AttributeDef, Schema};
 
 use super::Store;
 use crate::indexes::Indexes;
+
+/// INV-FERR-043: A deterministic schema conflict discovered during merge.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SchemaConflict {
+    /// The attribute whose definitions disagreed across replicas.
+    pub attribute: Attribute,
+    /// The deterministically selected definition (`Ord`-minimal).
+    pub kept: AttributeDef,
+    /// The losing definition retained only for diagnostics.
+    pub discarded: AttributeDef,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SchemaMergeResult {
+    schema: Schema,
+    conflicts: Vec<SchemaConflict>,
+}
 
 impl Store {
     /// Construct a store from merging two stores: union datoms, union schemas,
@@ -23,18 +40,21 @@ impl Store {
     pub fn from_merge(a: &Store, b: &Store) -> Self {
         let datoms = a.datoms.clone().union(b.datoms.clone());
         let indexes = Indexes::from_datoms(datoms.iter());
-        let schema = merge_schemas(&a.schema, &b.schema);
+        let schema_merge = merge_schemas(&a.schema, &b.schema);
         let epoch = a.epoch.max(b.epoch);
         let genesis_agent = std::cmp::min(a.genesis_agent, b.genesis_agent);
         let live_set = super::query::build_live_set(datoms.iter());
+        let live_txids = super::query::build_live_txids(datoms.iter());
 
         Self {
             datoms,
             indexes,
-            schema,
+            schema: schema_merge.schema,
             epoch,
             genesis_agent,
             live_set,
+            live_txids,
+            schema_conflicts: schema_merge.conflicts,
         }
     }
 }
@@ -44,24 +64,113 @@ impl Store {
 /// INV-FERR-001: schema merge must be commutative. When both schemas
 /// define the same attribute with different definitions, keep the one
 /// that sorts first by `Ord` (commutativity: `min(a,b) == min(b,a)`).
-fn merge_schemas(a: &Schema, b: &Schema) -> Schema {
+fn merge_schemas(a: &Schema, b: &Schema) -> SchemaMergeResult {
     let mut schema = Schema::empty();
+    let mut conflicts = Vec::new();
     for (attr, def) in a.iter().chain(b.iter()) {
         match schema.get(attr) {
             None => {
                 schema.define(attr.clone(), def.clone());
             }
             Some(existing) => {
+                if def == existing {
+                    continue;
+                }
                 // INV-FERR-043: conflicting schema definitions resolved
                 // deterministically by keeping the def that sorts first.
                 // Commutativity preserved: min(a,b) == min(b,a).
                 // This is expected in federation when two stores evolve
                 // the same attribute differently.
+                let (kept, discarded) = if def < existing {
+                    (def.clone(), existing.clone())
+                } else {
+                    (existing.clone(), def.clone())
+                };
                 if def < existing {
                     schema.define(attr.clone(), def.clone());
                 }
+                conflicts.push(SchemaConflict {
+                    attribute: attr.clone(),
+                    kept,
+                    discarded,
+                });
             }
         }
     }
-    schema
+    SchemaMergeResult { schema, conflicts }
+}
+
+#[cfg(test)]
+mod tests {
+    use ferratom::{Attribute, Cardinality, ResolutionMode, ValueType};
+
+    use super::*;
+
+    fn lww_one(value_type: ValueType) -> AttributeDef {
+        AttributeDef::new(value_type, Cardinality::One, ResolutionMode::Lww, None)
+    }
+
+    #[test]
+    fn test_inv_ferr_043_merge_schema_conflict_audit_trail() {
+        let attribute = Attribute::from("user/name");
+        let string_def = lww_one(ValueType::String);
+        let long_def = lww_one(ValueType::Long);
+        let mut a = Store::genesis();
+        let mut b = Store::genesis();
+
+        a.schema.define(attribute.clone(), string_def.clone());
+        b.schema.define(attribute.clone(), long_def.clone());
+
+        let merged = Store::from_merge(&a, &b);
+        let expected = if string_def < long_def {
+            SchemaConflict {
+                attribute: attribute.clone(),
+                kept: string_def.clone(),
+                discarded: long_def.clone(),
+            }
+        } else {
+            SchemaConflict {
+                attribute: attribute.clone(),
+                kept: long_def.clone(),
+                discarded: string_def.clone(),
+            }
+        };
+
+        assert_eq!(
+            merged.schema_conflicts(),
+            std::slice::from_ref(&expected),
+            "INV-FERR-043: merge must record each conflicting attribute definition"
+        );
+        assert_eq!(
+            merged.schema().get(&attribute),
+            Some(&expected.kept),
+            "INV-FERR-043: merge must keep the Ord-minimal definition"
+        );
+    }
+
+    #[test]
+    fn test_inv_ferr_043_merge_schema_conflict_audit_trail_commutative() {
+        let attribute = Attribute::from("user/name");
+        let string_def = lww_one(ValueType::String);
+        let long_def = lww_one(ValueType::Long);
+        let mut a = Store::genesis();
+        let mut b = Store::genesis();
+
+        a.schema.define(attribute.clone(), string_def);
+        b.schema.define(attribute, long_def);
+
+        let ab = Store::from_merge(&a, &b);
+        let ba = Store::from_merge(&b, &a);
+
+        assert_eq!(
+            ab.schema(),
+            ba.schema(),
+            "INV-FERR-001: merge schema must remain commutative"
+        );
+        assert_eq!(
+            ab.schema_conflicts(),
+            ba.schema_conflicts(),
+            "INV-FERR-043: conflict audit trail must be identical regardless of merge order"
+        );
+    }
 }

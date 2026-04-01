@@ -4,7 +4,7 @@
 //! INV-FERR-031.
 //! Phase 4a: all tests passing against ferratomic-core implementation.
 
-use ferratom::{AgentId, Attribute, EntityId, Value};
+use ferratom::{AgentId, Attribute, EntityId, FerraError, Value};
 use ferratomic_core::{
     store::Store,
     writer::{Transaction, TxValidationError},
@@ -166,6 +166,94 @@ fn inv_ferr_009_atomic_rejection() {
     assert!(
         result.is_err(),
         "INV-FERR-009: transaction with one invalid datom was not fully rejected"
+    );
+}
+
+/// INV-FERR-009: Invalid `db/valueType` keywords are rejected atomically.
+#[test]
+fn test_inv_ferr_009_reject_invalid_value_type() {
+    let mut store = Store::genesis();
+    let agent = AgentId::from_bytes([1u8; 16]);
+    let attr_entity = EntityId::from_content(b"invalid-value-type");
+
+    let define_tx = Transaction::new(agent)
+        .assert_datom(
+            attr_entity,
+            Attribute::from("db/ident"),
+            Value::Keyword("user/bad-value-type".into()),
+        )
+        .assert_datom(
+            attr_entity,
+            Attribute::from("db/valueType"),
+            Value::Keyword("db.type/invalid".into()),
+        )
+        .assert_datom(
+            attr_entity,
+            Attribute::from("db/cardinality"),
+            Value::Keyword("db.cardinality/one".into()),
+        );
+
+    let committed = define_tx
+        .commit(store.schema())
+        .expect("meta-schema datoms are well-typed keywords");
+    let result = store.transact_test(committed);
+
+    assert!(
+        matches!(
+            result,
+            Err(FerraError::SchemaViolation {
+                ref attribute,
+                ref expected,
+                ref got,
+            }) if attribute == "db/valueType"
+                && expected == "recognized db.type/* keyword"
+                && got == "db.type/invalid"
+        ),
+        "INV-FERR-009: invalid db/valueType keyword was not rejected. result={result:?}"
+    );
+}
+
+/// INV-FERR-009: Invalid `db/cardinality` keywords are rejected atomically.
+#[test]
+fn test_inv_ferr_009_reject_invalid_cardinality() {
+    let mut store = Store::genesis();
+    let agent = AgentId::from_bytes([2u8; 16]);
+    let attr_entity = EntityId::from_content(b"invalid-cardinality");
+
+    let define_tx = Transaction::new(agent)
+        .assert_datom(
+            attr_entity,
+            Attribute::from("db/ident"),
+            Value::Keyword("user/bad-cardinality".into()),
+        )
+        .assert_datom(
+            attr_entity,
+            Attribute::from("db/valueType"),
+            Value::Keyword("db.type/string".into()),
+        )
+        .assert_datom(
+            attr_entity,
+            Attribute::from("db/cardinality"),
+            Value::Keyword("db.cardinality/triple".into()),
+        );
+
+    let committed = define_tx
+        .commit(store.schema())
+        .expect("meta-schema datoms are well-typed keywords");
+    let result = store.transact_test(committed);
+
+    assert!(
+        matches!(
+            result,
+            Err(FerraError::SchemaViolation {
+                ref attribute,
+                ref expected,
+                ref got,
+            }) if attribute == "db/cardinality"
+                && expected == "recognized db.cardinality/* keyword"
+                && got == "db.cardinality/triple"
+        ),
+        "INV-FERR-009: invalid db/cardinality keyword was not rejected. result={result:?}"
     );
 }
 

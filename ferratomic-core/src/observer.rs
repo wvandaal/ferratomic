@@ -95,15 +95,14 @@ impl ObserverBroadcast {
             self.recent.pop_front();
         }
 
-        let recent: Vec<BroadcastEntry> = self.recent.iter().cloned().collect();
         for registered in &mut self.observers {
             if epoch <= registered.last_seen_epoch {
                 continue;
             }
 
             if registered.last_seen_epoch + 1 < epoch {
-                let catchup = buffered_delta_since(&recent, registered.last_seen_epoch)
-                    .unwrap_or_else(|| full_delta_since(store, registered.last_seen_epoch));
+                let catchup = buffered_delta_since(&self.recent, registered.last_seen_epoch)
+                    .unwrap_or_else(|| full_store_catchup(store));
                 registered
                     .observer
                     .on_catchup(registered.last_seen_epoch, &catchup);
@@ -116,8 +115,8 @@ impl ObserverBroadcast {
     }
 }
 
-fn buffered_delta_since(recent: &[BroadcastEntry], from_epoch: u64) -> Option<Vec<Datom>> {
-    let first_epoch = recent.first()?.epoch;
+fn buffered_delta_since(recent: &VecDeque<BroadcastEntry>, from_epoch: u64) -> Option<Vec<Datom>> {
+    let first_epoch = recent.front()?.epoch;
     if first_epoch > from_epoch.saturating_add(1) {
         return None;
     }
@@ -131,16 +130,22 @@ fn buffered_delta_since(recent: &[BroadcastEntry], from_epoch: u64) -> Option<Ve
     Some(delta)
 }
 
-fn full_delta_since(store: &Store, from_epoch: u64) -> Vec<Datom> {
-    // HI-012: Filter by epoch via Store::epoch_of_datom, not tx.physical().
-    // tx.physical() currently equals epoch, but when HLC is wired in,
-    // physical() becomes wall-clock milliseconds and this filter would break.
-    // For now the semantics are identical, but the intent is epoch-based.
-    store
-        .datoms()
-        .filter(|datom| datom.tx().physical() > from_epoch)
-        .cloned()
-        .collect()
+/// Full-store catchup: return ALL datoms when the bounded buffer is exhausted.
+///
+/// INV-FERR-011: This is the fallback path when an observer has fallen so far
+/// behind that the bounded `recent` buffer no longer covers the gap. The
+/// observer receives the entire store state and resets its baseline.
+///
+/// HI-012: The previous implementation filtered by `datom.tx().physical() >
+/// from_epoch`, which compared wall-clock milliseconds (from HLC) against an
+/// epoch counter — always true for any real timestamp. With HLC wired in,
+/// individual datoms do not carry epoch metadata (they carry `TxId` with HLC
+/// physical time). Epoch-based delta filtering requires an epoch-indexed
+/// structure (Phase 4b). For Phase 4a, full-store catchup is correct: the
+/// observer contract is at-least-once delivery, and `on_catchup` semantics
+/// handle receiving previously-seen datoms.
+fn full_store_catchup(store: &Store) -> Vec<Datom> {
+    store.datoms().cloned().collect()
 }
 
 /// An observer that tracks the latest epoch it has seen.
