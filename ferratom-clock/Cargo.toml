@@ -1,0 +1,17 @@
+[package]
+name = "ferratom-clock"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Hybrid Logical Clock types: TxId, AgentId, HybridClock, Frontier"
+
+# ZERO project-internal dependencies — this is a leaf crate.
+# Clock types are independent distributed-systems primitives.
+
+[features]
+# Enables AgentId::from_seed() and TxId::new() for testing.
+test-utils = []
+
+[dependencies]
+serde = { workspace = true }

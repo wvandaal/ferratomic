@@ -6,16 +6,16 @@ rust-version.workspace = true
 license.workspace = true
 description = "Core types for Ferratomic: Datom, EntityId, Attribute, Value, TxId, Schema"
 
-# ZERO project-internal dependencies — this is a leaf crate.
-# All types are pure algebraic definitions.
+# Depends only on ferratom-clock (extracted clock types) + external crates.
 # Algebraic role: FREE objects (no imposed structure).
 
 [features]
 # Enables EntityId::from_bytes() and AgentId::from_seed() for testing.
 # Production code must use EntityId::from_content() (INV-FERR-012).
-test-utils = []
+test-utils = ["ferratom-clock/test-utils"]
 
 [dependencies]
+ferratom-clock = { path = "../ferratom-clock", features = [] }
 blake3 = { workspace = true }
 ordered-float = { workspace = true }
 serde = { workspace = true }

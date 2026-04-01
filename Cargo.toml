@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "ferratom-clock",
     "ferratom",
     "ferratomic-core",
     "ferratomic-datalog",
