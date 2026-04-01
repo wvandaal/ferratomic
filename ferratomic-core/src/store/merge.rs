@@ -43,8 +43,8 @@ impl Store {
         let schema_merge = merge_schemas(&a.schema, &b.schema);
         let epoch = a.epoch.max(b.epoch);
         let genesis_agent = std::cmp::min(a.genesis_agent, b.genesis_agent);
-        let live_set = super::query::build_live_set(datoms.iter());
-        let live_txids = super::query::build_live_txids(datoms.iter());
+        let live_causal = super::query::build_live_causal(datoms.iter());
+        let live_set = super::query::derive_live_set(&live_causal);
 
         Self {
             datoms,
@@ -52,8 +52,8 @@ impl Store {
             schema: schema_merge.schema,
             epoch,
             genesis_agent,
+            live_causal,
             live_set,
-            live_txids,
             schema_conflicts: schema_merge.conflicts,
         }
     }

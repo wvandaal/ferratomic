@@ -130,15 +130,19 @@ pub struct Store {
     /// The agent identity used for genesis transactions.
     /// Stored so callers can create transactions against this store.
     pub(crate) genesis_agent: AgentId,
-    /// INV-FERR-029: Incrementally maintained LIVE view.
-    /// Maps (entity, attribute) → set of non-retracted values.
-    pub(crate) live_set: OrdMap<(EntityId, Attribute), OrdSet<Value>>,
-    /// INV-FERR-032: Per-value assertion epochs for surviving LIVE values.
-    /// Maps (entity, attribute) → value → latest assert `TxId` for that value.
+    /// INV-FERR-029/032: Causal OR-Set LIVE lattice.
     ///
-    /// Retractions remove the value from this map. `live_resolve` consults the
-    /// map to choose the LWW survivor by `TxId` rather than `Value::Ord`.
-    pub(crate) live_txids: OrdMap<(EntityId, Attribute), OrdMap<Value, TxId>>,
+    /// Maps `(entity, attribute)` to `value` to `(TxId, Op)` where `TxId` is
+    /// the latest causal event for that `(e,a,v)` triple. Values with
+    /// `Op::Assert` are LIVE; values with `Op::Retract` are dead but causally
+    /// tracked for merge
+    /// correctness. This structure is a join-semilattice under per-key
+    /// max(TxId), making `merge_causal` a lattice homomorphism.
+    pub(crate) live_causal: OrdMap<(EntityId, Attribute), OrdMap<Value, (TxId, Op)>>,
+    /// INV-FERR-029: Materialized projection of `live_causal` for the
+    /// `live_values()` query API. Contains only values where op == Assert.
+    /// Maintained in sync with `live_causal` by `live_apply`.
+    pub(crate) live_set: OrdMap<(EntityId, Attribute), OrdSet<Value>>,
     /// INV-FERR-043: Deterministic schema conflicts discovered during merge.
     ///
     /// Non-merge construction paths leave this empty. `from_merge` populates it
@@ -160,16 +164,16 @@ impl Store {
     pub fn from_datoms(datoms: BTreeSet<Datom>) -> Self {
         let ord_set: OrdSet<Datom> = datoms.into_iter().collect();
         let indexes = Indexes::from_datoms(ord_set.iter());
-        let live_set = query::build_live_set(ord_set.iter());
-        let live_txids = query::build_live_txids(ord_set.iter());
+        let live_causal = query::build_live_causal(ord_set.iter());
+        let live_set = query::derive_live_set(&live_causal);
         Self {
             datoms: ord_set,
             indexes,
             schema: Schema::empty(),
             epoch: 0,
             genesis_agent: AgentId::from_bytes([0u8; 16]),
+            live_causal,
             live_set,
-            live_txids,
             schema_conflicts: Vec::new(),
         }
     }
@@ -192,16 +196,16 @@ impl Store {
         }
         let ord_set: OrdSet<Datom> = datoms.into_iter().collect();
         let indexes = Indexes::from_datoms(ord_set.iter());
-        let live_set = query::build_live_set(ord_set.iter());
-        let live_txids = query::build_live_txids(ord_set.iter());
+        let live_causal = query::build_live_causal(ord_set.iter());
+        let live_set = query::derive_live_set(&live_causal);
         Self {
             datoms: ord_set,
             indexes,
             schema,
             epoch,
             genesis_agent,
+            live_causal,
             live_set,
-            live_txids,
             schema_conflicts: Vec::new(),
         }
     }
@@ -220,8 +224,8 @@ impl Store {
             schema: crate::schema_evolution::genesis_schema(),
             epoch: 0,
             genesis_agent: AgentId::from_bytes([0u8; 16]),
+            live_causal: OrdMap::new(),
             live_set: OrdMap::new(),
-            live_txids: OrdMap::new(),
             schema_conflicts: Vec::new(),
         }
     }
@@ -305,32 +309,32 @@ impl Store {
         &self.schema_conflicts
     }
 
-    /// Update the LIVE set for a single datom (incremental maintenance).
+    /// Update the causal LIVE lattice for a single datom (incremental).
     ///
-    /// INV-FERR-029/032: O(1) per datom. Assertions insert into the value set
-    /// and update the per-value `TxId`; retractions remove both. Empty
-    /// per-key maps are pruned.
+    /// INV-FERR-029/032: O(log n) per datom. Retains the event with the
+    /// highest `TxId` per (entity, attribute, value) triple. Updates the
+    /// materialized `live_set` projection to reflect liveness transitions.
     pub(crate) fn live_apply(&mut self, datom: &Datom) {
         let key = (datom.entity(), datom.attribute().clone());
-        match datom.op() {
-            Op::Assert => {
-                let value = datom.value().clone();
-                let vals = self.live_set.entry(key.clone()).or_default();
-                vals.insert(value.clone());
-                let txids = self.live_txids.entry(key).or_default();
-                txids.insert(value, datom.tx());
-            }
-            Op::Retract => {
+        let value = datom.value().clone();
+
+        let entries = self.live_causal.entry(key.clone()).or_default();
+        let was_live = entries.get(&value).is_some_and(|&(_, op)| op == Op::Assert);
+        let should_update = entries
+            .get(&value)
+            .is_none_or(|&(existing_tx, _)| datom.tx() > existing_tx);
+
+        if should_update {
+            entries.insert(value.clone(), (datom.tx(), datom.op()));
+            let is_live = datom.op() == Op::Assert;
+
+            if is_live && !was_live {
+                self.live_set.entry(key).or_default().insert(value);
+            } else if !is_live && was_live {
                 if let Some(vals) = self.live_set.get_mut(&key) {
-                    vals.remove(datom.value());
+                    vals.remove(&value);
                     if vals.is_empty() {
                         self.live_set.remove(&key);
-                    }
-                }
-                if let Some(txids) = self.live_txids.get_mut(&key) {
-                    txids.remove(datom.value());
-                    if txids.is_empty() {
-                        self.live_txids.remove(&key);
                     }
                 }
             }

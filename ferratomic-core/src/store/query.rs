@@ -9,6 +9,17 @@ use im::{OrdMap, OrdSet};
 
 use super::{Snapshot, Store};
 
+/// Type alias for the causal OR-Set LIVE lattice.
+///
+/// Maps `(entity, attribute)` to `value` to `(TxId, Op)` where `TxId` is the
+/// latest causal event for that `(e,a,v)` triple. Values with `Op::Assert` are
+/// LIVE; values with `Op::Retract` are dead but causally tracked for merge
+/// correctness.
+///
+/// This structure is a join-semilattice under per-key `max(TxId)`, making it
+/// a lattice homomorphism over datom set union.
+pub(crate) type LiveCausal = OrdMap<(EntityId, Attribute), OrdMap<Value, (TxId, Op)>>;
+
 impl Snapshot {
     /// Iterate over all datoms visible in this snapshot.
     ///
@@ -47,7 +58,7 @@ impl Store {
     /// highest assert `TxId`, or `None` if fully retracted or never asserted.
     #[must_use]
     pub fn live_resolve(&self, entity: EntityId, attribute: &Attribute) -> Option<&Value> {
-        self.live_txids
+        self.live_causal
             .get(&(entity, attribute.clone()))
             .and_then(select_latest_live_value)
     }
@@ -65,66 +76,56 @@ impl Store {
     }
 }
 
-/// Build a LIVE set from an iterator of datoms (full rebuild).
+/// Build a causal LIVE lattice from an iterator of datoms (full rebuild).
 ///
 /// INV-FERR-029: Used during cold start, checkpoint load, and merge.
-/// Processes datoms in iteration order (EAVT by `Datom::Ord`).
-pub(super) fn build_live_set<'a>(
-    datoms: impl Iterator<Item = &'a Datom>,
-) -> OrdMap<(EntityId, Attribute), OrdSet<Value>> {
-    let mut live: OrdMap<(EntityId, Attribute), OrdSet<Value>> = OrdMap::new();
+/// For each (entity, attribute, value) triple, retains the event with the
+/// highest `TxId`. Dead values (`Op::Retract`) are tracked for merge correctness.
+pub(super) fn build_live_causal<'a>(datoms: impl Iterator<Item = &'a Datom>) -> LiveCausal {
+    let mut causal: LiveCausal = OrdMap::new();
     for datom in datoms {
         let key = (datom.entity(), datom.attribute().clone());
-        match datom.op() {
-            Op::Assert => {
-                let vals = live.entry(key).or_default();
-                vals.insert(datom.value().clone());
-            }
-            Op::Retract => {
-                if let Some(vals) = live.get_mut(&key) {
-                    vals.remove(datom.value());
-                    if vals.is_empty() {
-                        live.remove(&key);
-                    }
-                }
+        let entries = causal.entry(key).or_default();
+        let value = datom.value().clone();
+        match entries.get(&value) {
+            Some(&(existing_tx, _)) if existing_tx >= datom.tx() => {}
+            _ => {
+                entries.insert(value, (datom.tx(), datom.op()));
             }
         }
     }
-    live
+    causal
 }
 
-/// Build per-value LIVE `TxId` metadata from an iterator of datoms.
+/// Derive a materialized LIVE set from a causal lattice.
 ///
-/// INV-FERR-032: surviving values retain the latest assert `TxId` that has not
-/// been retracted, allowing card-one resolution by causal order.
-pub(super) fn build_live_txids<'a>(
-    datoms: impl Iterator<Item = &'a Datom>,
-) -> OrdMap<(EntityId, Attribute), OrdMap<Value, TxId>> {
-    let mut live: OrdMap<(EntityId, Attribute), OrdMap<Value, TxId>> = OrdMap::new();
-    for datom in datoms {
-        let key = (datom.entity(), datom.attribute().clone());
-        match datom.op() {
-            Op::Assert => {
-                let txids = live.entry(key).or_default();
-                txids.insert(datom.value().clone(), datom.tx());
+/// INV-FERR-029: Projects the causal map to only values with `Op::Assert`,
+/// producing the set of non-retracted values per (entity, attribute).
+pub(super) fn derive_live_set(causal: &LiveCausal) -> OrdMap<(EntityId, Attribute), OrdSet<Value>> {
+    let mut live: OrdMap<(EntityId, Attribute), OrdSet<Value>> = OrdMap::new();
+    for (key, entries) in causal {
+        let mut values = OrdSet::new();
+        for (value, &(_, op)) in entries {
+            if op == Op::Assert {
+                values.insert(value.clone());
             }
-            Op::Retract => {
-                if let Some(txids) = live.get_mut(&key) {
-                    txids.remove(datom.value());
-                    if txids.is_empty() {
-                        live.remove(&key);
-                    }
-                }
-            }
+        }
+        if !values.is_empty() {
+            live.insert(key.clone(), values);
         }
     }
     live
 }
 
-fn select_latest_live_value(values: &OrdMap<Value, TxId>) -> Option<&Value> {
-    values
+/// Select the LIVE value with the highest assert `TxId` from a causal entry map.
+///
+/// INV-FERR-032: For card-one resolution, filters to `Op::Assert` entries and
+/// picks the one with the highest `TxId` (LWW semantics).
+fn select_latest_live_value(entries: &OrdMap<Value, (TxId, Op)>) -> Option<&Value> {
+    entries
         .iter()
-        .max_by(|(left_value, left_tx), (right_value, right_tx)| {
+        .filter(|(_, &(_, op))| op == Op::Assert)
+        .max_by(|(left_value, (left_tx, _)), (right_value, (right_tx, _))| {
             left_tx
                 .cmp(right_tx)
                 .then_with(|| left_value.cmp(right_value))
