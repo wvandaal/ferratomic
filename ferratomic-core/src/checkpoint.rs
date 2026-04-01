@@ -40,6 +40,9 @@ use serde::Serialize;
 
 use crate::store::Store;
 
+#[cfg(test)]
+mod tests;
+
 /// Checkpoint file magic bytes: ASCII "CHKP".
 const CHECKPOINT_MAGIC: [u8; 4] = *b"CHKP";
 
@@ -71,22 +74,12 @@ struct CheckpointPayload {
     datoms: Vec<Datom>,
 }
 
-/// Serialize a store to checkpoint bytes (in-memory).
+/// Build and serialize the checkpoint payload (schema + agent + datoms).
 ///
-/// INV-FERR-013: The returned bytes contain the full store state (epoch,
-/// schema, genesis agent, all datoms) in the checkpoint wire format.
-/// A trailing BLAKE3 hash covers all preceding bytes for tamper detection.
-/// `deserialize_checkpoint_bytes` can reconstruct the store exactly.
-///
-/// # Errors
-///
-/// Returns `FerraError::CheckpointWrite` if the JSON payload exceeds
-/// `u32::MAX` bytes or serialization fails.
-pub(crate) fn serialize_checkpoint_bytes(store: &Store) -> Result<Vec<u8>, FerraError> {
-    let epoch = store.epoch();
-
-    // Build deterministic payload: schema sorted by attribute name,
-    // datoms in OrdSet iteration order (EAVT by Datom::Ord).
+/// INV-FERR-013: schema is sorted by attribute name for determinism.
+/// Datoms are in `OrdSet` iteration order (`Datom::Ord` = EAVT).
+/// CR-005: bincode for INV-FERR-028 cold-start compliance.
+fn build_payload_bytes(store: &Store) -> Result<Vec<u8>, FerraError> {
     let schema: Vec<(String, AttributeDef)> = {
         let mut sorted: BTreeMap<String, AttributeDef> = BTreeMap::new();
         for (attr, def) in store.schema().iter() {
@@ -101,11 +94,23 @@ pub(crate) fn serialize_checkpoint_bytes(store: &Store) -> Result<Vec<u8>, Ferra
         datoms: store.datoms().cloned().collect(),
     };
 
-    // CR-005: Use bincode instead of JSON for INV-FERR-028 compliance.
-    // At 100M datoms, bincode produces ~20GB (parseable in <5s on NVMe);
-    // JSON produces ~50GB (unparseable in the time budget).
-    let payload_bytes =
-        bincode::serialize(&payload).map_err(|e| FerraError::CheckpointWrite(e.to_string()))?;
+    bincode::serialize(&payload).map_err(|e| FerraError::CheckpointWrite(e.to_string()))
+}
+
+/// Serialize a store to checkpoint bytes (in-memory).
+///
+/// INV-FERR-013: The returned bytes contain the full store state (epoch,
+/// schema, genesis agent, all datoms) in the checkpoint wire format.
+/// A trailing BLAKE3 hash covers all preceding bytes for tamper detection.
+/// `deserialize_checkpoint_bytes` can reconstruct the store exactly.
+///
+/// # Errors
+///
+/// Returns `FerraError::CheckpointWrite` if the payload exceeds
+/// `u32::MAX` bytes or serialization fails.
+pub(crate) fn serialize_checkpoint_bytes(store: &Store) -> Result<Vec<u8>, FerraError> {
+    let epoch = store.epoch();
+    let payload_bytes = build_payload_bytes(store)?;
 
     let payload_len = u32::try_from(payload_bytes.len()).map_err(|_| {
         FerraError::CheckpointWrite(format!(
@@ -114,7 +119,6 @@ pub(crate) fn serialize_checkpoint_bytes(store: &Store) -> Result<Vec<u8>, Ferra
         ))
     })?;
 
-    // Build the content: header + payload + hash.
     let total_size = HEADER_SIZE + payload_bytes.len() + HASH_SIZE;
     let mut buf = Vec::with_capacity(total_size);
 
@@ -321,53 +325,76 @@ fn verify_checksum(content: &[u8], hash_bytes: &[u8]) -> Result<(), FerraError> 
 /// Parse the fixed header and validate magic/version.
 /// Returns `(epoch, payload_slice)`.
 fn parse_header(content: &[u8]) -> Result<(u64, &[u8]), FerraError> {
+    ensure_header_len(content)?;
+    validate_magic(parse_magic(content)?)?;
+    validate_version(parse_version(content)?)?;
+
+    let epoch = parse_epoch(content)?;
+    let payload_len = parse_payload_len(content)?;
+    let payload = payload_slice(content, payload_len)?;
+    Ok((epoch, payload))
+}
+
+fn ensure_header_len(content: &[u8]) -> Result<(), FerraError> {
     if content.len() < HEADER_SIZE {
         return Err(FerraError::CheckpointCorrupted {
             expected: "valid header".to_string(),
             actual: "truncated header".to_string(),
         });
     }
+    Ok(())
+}
 
-    let magic: [u8; 4] = content[0..4]
+fn parse_magic(content: &[u8]) -> Result<[u8; 4], FerraError> {
+    content[0..4]
         .try_into()
         .map_err(|_| FerraError::CheckpointCorrupted {
             expected: "CHKP magic".to_string(),
             actual: "invalid magic".to_string(),
-        })?;
+        })
+}
+
+fn validate_magic(magic: [u8; 4]) -> Result<(), FerraError> {
     if magic != CHECKPOINT_MAGIC {
         return Err(FerraError::CheckpointCorrupted {
             expected: "CHKP".to_string(),
             actual: String::from_utf8_lossy(&magic).to_string(),
         });
     }
+    Ok(())
+}
 
-    let version = u16::from_le_bytes(content[4..6].try_into().map_err(|_| {
-        FerraError::CheckpointCorrupted {
-            expected: "2-byte version".to_string(),
-            actual: "truncated".to_string(),
-        }
-    })?);
+fn parse_version(content: &[u8]) -> Result<u16, FerraError> {
+    Ok(u16::from_le_bytes(read_header_bytes(
+        content,
+        4,
+        "2-byte version",
+    )?))
+}
+
+fn validate_version(version: u16) -> Result<(), FerraError> {
     if version != CHECKPOINT_VERSION {
         return Err(FerraError::CheckpointCorrupted {
             expected: format!("version {CHECKPOINT_VERSION}"),
             actual: format!("version {version}"),
         });
     }
+    Ok(())
+}
 
-    let epoch = u64::from_le_bytes(content[6..14].try_into().map_err(|_| {
-        FerraError::CheckpointCorrupted {
-            expected: "8-byte epoch".to_string(),
-            actual: "truncated".to_string(),
-        }
-    })?);
+fn parse_epoch(content: &[u8]) -> Result<u64, FerraError> {
+    Ok(u64::from_le_bytes(read_header_bytes(
+        content,
+        6,
+        "8-byte epoch",
+    )?))
+}
 
-    let payload_len = u32::from_le_bytes(content[14..18].try_into().map_err(|_| {
-        FerraError::CheckpointCorrupted {
-            expected: "4-byte payload length".to_string(),
-            actual: "truncated".to_string(),
-        }
-    })?) as usize;
+fn parse_payload_len(content: &[u8]) -> Result<usize, FerraError> {
+    Ok(u32::from_le_bytes(read_header_bytes(content, 14, "4-byte payload length")?) as usize)
+}
 
+fn payload_slice(content: &[u8], payload_len: usize) -> Result<&[u8], FerraError> {
     let available = content.len() - HEADER_SIZE;
     if available < payload_len {
         return Err(FerraError::CheckpointCorrupted {
@@ -375,8 +402,20 @@ fn parse_header(content: &[u8]) -> Result<(u64, &[u8]), FerraError> {
             actual: format!("{available} bytes available"),
         });
     }
+    Ok(&content[HEADER_SIZE..HEADER_SIZE + payload_len])
+}
 
-    Ok((epoch, &content[HEADER_SIZE..HEADER_SIZE + payload_len]))
+fn read_header_bytes<const N: usize>(
+    content: &[u8],
+    start: usize,
+    expected: &str,
+) -> Result<[u8; N], FerraError> {
+    content[start..start + N]
+        .try_into()
+        .map_err(|_| FerraError::CheckpointCorrupted {
+            expected: expected.to_string(),
+            actual: "truncated".to_string(),
+        })
 }
 
 /// Encode bytes as hex string for error messages.
@@ -388,168 +427,4 @@ fn hex_encode(bytes: &[u8]) -> String {
             let _ = write!(s, "{b:02x}");
             s
         })
-}
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
-
-#[cfg(test)]
-mod tests {
-    use std::sync::Arc;
-
-    use ferratom::{Attribute, EntityId, Value};
-
-    use super::*;
-    use crate::writer::Transaction;
-
-    #[test]
-    fn test_inv_ferr_013_roundtrip_empty() {
-        let store = Store::genesis();
-        let dir = tempfile::TempDir::new().unwrap();
-        let path = dir.path().join("checkpoint.chkp");
-
-        write_checkpoint(&store, &path).unwrap();
-        let loaded = load_checkpoint(&path).unwrap();
-
-        assert_eq!(loaded.epoch(), store.epoch());
-        assert_eq!(loaded.len(), store.len());
-        assert_eq!(*loaded.datom_set(), *store.datom_set());
-        assert_eq!(loaded.schema().len(), store.schema().len());
-    }
-
-    #[test]
-    fn test_inv_ferr_013_roundtrip_with_datoms() {
-        let mut store = Store::genesis();
-
-        // Transact some datoms.
-        let tx = Transaction::new(store.genesis_agent())
-            .assert_datom(
-                EntityId::from_content(b"entity-1"),
-                Attribute::from("db/doc"),
-                Value::String(Arc::from("hello world")),
-            )
-            .commit_unchecked();
-        store.transact_test(tx).unwrap();
-
-        let dir = tempfile::TempDir::new().unwrap();
-        let path = dir.path().join("checkpoint.chkp");
-
-        write_checkpoint(&store, &path).unwrap();
-        let loaded = load_checkpoint(&path).unwrap();
-
-        // INV-FERR-013: datom set identity.
-        assert_eq!(
-            *loaded.datom_set(),
-            *store.datom_set(),
-            "INV-FERR-013: datom set must be identical after roundtrip"
-        );
-        // Epoch identity.
-        assert_eq!(
-            loaded.epoch(),
-            store.epoch(),
-            "INV-FERR-013: epoch must be preserved"
-        );
-        // Schema identity.
-        assert_eq!(
-            loaded.schema().len(),
-            store.schema().len(),
-            "INV-FERR-013: schema must be preserved"
-        );
-        // Index bijection on loaded store (INV-FERR-005).
-        assert!(
-            loaded.indexes().verify_bijection(),
-            "INV-FERR-005: all indexes must have same cardinality after load"
-        );
-        assert_eq!(
-            loaded.indexes().len(),
-            loaded.len(),
-            "INV-FERR-005: index len must match primary after load"
-        );
-    }
-
-    #[test]
-    fn test_inv_ferr_013_corrupted_rejected() {
-        let store = Store::genesis();
-        let dir = tempfile::TempDir::new().unwrap();
-        let path = dir.path().join("checkpoint.chkp");
-
-        write_checkpoint(&store, &path).unwrap();
-
-        // Corrupt a byte in the middle of the file.
-        let mut data = std::fs::read(&path).unwrap();
-        let mid = data.len() / 2;
-        data[mid] ^= 0xFF;
-        std::fs::write(&path, &data).unwrap();
-
-        // Must be rejected.
-        let result = load_checkpoint(&path);
-        assert!(
-            result.is_err(),
-            "INV-FERR-013: corrupted checkpoint must be rejected"
-        );
-    }
-
-    #[test]
-    fn test_inv_ferr_013_truncated_rejected() {
-        let store = Store::genesis();
-        let dir = tempfile::TempDir::new().unwrap();
-        let path = dir.path().join("checkpoint.chkp");
-
-        write_checkpoint(&store, &path).unwrap();
-
-        // Truncate the file.
-        let data = std::fs::read(&path).unwrap();
-        std::fs::write(&path, &data[..data.len() / 2]).unwrap();
-
-        let result = load_checkpoint(&path);
-        assert!(
-            result.is_err(),
-            "INV-FERR-013: truncated checkpoint must be rejected"
-        );
-    }
-
-    #[test]
-    fn test_inv_ferr_013_wrong_magic_rejected() {
-        let store = Store::genesis();
-        let dir = tempfile::TempDir::new().unwrap();
-        let path = dir.path().join("checkpoint.chkp");
-
-        write_checkpoint(&store, &path).unwrap();
-
-        // Overwrite magic bytes.
-        let mut data = std::fs::read(&path).unwrap();
-        data[0..4].copy_from_slice(b"XXXX");
-        // Recompute hash so corruption is only in magic.
-        let content_len = data.len() - HASH_SIZE;
-        let hash = blake3::hash(&data[..content_len]);
-        data[content_len..].copy_from_slice(hash.as_bytes());
-        std::fs::write(&path, &data).unwrap();
-
-        let result = load_checkpoint(&path);
-        assert!(
-            result.is_err(),
-            "INV-FERR-013: wrong magic must be rejected"
-        );
-    }
-
-    #[test]
-    fn test_inv_ferr_013_deterministic_output() {
-        let store = Store::genesis();
-        let dir = tempfile::TempDir::new().unwrap();
-
-        let path1 = dir.path().join("a.chkp");
-        let path2 = dir.path().join("b.chkp");
-
-        write_checkpoint(&store, &path1).unwrap();
-        write_checkpoint(&store, &path2).unwrap();
-
-        let data1 = std::fs::read(&path1).unwrap();
-        let data2 = std::fs::read(&path2).unwrap();
-
-        assert_eq!(
-            data1, data2,
-            "INV-FERR-031: genesis checkpoint must be deterministic"
-        );
-    }
 }

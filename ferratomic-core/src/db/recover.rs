@@ -7,21 +7,12 @@
 //! All constructors in this module attach a WAL for post-recovery durability.
 //! They return `Database<Ready>` directly.
 
-use std::{
-    marker::PhantomData,
-    path::Path,
-    sync::{atomic::AtomicU64, Mutex},
-};
+use std::path::Path;
 
-use arc_swap::ArcSwap;
-use ferratom::{wire::WireDatom, FerraError, HybridClock};
+use ferratom::{wire::WireDatom, FerraError};
 
 use super::{Database, Ready};
-use crate::{
-    observer::{ObserverBroadcast, DEFAULT_OBSERVER_BUFFER},
-    store::Store,
-    wal::Wal,
-};
+use crate::{store::Store, wal::Wal};
 
 impl Database<Ready> {
     /// Create a genesis database backed by a WAL file.
@@ -35,20 +26,7 @@ impl Database<Ready> {
     /// Returns `FerraError::Io` if the WAL file cannot be created.
     pub fn genesis_with_wal(wal_path: &Path) -> Result<Self, FerraError> {
         let wal = Wal::create(wal_path)?;
-        let store = Store::genesis();
-        let agent = store.genesis_agent();
-        Ok(Self {
-            current: ArcSwap::from_pointee(store),
-            write_lock: Mutex::new(()),
-            wal: Mutex::new(Some(wal)),
-            observers: Mutex::new(ObserverBroadcast::new(DEFAULT_OBSERVER_BUFFER)),
-            write_limiter: crate::backpressure::WriteLimiter::new(
-                &crate::backpressure::BackpressurePolicy::default(),
-            ),
-            transaction_count: AtomicU64::new(0),
-            clock: Mutex::new(HybridClock::new(agent)),
-            _state: PhantomData,
-        })
+        Ok(Self::build(Store::genesis(), Some(wal)))
     }
 
     /// Recover a database from a WAL file.
@@ -78,19 +56,7 @@ impl Database<Ready> {
             store.replay_entry(entry.epoch, &datoms)?;
         }
 
-        let agent = store.genesis_agent();
-        Ok(Self {
-            current: ArcSwap::from_pointee(store),
-            write_lock: Mutex::new(()),
-            wal: Mutex::new(Some(wal)),
-            observers: Mutex::new(ObserverBroadcast::new(DEFAULT_OBSERVER_BUFFER)),
-            write_limiter: crate::backpressure::WriteLimiter::new(
-                &crate::backpressure::BackpressurePolicy::default(),
-            ),
-            transaction_count: AtomicU64::new(0),
-            clock: Mutex::new(HybridClock::new(agent)),
-            _state: PhantomData,
-        })
+        Ok(Self::build(store, Some(wal)))
     }
 
     /// Recover a database from a checkpoint file plus WAL delta.
@@ -126,19 +92,7 @@ impl Database<Ready> {
             }
         }
 
-        let agent = store.genesis_agent();
-        Ok(Self {
-            current: ArcSwap::from_pointee(store),
-            write_lock: Mutex::new(()),
-            wal: Mutex::new(Some(wal)),
-            observers: Mutex::new(ObserverBroadcast::new(DEFAULT_OBSERVER_BUFFER)),
-            write_limiter: crate::backpressure::WriteLimiter::new(
-                &crate::backpressure::BackpressurePolicy::default(),
-            ),
-            transaction_count: AtomicU64::new(0),
-            clock: Mutex::new(HybridClock::new(agent)),
-            _state: PhantomData,
-        })
+        Ok(Self::build(store, Some(wal)))
     }
 
     /// Create a database from an existing store with a new WAL file.
@@ -151,18 +105,6 @@ impl Database<Ready> {
     /// Returns `FerraError::Io` if the WAL file cannot be created.
     pub fn from_store_with_wal(store: Store, wal_path: &Path) -> Result<Self, FerraError> {
         let wal = Wal::create(wal_path)?;
-        let agent = store.genesis_agent();
-        Ok(Self {
-            current: ArcSwap::from_pointee(store),
-            write_lock: Mutex::new(()),
-            wal: Mutex::new(Some(wal)),
-            observers: Mutex::new(ObserverBroadcast::new(DEFAULT_OBSERVER_BUFFER)),
-            write_limiter: crate::backpressure::WriteLimiter::new(
-                &crate::backpressure::BackpressurePolicy::default(),
-            ),
-            transaction_count: AtomicU64::new(0),
-            clock: Mutex::new(HybridClock::new(agent)),
-            _state: PhantomData,
-        })
+        Ok(Self::build(store, Some(wal)))
     }
 }

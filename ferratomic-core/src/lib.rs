@@ -129,7 +129,7 @@
 //!
 //! # Quick Start
 //!
-//! ```no_run
+//! ```rust
 //! use ferratom::{AgentId, Attribute, EntityId, Value};
 //! use ferratomic_core::db::Database;
 //! use ferratomic_core::writer::Transaction;
@@ -187,6 +187,12 @@ pub mod topology;
 pub(crate) mod transport;
 pub mod wal;
 pub mod writer;
+
+// INV-FERR-017: Shard equivalence — the algebraic property that partitioning
+// the datom set by any deterministic function and merging the partitions
+// produces an identical result to operating on the full set. Proven in
+// ferratomic-verify (Lean: Concurrency.lean, proptest: crdt_properties).
+// Production sharding deferred to Phase 4b (bd-nhui).
 
 // Phase 4b+
 // pub mod federation;

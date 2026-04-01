@@ -12,7 +12,10 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+pub mod confidence;
+pub mod fault_injection;
 pub mod generators;
+pub mod invariant_catalog;
 
 #[path = "../stateright/mod.rs"]
 pub mod stateright_models;

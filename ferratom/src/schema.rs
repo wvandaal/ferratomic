@@ -187,13 +187,15 @@ impl Schema {
             if *existing == def {
                 return; // Idempotent: same definition already installed.
             }
-            // INV-FERR-043: conflicting schema redefinition detected.
-            // Production resolves via last-write-wins to maintain forward
-            // compatibility with schema evolution. Warning only — not a panic.
-            eprintln!(
-                "WARN [ferratom] INV-FERR-043: conflicting schema redefinition \
-                 for {attr:?}: existing={existing:?}, new={def:?}"
-            );
+            // INV-FERR-043: conflicting schema redefinition.
+            // Resolution: last-write-wins (the new definition replaces the old).
+            // This is the designed behavior for schema evolution — a later
+            // transaction may intentionally redefine an attribute's type.
+            // Merge-level conflict detection lives in Store::from_merge
+            // (ferratomic-core), not in the leaf crate type.
+            //
+            // No I/O here — ferratom is a pure algebraic type crate (zero deps,
+            // no side effects). Diagnostics belong at the call site.
         }
         self.attrs.insert(attr, def);
     }
@@ -252,54 +254,42 @@ mod tests {
         );
     }
 
+    /// Shorthand: build an LWW card-one `AttributeDef` with no doc string.
+    fn lww_one(value_type: ValueType) -> AttributeDef {
+        AttributeDef {
+            value_type,
+            cardinality: Cardinality::One,
+            resolution_mode: ResolutionMode::Lww,
+            doc: None,
+        }
+    }
+
+    /// Collect sorted attribute names from a schema for assertion.
+    fn sorted_attr_names(schema: &Schema) -> Vec<&str> {
+        schema.iter().map(|(attr, _)| attr.as_str()).collect()
+    }
+
     #[test]
-    #[allow(clippy::too_many_lines)]
     fn test_inv_ferr_031_schema_iter_is_deterministic() {
         let schema_a = Schema::from_attrs([
-            (
-                Attribute::from("tx/time"),
-                AttributeDef {
-                    value_type: ValueType::Instant,
-                    cardinality: Cardinality::One,
-                    resolution_mode: ResolutionMode::Lww,
-                    doc: None,
-                },
-            ),
+            (Attribute::from("tx/time"), lww_one(ValueType::Instant)),
             doc_attr("doc-a"),
             (
                 Attribute::from("db/cardinality"),
-                AttributeDef {
-                    value_type: ValueType::Keyword,
-                    cardinality: Cardinality::One,
-                    resolution_mode: ResolutionMode::Lww,
-                    doc: None,
-                },
+                lww_one(ValueType::Keyword),
             ),
         ]);
         let schema_b = Schema::from_attrs([
             (
                 Attribute::from("db/cardinality"),
-                AttributeDef {
-                    value_type: ValueType::Keyword,
-                    cardinality: Cardinality::One,
-                    resolution_mode: ResolutionMode::Lww,
-                    doc: None,
-                },
+                lww_one(ValueType::Keyword),
             ),
-            (
-                Attribute::from("tx/time"),
-                AttributeDef {
-                    value_type: ValueType::Instant,
-                    cardinality: Cardinality::One,
-                    resolution_mode: ResolutionMode::Lww,
-                    doc: None,
-                },
-            ),
+            (Attribute::from("tx/time"), lww_one(ValueType::Instant)),
             doc_attr("doc-a"),
         ]);
 
-        let attrs_a: Vec<&str> = schema_a.iter().map(|(attr, _)| attr.as_str()).collect();
-        let attrs_b: Vec<&str> = schema_b.iter().map(|(attr, _)| attr.as_str()).collect();
+        let attrs_a = sorted_attr_names(&schema_a);
+        let attrs_b = sorted_attr_names(&schema_b);
 
         assert_eq!(
             attrs_a, attrs_b,

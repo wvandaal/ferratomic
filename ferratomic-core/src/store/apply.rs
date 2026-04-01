@@ -4,6 +4,7 @@
 //! INV-FERR-005: Secondary indexes updated in lockstep with primary set.
 //! INV-FERR-007: Epoch strictly monotonically increasing on each transact.
 //! INV-FERR-009: Schema evolution via schema-defining datoms.
+//! INV-FERR-010: Merge convergence — `from_merge` constructs SEC-convergent state.
 //! INV-FERR-014: WAL replay restores last committed state.
 //!
 //! This module contains all mutating operations on the [`Store`]:
@@ -16,13 +17,10 @@
 //! Private helpers [`stamp_datoms`] and [`create_tx_metadata`] live here
 //! because they are only called by [`Store::transact`].
 
-use ferratom::{AgentId, Attribute, Datom, FerraError, Schema};
+use ferratom::{AgentId, Attribute, Datom, FerraError};
 
 use super::{Store, TxReceipt};
-use crate::{
-    indexes::Indexes,
-    writer::{Committed, Transaction},
-};
+use crate::writer::{Committed, Transaction};
 
 // ---------------------------------------------------------------------------
 // Mutating methods on Store
@@ -66,33 +64,6 @@ impl Store {
         // db/cardinality triples and installs new attributes.
         crate::schema_evolution::evolve_schema(&mut self.schema, datoms)?;
         Ok(())
-    }
-
-    /// Construct a store from merging two stores: union datoms, union schemas,
-    /// take max epoch.
-    ///
-    /// INV-FERR-001..003: datoms are the set union.
-    /// INV-FERR-009: schema is the union of both schemas (all attributes from both).
-    /// INV-FERR-007: epoch is `max(a.epoch, b.epoch)` -- the merged store is at
-    /// least as current as either input.
-    #[must_use]
-    pub fn from_merge(a: &Store, b: &Store) -> Self {
-        let datoms = a.datoms.clone().union(b.datoms.clone());
-        let indexes = Indexes::from_datoms(datoms.iter());
-        let schema = merge_schemas(&a.schema, &b.schema);
-        let epoch = a.epoch.max(b.epoch);
-        // HI-014: min() is commutative: min(a,b) == min(b,a).
-        let genesis_agent = std::cmp::min(a.genesis_agent, b.genesis_agent);
-        let live_set = super::build_live_set(datoms.iter());
-
-        Self {
-            datoms,
-            indexes,
-            schema,
-            epoch,
-            genesis_agent,
-            live_set,
-        }
     }
 
     /// Apply a committed transaction to the store.
@@ -178,39 +149,6 @@ impl Store {
         let tx_id = ferratom::TxId::with_agent(self.epoch.wrapping_add(1), 0, agent);
         self.transact(transaction, tx_id)
     }
-}
-
-// ---------------------------------------------------------------------------
-// Schema merge helper (private)
-// ---------------------------------------------------------------------------
-
-/// INV-FERR-043: Union two schemas with deterministic conflict resolution.
-///
-/// INV-FERR-001: schema merge must be commutative. When both schemas
-/// define the same attribute with different definitions, keep the one
-/// that sorts first by `Ord` (commutativity: `min(a,b) == min(b,a)`).
-fn merge_schemas(a: &Schema, b: &Schema) -> Schema {
-    let mut schema = Schema::empty();
-    for (attr, def) in a.iter().chain(b.iter()) {
-        match schema.get(attr) {
-            None => {
-                schema.define(attr.clone(), def.clone());
-            }
-            Some(existing) => {
-                if existing != def {
-                    eprintln!(
-                        "WARN [ferratomic-core] INV-FERR-043: merge found conflicting \
-                         schema for {attr:?}: {existing:?} vs {def:?}. \
-                         Keeping first in sort order.",
-                    );
-                    if def < existing {
-                        schema.define(attr.clone(), def.clone());
-                    }
-                }
-            }
-        }
-    }
-    schema
 }
 
 // ---------------------------------------------------------------------------
@@ -413,66 +351,52 @@ mod tests {
         );
     }
 
+    /// Helper: evolve a store's schema by adding a new attribute with the given
+    /// ident, value-type keyword, and agent byte.
+    fn evolve_schema(
+        store: &mut Store,
+        content_seed: &[u8],
+        ident: &str,
+        value_type: &str,
+        agent_byte: u8,
+    ) {
+        let tx = crate::writer::Transaction::new(AgentId::from_bytes([agent_byte; 16]))
+            .assert_datom(
+                EntityId::from_content(content_seed),
+                Attribute::from("db/ident"),
+                Value::Keyword(ident.into()),
+            )
+            .assert_datom(
+                EntityId::from_content(content_seed),
+                Attribute::from("db/valueType"),
+                Value::Keyword(value_type.into()),
+            )
+            .assert_datom(
+                EntityId::from_content(content_seed),
+                Attribute::from("db/cardinality"),
+                Value::Keyword("db.cardinality/one".into()),
+            )
+            .commit(store.schema())
+            .expect("valid schema tx");
+        store.transact_test(tx).expect("transact ok");
+    }
+
     /// Regression: bd-3n6 -- merge stores with disjoint schemas unions all attributes.
     #[test]
-    #[allow(clippy::too_many_lines)]
-    // Test complexity justified — schema evolution on two stores then merge verification
     fn test_bug_bd_3n6_merge_disjoint_schemas() {
         use crate::merge::merge;
 
         let mut a = Store::genesis();
         let mut b = Store::genesis();
 
-        // Evolve A's schema: add user/name (String)
-        let tx_a = crate::writer::Transaction::new(AgentId::from_bytes([1u8; 16]))
-            .assert_datom(
-                EntityId::from_content(b"attr-user-name"),
-                Attribute::from("db/ident"),
-                Value::Keyword("user/name".into()),
-            )
-            .assert_datom(
-                EntityId::from_content(b"attr-user-name"),
-                Attribute::from("db/valueType"),
-                Value::Keyword("db.type/string".into()),
-            )
-            .assert_datom(
-                EntityId::from_content(b"attr-user-name"),
-                Attribute::from("db/cardinality"),
-                Value::Keyword("db.cardinality/one".into()),
-            )
-            .commit(a.schema())
-            .expect("valid schema tx");
-        a.transact_test(tx_a).expect("transact a ok");
+        evolve_schema(&mut a, b"attr-user-name", "user/name", "db.type/string", 1);
+        evolve_schema(&mut b, b"attr-user-age", "user/age", "db.type/long", 2);
 
-        // Evolve B's schema: add user/age (Long)
-        let tx_b = crate::writer::Transaction::new(AgentId::from_bytes([2u8; 16]))
-            .assert_datom(
-                EntityId::from_content(b"attr-user-age"),
-                Attribute::from("db/ident"),
-                Value::Keyword("user/age".into()),
-            )
-            .assert_datom(
-                EntityId::from_content(b"attr-user-age"),
-                Attribute::from("db/valueType"),
-                Value::Keyword("db.type/long".into()),
-            )
-            .assert_datom(
-                EntityId::from_content(b"attr-user-age"),
-                Attribute::from("db/cardinality"),
-                Value::Keyword("db.cardinality/one".into()),
-            )
-            .commit(b.schema())
-            .expect("valid schema tx");
-        b.transact_test(tx_b).expect("transact b ok");
-
-        // A has: genesis 4 + user/name = 5 attrs
-        // B has: genesis 4 + user/age = 5 attrs
         assert!(a.schema().get(&Attribute::from("user/name")).is_some());
         assert!(b.schema().get(&Attribute::from("user/age")).is_some());
 
         let merged = merge(&a, &b).expect("merge disjoint schema stores");
 
-        // Merged must have genesis 19 + user/name + user/age = 21
         assert_eq!(
             merged.schema().len(),
             21,

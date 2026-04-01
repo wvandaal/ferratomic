@@ -184,6 +184,26 @@ pub(crate) fn evolve_schema(schema: &mut Schema, datoms: &[Datom]) -> Result<(),
     Ok(())
 }
 
+/// Extract a keyword string from a [`Value`], or `None` for non-keyword variants.
+///
+/// INV-FERR-009: exhaustive match ensures a new `Value` variant triggers a
+/// compile error here, forcing explicit handling rather than silent skip.
+fn as_keyword(value: &ferratom::Value) -> Option<&str> {
+    match value {
+        ferratom::Value::Keyword(kw) => Some(kw.as_ref()),
+        ferratom::Value::String(_)
+        | ferratom::Value::Long(_)
+        | ferratom::Value::Double(_)
+        | ferratom::Value::Bool(_)
+        | ferratom::Value::Instant(_)
+        | ferratom::Value::Uuid(_)
+        | ferratom::Value::Bytes(_)
+        | ferratom::Value::Ref(_)
+        | ferratom::Value::BigInt(_)
+        | ferratom::Value::BigDec(_) => None,
+    }
+}
+
 /// Extract a schema attribute definition from a group of entity datoms.
 ///
 /// Returns `Some((attribute, definition))` when the entity carries all three
@@ -200,9 +220,8 @@ fn extract_attribute_def(
         (None, None, None);
 
     for d in datoms {
-        let kw = match d.value() {
-            ferratom::Value::Keyword(kw) => kw.as_ref(),
-            _ => continue,
+        let Some(kw) = as_keyword(d.value()) else {
+            continue;
         };
         let attr = d.attribute();
         if attr == db_ident {

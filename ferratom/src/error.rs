@@ -250,78 +250,92 @@ impl From<std::io::Error> for FerraError {
 mod tests {
     use super::*;
 
-    /// Construct every `FerraError` variant, format it with `Display`, and
-    /// verify that the output is non-empty and contains a keyword that
-    /// identifies the error category. This catches regressions where a new
-    /// variant is added but its `Display` arm is missing or empty.
-    #[test]
-    #[allow(clippy::too_many_lines)] // Exhaustive enum variant coverage requires listing all 12
-    fn display_output_is_nonempty_and_contains_keyword() {
-        let cases: Vec<(FerraError, &str)> = vec![
+    /// Assert that a single `FerraError` variant's `Display` output is
+    /// non-empty and contains the expected keyword.
+    fn assert_display_contains(error: &FerraError, keyword: &str) {
+        let output = format!("{error}");
+        assert!(
+            !output.is_empty(),
+            "Display output for {error:?} must not be empty",
+        );
+        assert!(
+            output.contains(keyword),
+            "Display output for {error:?} must contain \"{keyword}\", got: \"{output}\"",
+        );
+    }
+
+    /// Simple error variants (single-field or unit) for Display testing.
+    fn simple_display_cases() -> Vec<(FerraError, &'static str)> {
+        vec![
             (FerraError::WalWrite("disk full".into()), "WAL"),
             (FerraError::WalRead("truncated entry".into()), "WAL"),
+            (FerraError::CheckpointWrite("denied".into()), "Checkpoint"),
+            (FerraError::Io("broken pipe".into()), "I/O"),
+            (FerraError::EmptyTransaction, "Empty transaction"),
+            (FerraError::Backpressure, "backpressure"),
+        ]
+    }
+
+    /// Struct-variant error cases for Display testing.
+    fn struct_display_cases() -> Vec<(FerraError, &'static str)> {
+        vec![
             (
                 FerraError::CheckpointCorrupted {
-                    expected: "abc123".into(),
-                    actual: "def456".into(),
+                    expected: "a".into(),
+                    actual: "b".into(),
                 },
                 "Checkpoint",
             ),
             (
-                FerraError::CheckpointWrite("permission denied".into()),
-                "Checkpoint",
-            ),
-            (FerraError::Io("broken pipe".into()), "I/O"),
-            (
                 FerraError::UnknownAttribute {
-                    attribute: "user/age".into(),
+                    attribute: "x".into(),
                 },
                 "Unknown attribute",
             ),
             (
                 FerraError::SchemaViolation {
-                    attribute: "user/name".into(),
-                    expected: "String".into(),
-                    got: "Int".into(),
+                    attribute: "n".into(),
+                    expected: "S".into(),
+                    got: "I".into(),
                 },
                 "Schema violation",
             ),
-            (FerraError::EmptyTransaction, "Empty transaction"),
             (
                 FerraError::SchemaIncompatible {
-                    attribute: "user/email".into(),
-                    left: "String".into(),
-                    right: "Ref".into(),
+                    attribute: "e".into(),
+                    left: "S".into(),
+                    right: "R".into(),
                 },
                 "Schema incompatible",
             ),
-            (FerraError::Backpressure, "backpressure"),
             (
                 FerraError::PeerUnreachable {
-                    addr: "10.0.0.1:9090".into(),
-                    reason: "connection refused".into(),
+                    addr: "1.2.3.4:80".into(),
+                    reason: "refused".into(),
                 },
                 "Peer unreachable",
             ),
             (
                 FerraError::InvariantViolation {
-                    invariant: "INV-FERR-005".into(),
-                    details: "index desync".into(),
+                    invariant: "INV-005".into(),
+                    details: "desync".into(),
                 },
                 "INVARIANT VIOLATION",
             ),
-        ];
+        ]
+    }
 
-        for (error, keyword) in &cases {
-            let output = format!("{error}");
-            assert!(
-                !output.is_empty(),
-                "Display output for {error:?} must not be empty",
-            );
-            assert!(
-                output.contains(keyword),
-                "Display output for {error:?} must contain \"{keyword}\", got: \"{output}\"",
-            );
+    /// Construct every `FerraError` variant, format it with `Display`, and
+    /// verify that the output is non-empty and contains a keyword that
+    /// identifies the error category. This catches regressions where a new
+    /// variant is added but its `Display` arm is missing or empty.
+    #[test]
+    fn display_output_is_nonempty_and_contains_keyword() {
+        for (error, keyword) in &simple_display_cases() {
+            assert_display_contains(error, keyword);
+        }
+        for (error, keyword) in &struct_display_cases() {
+            assert_display_contains(error, keyword);
         }
     }
 

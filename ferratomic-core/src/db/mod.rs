@@ -8,13 +8,14 @@
 //!
 //! ## Typestate
 //!
-//! `Database<Opening>` -- initialization in progress (conceptual).
+//! `Database<Opening>` -- initialization in progress. Only `finish()` available.
 //! `Database<Ready>` -- fully initialized; reads and writes available.
 //!
-//! All constructors return `Database<Ready>` directly. The default type
-//! parameter is `Ready`, so bare `Database` equals `Database<Ready>`.
-//! Methods `transact()`, `snapshot()`, `epoch()`, `schema()`, and
-//! `register_observer()` are only available on `Database<Ready>`.
+//! Convenience constructors (`genesis`, `from_store`, etc.) return
+//! `Database<Ready>` directly via internal `Opening` → `finish()` transition.
+//! The default type parameter is `Ready`, so bare `Database` equals
+//! `Database<Ready>`. Methods `transact()`, `snapshot()`, `epoch()`,
+//! `schema()`, and `register_observer()` are only on `Database<Ready>`.
 //!
 //! ## Architecture (ADR-FERR-003)
 //!
@@ -28,8 +29,12 @@
 //! - `transact`: transaction application (`Database::transact`).
 //! - `recover`: WAL and checkpoint recovery constructors.
 
+mod observe;
 mod recover;
 mod transact;
+
+#[cfg(test)]
+mod tests;
 
 use std::{
     marker::PhantomData,
@@ -37,10 +42,10 @@ use std::{
 };
 
 use arc_swap::ArcSwap;
-use ferratom::{FerraError, HybridClock, Schema};
+use ferratom::{HybridClock, Schema};
 
 use crate::{
-    observer::{DatomObserver, ObserverBroadcast, DEFAULT_OBSERVER_BUFFER},
+    observer::{ObserverBroadcast, DEFAULT_OBSERVER_BUFFER},
     store::{Snapshot, Store},
 };
 
@@ -48,11 +53,21 @@ use crate::{
 // Typestate markers
 // ---------------------------------------------------------------------------
 
+/// Marker: database initialization in progress. Only `finish()` is available.
+///
+/// `Database<Opening>` cannot call `snapshot()`, `transact()`, `schema()`, or
+/// `epoch()`. These become available after `finish()` transitions to
+/// `Database<Ready>`. Phase 4b will add validation and actor startup in
+/// `finish()`.
+#[derive(Debug)]
+pub struct Opening;
+
 /// Marker: database initialization is complete. Reads (`snapshot`, `schema`,
 /// `epoch`) and writes (`transact`, `register_observer`) are available.
 ///
-/// All public constructors (`genesis`, `recover`, `from_store`, etc.) return
-/// `Database<Ready>`.
+/// All convenience constructors (`genesis`, `recover`, `from_store`, etc.)
+/// return `Database<Ready>` directly by internally going through
+/// `Database<Opening>` → `finish()`.
 #[derive(Debug)]
 pub struct Ready;
 
@@ -64,12 +79,13 @@ pub struct Ready;
 ///
 /// # Typestate
 ///
-/// `Database<Opening>` -- initialization in progress (genesis, recovery).
+/// `Database<Opening>` -- initialization in progress. Only `finish()` available.
 /// `Database<Ready>` -- fully initialized; reads and writes are available.
 ///
-/// All public constructors return `Database<Ready>` directly. The `Opening`
-/// state exists in the type system for future phased-initialization flows
-/// and to document the two lifecycle phases explicitly.
+/// Convenience constructors return `Database<Ready>` directly via internal
+/// `Opening` → `finish()` transition. The `Opening` state is available for
+/// phased-initialization flows where callers need to inspect or configure
+/// the database before enabling reads and writes.
 ///
 /// The default type parameter is `Ready`, so bare `Database` (without an
 /// explicit parameter) is `Database<Ready>`. Existing code that does not
@@ -123,10 +139,63 @@ pub struct Database<S = Ready> {
 }
 
 // ---------------------------------------------------------------------------
+// Opening state — initialization in progress
+// ---------------------------------------------------------------------------
+
+impl Database<Opening> {
+    /// Assemble a `Database<Opening>` from a store and optional WAL.
+    ///
+    /// All constructors delegate here (bd-bgdt). The `Opening` state
+    /// enforces that `snapshot()` and `transact()` are unavailable until
+    /// `finish()` is called, making invalid state transitions compile errors.
+    fn build_opening(store: Store, wal: Option<crate::wal::Wal>) -> Self {
+        let agent = store.genesis_agent();
+        Self {
+            current: ArcSwap::from_pointee(store),
+            write_lock: Mutex::new(()),
+            wal: Mutex::new(wal),
+            observers: Mutex::new(ObserverBroadcast::new(DEFAULT_OBSERVER_BUFFER)),
+            write_limiter: crate::backpressure::WriteLimiter::new(
+                &crate::backpressure::BackpressurePolicy::default(),
+            ),
+            transaction_count: AtomicU64::new(0),
+            clock: Mutex::new(HybridClock::new(agent)),
+            _state: PhantomData,
+        }
+    }
+
+    /// Transition from `Opening` to `Ready`, enabling reads and writes.
+    ///
+    /// INV-FERR-006: after this call, `snapshot()`, `transact()`, `schema()`,
+    /// and `epoch()` become available. Phase 4b will add validation and
+    /// actor startup logic here.
+    #[must_use]
+    pub fn finish(self) -> Database<Ready> {
+        Database {
+            current: self.current,
+            write_lock: self.write_lock,
+            wal: self.wal,
+            observers: self.observers,
+            write_limiter: self.write_limiter,
+            transaction_count: self.transaction_count,
+            clock: self.clock,
+            _state: PhantomData,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // In-memory constructors -- no WAL
 // ---------------------------------------------------------------------------
 
 impl Database<Ready> {
+    /// Assemble a `Database<Ready>` from a store and optional WAL.
+    ///
+    /// Convenience helper: goes through `Opening` → `finish()` internally.
+    fn build(store: Store, wal: Option<crate::wal::Wal>) -> Self {
+        Database::<Opening>::build_opening(store, wal).finish()
+    }
+
     /// Create a new database from a genesis store (no WAL).
     ///
     /// INV-FERR-031: The initial store is deterministic -- identical on
@@ -137,20 +206,7 @@ impl Database<Ready> {
     /// [`genesis_with_wal`](Self::genesis_with_wal) for durability.
     #[must_use]
     pub fn genesis() -> Self {
-        let store = Store::genesis();
-        let agent = store.genesis_agent();
-        Self {
-            current: ArcSwap::from_pointee(store),
-            write_lock: Mutex::new(()),
-            wal: Mutex::new(None),
-            observers: Mutex::new(ObserverBroadcast::new(DEFAULT_OBSERVER_BUFFER)),
-            write_limiter: crate::backpressure::WriteLimiter::new(
-                &crate::backpressure::BackpressurePolicy::default(),
-            ),
-            transaction_count: AtomicU64::new(0),
-            clock: Mutex::new(HybridClock::new(agent)),
-            _state: PhantomData,
-        }
+        Self::build(Store::genesis(), None)
     }
 
     /// Create a database from an existing store (no WAL).
@@ -159,19 +215,7 @@ impl Database<Ready> {
     /// INV-FERR-007: epoch ordering continues from the store's current epoch.
     #[must_use]
     pub fn from_store(store: Store) -> Self {
-        let agent = store.genesis_agent();
-        Self {
-            current: ArcSwap::from_pointee(store),
-            write_lock: Mutex::new(()),
-            wal: Mutex::new(None),
-            observers: Mutex::new(ObserverBroadcast::new(DEFAULT_OBSERVER_BUFFER)),
-            write_limiter: crate::backpressure::WriteLimiter::new(
-                &crate::backpressure::BackpressurePolicy::default(),
-            ),
-            transaction_count: AtomicU64::new(0),
-            clock: Mutex::new(HybridClock::new(agent)),
-            _state: PhantomData,
-        }
+        Self::build(store, None)
     }
 }
 
@@ -180,31 +224,6 @@ impl Database<Ready> {
 // ---------------------------------------------------------------------------
 
 impl Database<Ready> {
-    /// Register a push-based datom observer.
-    ///
-    /// INV-FERR-011: the observer is caught up to the current store state
-    /// before future commit notifications are delivered.
-    ///
-    /// # Errors
-    ///
-    /// Returns `FerraError::InvariantViolation` if the observer registry
-    /// mutex is poisoned.
-    pub fn register_observer(&self, observer: Box<dyn DatomObserver>) -> Result<(), FerraError> {
-        // HI-016: Acquire the observer mutex BEFORE loading the current store.
-        // Previously, a concurrent transact() between load() and lock() could
-        // commit an epoch that the new observer would permanently miss.
-        let mut observers = self
-            .observers
-            .lock()
-            .map_err(|_| FerraError::InvariantViolation {
-                invariant: "INV-FERR-011".to_string(),
-                details: "observer registry mutex poisoned during register".to_string(),
-            })?;
-        let current = self.current.load();
-        observers.register(observer, current.as_ref());
-        Ok(())
-    }
-
     /// Take an immutable point-in-time snapshot.
     ///
     /// INV-FERR-006: The returned snapshot is frozen at the moment of the
@@ -246,303 +265,3 @@ impl Database<Ready> {
 // Mutex<()> is Send+Sync. PhantomData<S> is Send+Sync for any S.
 // Therefore Database<S> is Send+Sync and can be shared across
 // threads via Arc<Database>.
-
-#[cfg(test)]
-mod tests {
-    use std::sync::{Arc as StdArc, Mutex as StdMutex};
-
-    use ferratom::{AgentId, Attribute, EntityId, Value};
-
-    use super::*;
-    use crate::{observer::DatomObserver, wal::Wal, writer::Transaction};
-
-    #[derive(Debug, Clone, PartialEq, Eq)]
-    enum ObserverEvent {
-        Commit { epoch: u64, count: usize },
-        Catchup { from_epoch: u64, count: usize },
-    }
-
-    struct RecordingObserver {
-        name: &'static str,
-        events: StdArc<StdMutex<Vec<ObserverEvent>>>,
-    }
-
-    impl RecordingObserver {
-        fn new(name: &'static str, events: StdArc<StdMutex<Vec<ObserverEvent>>>) -> Self {
-            Self { name, events }
-        }
-    }
-
-    impl DatomObserver for RecordingObserver {
-        fn on_commit(&self, epoch: u64, datoms: &[ferratom::Datom]) {
-            self.events
-                .lock()
-                .expect("observer commit events lock")
-                .push(ObserverEvent::Commit {
-                    epoch,
-                    count: datoms.len(),
-                });
-        }
-
-        fn on_catchup(&self, from_epoch: u64, datoms: &[ferratom::Datom]) {
-            self.events
-                .lock()
-                .expect("observer catchup events lock")
-                .push(ObserverEvent::Catchup {
-                    from_epoch,
-                    count: datoms.len(),
-                });
-        }
-
-        fn name(&self) -> &str {
-            self.name
-        }
-    }
-
-    /// INV-FERR-031: genesis produces a deterministic database.
-    #[test]
-    fn test_inv_ferr_031_genesis_determinism() {
-        let db1 = Database::genesis();
-        let db2 = Database::genesis();
-        assert_eq!(
-            db1.epoch(),
-            db2.epoch(),
-            "INV-FERR-031: genesis databases must have identical epochs"
-        );
-        let s1 = db1.snapshot();
-        let s2 = db2.snapshot();
-        assert_eq!(
-            s1.epoch(),
-            s2.epoch(),
-            "INV-FERR-031: genesis snapshots must have identical epochs"
-        );
-    }
-
-    /// INV-FERR-006: snapshot isolation -- a snapshot taken before a write
-    /// does not see the write's effects.
-    #[test]
-    fn test_inv_ferr_006_snapshot_isolation() {
-        let db = Database::genesis();
-        let before = db.snapshot();
-
-        let agent = AgentId::from_bytes([1u8; 16]);
-        let schema = db.schema();
-        let tx = Transaction::new(agent)
-            .assert_datom(
-                EntityId::from_content(b"e1"),
-                Attribute::from("db/doc"),
-                Value::String("hello".into()),
-            )
-            .commit(&schema);
-
-        match tx {
-            Ok(committed) => {
-                let result = db.transact(committed);
-                assert!(
-                    result.is_ok(),
-                    "INV-FERR-007: transact on genesis db must succeed"
-                );
-
-                let after = db.snapshot();
-
-                // Before-snapshot must not see the new datom.
-                assert_eq!(
-                    before.epoch(),
-                    0,
-                    "INV-FERR-006: pre-write snapshot epoch must be 0"
-                );
-                // After-snapshot must see epoch advance.
-                assert_eq!(
-                    after.epoch(),
-                    1,
-                    "INV-FERR-007: post-write snapshot epoch must be 1"
-                );
-            }
-            Err(e) => panic!("Transaction commit failed unexpectedly: {e}"),
-        }
-    }
-
-    /// INV-FERR-007: epoch strictly increases with each transact.
-    #[test]
-    fn test_inv_ferr_007_epoch_monotonicity() {
-        let db = Database::genesis();
-        assert_eq!(db.epoch(), 0, "INV-FERR-031: genesis epoch is 0");
-
-        let agent = AgentId::from_bytes([2u8; 16]);
-        let schema = db.schema();
-
-        for i in 1u64..=3 {
-            let tx = Transaction::new(agent)
-                .assert_datom(
-                    EntityId::from_content(format!("e{i}").as_bytes()),
-                    Attribute::from("db/doc"),
-                    Value::String(format!("doc-{i}").into()),
-                )
-                .commit(&schema);
-
-            match tx {
-                Ok(committed) => {
-                    let receipt = db.transact(committed);
-                    match receipt {
-                        Ok(r) => assert_eq!(
-                            r.epoch(),
-                            i,
-                            "INV-FERR-007: epoch must equal {i} after transaction {i}"
-                        ),
-                        Err(e) => panic!("transact failed on iteration {i}: {e}"),
-                    }
-                }
-                Err(e) => panic!("commit failed on iteration {i}: {e}"),
-            }
-        }
-
-        assert_eq!(
-            db.epoch(),
-            3,
-            "INV-FERR-007: final epoch must be 3 after 3 transactions"
-        );
-    }
-
-    /// INV-FERR-006: `from_store` preserves the store's state.
-    #[test]
-    fn test_inv_ferr_006_from_store() {
-        let store = Store::genesis();
-        let epoch = store.epoch();
-        let db = Database::from_store(store);
-        assert_eq!(
-            db.epoch(),
-            epoch,
-            "INV-FERR-006: from_store must preserve epoch"
-        );
-    }
-
-    #[test]
-    fn test_inv_ferr_011_register_observer_delivers_catchup() {
-        let db = Database::genesis();
-        let agent = AgentId::from_bytes([7u8; 16]);
-        let schema = db.schema();
-
-        for i in 0..2i64 {
-            let tx = Transaction::new(agent)
-                .assert_datom(
-                    EntityId::from_content(format!("catchup-{i}").as_bytes()),
-                    Attribute::from("db/doc"),
-                    Value::String(format!("doc-{i}").into()),
-                )
-                .commit(&schema)
-                .expect("valid tx");
-            db.transact(tx).expect("transact succeeds");
-        }
-
-        let events = StdArc::new(StdMutex::new(Vec::new()));
-        let observer = Box::new(RecordingObserver::new("catchup", StdArc::clone(&events)));
-        db.register_observer(observer)
-            .expect("observer registration succeeds");
-
-        let recorded = events.lock().expect("events lock");
-        assert!(
-            matches!(recorded.as_slice(), [ObserverEvent::Catchup { from_epoch: 0, count }] if *count > 0),
-            "register_observer must catch up existing state, got {:?}",
-            *recorded
-        );
-    }
-
-    #[test]
-    fn test_inv_ferr_011_transact_notifies_registered_observer() {
-        let db = Database::genesis();
-        let events = StdArc::new(StdMutex::new(Vec::new()));
-        let observer = Box::new(RecordingObserver::new("commit", StdArc::clone(&events)));
-        db.register_observer(observer)
-            .expect("observer registration succeeds");
-
-        let schema = db.schema();
-        let tx = Transaction::new(AgentId::from_bytes([8u8; 16]))
-            .assert_datom(
-                EntityId::from_content(b"observer-commit"),
-                Attribute::from("db/doc"),
-                Value::String("observed".into()),
-            )
-            .commit(&schema)
-            .expect("valid tx");
-        db.transact(tx).expect("transact succeeds");
-
-        let recorded = events.lock().expect("events lock");
-        assert!(
-            recorded.iter().any(|event| {
-                matches!(event, ObserverEvent::Commit { epoch: 1, count } if *count > 0)
-            }),
-            "registered observer must receive commit notification, got {:?}",
-            *recorded
-        );
-    }
-
-    // -- Regression tests for cleanroom review defects -------------------------
-
-    /// Regression: bd-2w9 -- Database with WAL writes WAL before epoch advance.
-    #[test]
-    fn test_bug_bd_2w9_wal_written_on_transact() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let wal_path = dir.path().join("test.wal");
-
-        let db = Database::genesis_with_wal(&wal_path).unwrap();
-        let agent = AgentId::from_bytes([1u8; 16]);
-        let schema = db.schema();
-
-        let tx = Transaction::new(agent)
-            .assert_datom(
-                EntityId::from_content(b"e1"),
-                Attribute::from("db/doc"),
-                Value::String("hello from wal".into()),
-            )
-            .commit(&schema)
-            .expect("valid tx");
-
-        db.transact(tx).expect("transact should succeed");
-
-        // Verify WAL was written: open and recover
-        let mut wal = Wal::open(&wal_path).expect("WAL must exist");
-        let entries = wal.recover().expect("recovery must succeed");
-        assert_eq!(
-            entries.len(),
-            1,
-            "bd-2w9: WAL must contain 1 entry after 1 transact"
-        );
-        assert_eq!(entries[0].epoch, 1, "bd-2w9: WAL entry epoch must be 1");
-    }
-
-    /// Regression: bd-2w9 -- `recover_from_wal` restores state.
-    #[test]
-    fn test_bug_bd_2w9_recover_from_wal() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let wal_path = dir.path().join("test.wal");
-
-        // Write via WAL-backed database
-        {
-            let db = Database::genesis_with_wal(&wal_path).unwrap();
-            let agent = AgentId::from_bytes([1u8; 16]);
-            let schema = db.schema();
-
-            for i in 0..3i64 {
-                let tx = Transaction::new(agent)
-                    .assert_datom(
-                        EntityId::from_content(format!("e{i}").as_bytes()),
-                        Attribute::from("db/doc"),
-                        Value::String(format!("doc-{i}").into()),
-                    )
-                    .commit(&schema)
-                    .expect("valid tx");
-                db.transact(tx).expect("transact ok");
-            }
-        }
-
-        // Recover from WAL alone (simulating crash + restart)
-        let recovered = Database::recover_from_wal(&wal_path).expect("recovery must succeed");
-        let snap = recovered.snapshot();
-
-        // Must have datoms from all 3 transactions (user datoms + tx metadata)
-        assert!(
-            snap.datoms().count() > 0,
-            "bd-2w9: recovered database must have datoms"
-        );
-    }
-}

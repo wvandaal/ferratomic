@@ -54,40 +54,45 @@ mod tests {
 
     use super::*;
 
-    /// INV-FERR-013: in-memory checkpoint byte round-trip preserves store identity.
-    ///
-    /// bd-rdvs: Verifies `Store::from_checkpoint_bytes(&store.to_checkpoint_bytes()?)` produces
-    /// a store with identical datom set, epoch, schema length, and valid index bijection.
-    #[test]
-    #[allow(clippy::too_many_lines)]
-    fn test_inv_ferr_013_store_bytes_roundtrip() {
-        use crate::writer::Transaction;
-
-        // -- Empty genesis store round-trips --
-        let genesis = Store::genesis();
-        let bytes = genesis
+    /// Helper: assert that a loaded store matches the original after bytes round-trip.
+    fn assert_bytes_roundtrip(original: &Store, label: &str) -> Vec<u8> {
+        let bytes = original
             .to_checkpoint_bytes()
-            .expect("INV-FERR-013: genesis serialization must succeed");
+            .unwrap_or_else(|_| panic!("INV-FERR-013: {label} serialization must succeed"));
         let loaded = Store::from_checkpoint_bytes(&bytes)
-            .expect("INV-FERR-013: genesis deserialization must succeed");
+            .unwrap_or_else(|_| panic!("INV-FERR-013: {label} deserialization must succeed"));
 
         assert_eq!(
             *loaded.datom_set(),
-            *genesis.datom_set(),
-            "INV-FERR-013: genesis datom set must survive bytes round-trip"
+            *original.datom_set(),
+            "INV-FERR-013: {label} datom set must survive bytes round-trip"
         );
         assert_eq!(
             loaded.epoch(),
-            genesis.epoch(),
-            "INV-FERR-013: genesis epoch must survive bytes round-trip"
+            original.epoch(),
+            "INV-FERR-013: {label} epoch must survive bytes round-trip"
         );
         assert_eq!(
             loaded.schema().len(),
-            genesis.schema().len(),
-            "INV-FERR-013: genesis schema must survive bytes round-trip"
+            original.schema().len(),
+            "INV-FERR-013: {label} schema must survive bytes round-trip"
         );
+        bytes
+    }
 
-        // -- Store with datoms round-trips --
+    /// INV-FERR-013: genesis store bytes round-trip preserves identity.
+    #[test]
+    fn test_inv_ferr_013_genesis_bytes_roundtrip() {
+        let genesis = Store::genesis();
+        assert_bytes_roundtrip(&genesis, "genesis");
+    }
+
+    /// INV-FERR-013: store with datoms bytes round-trip preserves identity,
+    /// indexes, and matches file-based checkpoint output.
+    #[test]
+    fn test_inv_ferr_013_store_bytes_roundtrip() {
+        use crate::writer::Transaction;
+
         let mut store = Store::genesis();
         let tx = Transaction::new(store.genesis_agent())
             .assert_datom(
@@ -98,27 +103,9 @@ mod tests {
             .commit_unchecked();
         store.transact_test(tx).expect("transact ok");
 
-        let bytes = store
-            .to_checkpoint_bytes()
-            .expect("INV-FERR-013: serialization must succeed");
-        let loaded = Store::from_checkpoint_bytes(&bytes)
-            .expect("INV-FERR-013: deserialization must succeed");
+        let bytes = assert_bytes_roundtrip(&store, "datoms");
 
-        assert_eq!(
-            *loaded.datom_set(),
-            *store.datom_set(),
-            "INV-FERR-013: datom set must be identical after bytes round-trip"
-        );
-        assert_eq!(
-            loaded.epoch(),
-            store.epoch(),
-            "INV-FERR-013: epoch must be preserved after bytes round-trip"
-        );
-        assert_eq!(
-            loaded.schema().len(),
-            store.schema().len(),
-            "INV-FERR-013: schema must be preserved after bytes round-trip"
-        );
+        let loaded = Store::from_checkpoint_bytes(&bytes).expect("reload ok");
         assert!(
             loaded.indexes().verify_bijection(),
             "INV-FERR-005: all indexes must have same cardinality after bytes round-trip"
@@ -129,7 +116,7 @@ mod tests {
             "INV-FERR-005: index len must match primary after bytes round-trip"
         );
 
-        // -- Bytes match what write_checkpoint would produce --
+        // Bytes match what write_checkpoint would produce
         let dir = tempfile::TempDir::new().expect("tmpdir");
         let path = dir.path().join("compare.chkp");
         crate::checkpoint::write_checkpoint(&store, &path).expect("write ok");
