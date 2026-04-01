@@ -1,6 +1,7 @@
 //! Schema validation integration tests.
 //!
-//! INV-FERR-009, INV-FERR-031.
+//! INV-FERR-009, INV-FERR-019 (error Display), INV-FERR-023 (no unsafe),
+//! INV-FERR-031.
 //! Phase 4a: all tests passing against ferratomic-core implementation.
 
 use ferratom::{AgentId, Attribute, EntityId, Value};
@@ -309,4 +310,125 @@ fn test_inv_ferr_019_error_exhaustiveness() {
         12,
         "INV-FERR-019: expected 12 FerraError variants — update this test if variants are added"
     );
+}
+
+/// INV-FERR-019: Every `FerraError` variant produces non-empty `Display` output.
+///
+/// Constructs every variant and verifies that `fmt::Display` and
+/// `std::error::Error` produce meaningful, non-empty strings. This is the
+/// Display-focused integration complement to the exhaustive-match test above.
+///
+/// bd-oizy: raises INV-FERR-019 verification depth to 4+ layers.
+#[test]
+fn test_inv_ferr_019_error_display_all_variants() {
+    use ferratom::FerraError;
+
+    let variants: Vec<(&str, FerraError)> = vec![
+        ("WalWrite", FerraError::WalWrite("disk full".into())),
+        ("WalRead", FerraError::WalRead("corrupt frame".into())),
+        (
+            "CheckpointCorrupted",
+            FerraError::CheckpointCorrupted {
+                expected: "aabb".into(),
+                actual: "ccdd".into(),
+            },
+        ),
+        (
+            "CheckpointWrite",
+            FerraError::CheckpointWrite("io error".into()),
+        ),
+        ("Io", FerraError::Io("permission denied".into())),
+        (
+            "UnknownAttribute",
+            FerraError::UnknownAttribute {
+                attribute: "ghost/attr".into(),
+            },
+        ),
+        (
+            "SchemaViolation",
+            FerraError::SchemaViolation {
+                attribute: "user/age".into(),
+                expected: "Long".into(),
+                got: "String".into(),
+            },
+        ),
+        ("EmptyTransaction", FerraError::EmptyTransaction),
+        ("Backpressure", FerraError::Backpressure),
+        (
+            "PeerUnreachable",
+            FerraError::PeerUnreachable {
+                addr: "10.0.0.1:9000".into(),
+                reason: "timeout".into(),
+            },
+        ),
+        (
+            "SchemaIncompatible",
+            FerraError::SchemaIncompatible {
+                attribute: "user/name".into(),
+                left: "String".into(),
+                right: "Keyword".into(),
+            },
+        ),
+        (
+            "InvariantViolation",
+            FerraError::InvariantViolation {
+                invariant: "INV-FERR-007".into(),
+                details: "epoch overflow".into(),
+            },
+        ),
+    ];
+
+    for (name, error) in &variants {
+        // Display must produce non-empty output.
+        let display = format!("{error}");
+        assert!(
+            !display.is_empty(),
+            "INV-FERR-019: Display for {name} must produce non-empty output"
+        );
+
+        // std::error::Error must also produce non-empty output.
+        let as_error: &dyn std::error::Error = error;
+        let error_str = format!("{as_error}");
+        assert!(
+            !error_str.is_empty(),
+            "INV-FERR-019: Error trait for {name} must produce non-empty output"
+        );
+
+        // Display and Error should produce the same string.
+        assert_eq!(
+            display, error_str,
+            "INV-FERR-019: Display and Error output must match for {name}"
+        );
+    }
+}
+
+/// INV-FERR-023: All workspace crates contain `#![forbid(unsafe_code)]`.
+///
+/// Compile-time defense: the `forbid(unsafe_code)` attribute makes `unsafe`
+/// blocks a hard error. This integration test reads the source files to
+/// verify the attribute is present -- a belt-and-suspenders check that
+/// catches accidental removal even before compilation.
+///
+/// bd-oizy: raises INV-FERR-023 verification depth to 4+ layers.
+#[test]
+fn test_inv_ferr_023_forbid_unsafe_code() {
+    let lib_files = [
+        concat!(env!("CARGO_MANIFEST_DIR"), "/../ferratom/src/lib.rs"),
+        concat!(env!("CARGO_MANIFEST_DIR"), "/../ferratomic-core/src/lib.rs"),
+        concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../ferratomic-datalog/src/lib.rs"
+        ),
+        concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs"),
+    ];
+
+    for path in &lib_files {
+        let content = std::fs::read_to_string(path)
+            .unwrap_or_else(|e| panic!("INV-FERR-023: cannot read {path}: {e}"));
+        assert!(
+            content.contains("#![forbid(unsafe_code)]"),
+            "INV-FERR-023 violated: {path} is missing #![forbid(unsafe_code)]. \
+             Every crate in the workspace must forbid unsafe code.",
+        );
+    }
 }

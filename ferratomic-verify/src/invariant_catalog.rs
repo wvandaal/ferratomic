@@ -296,7 +296,7 @@ pub const CATALOG: &[Invariant] = &[
         proptest_fn: Some("inv_ferr_023_no_unsafe_code"),
         kani_harness: None,
         stateright_model: None,
-        integration_test: None,
+        integration_test: Some("test_inv_ferr_023_forbid_unsafe_code"),
     },
     Invariant {
         id: "INV-FERR-024",
@@ -329,7 +329,7 @@ pub const CATALOG: &[Invariant] = &[
         proptest_fn: Some("inv_ferr_026_write_amplification"),
         kani_harness: None,
         stateright_model: None,
-        integration_test: None,
+        integration_test: Some("threshold_inv_ferr_026_write_amplification"),
     },
     Invariant {
         id: "INV-FERR-027",
@@ -339,7 +339,7 @@ pub const CATALOG: &[Invariant] = &[
         proptest_fn: Some("inv_ferr_027_read_latency_lookup"),
         kani_harness: None,
         stateright_model: None,
-        integration_test: None,
+        integration_test: Some("threshold_inv_ferr_027_read_latency"),
     },
     Invariant {
         id: "INV-FERR-028",
@@ -349,7 +349,7 @@ pub const CATALOG: &[Invariant] = &[
         proptest_fn: Some("inv_ferr_028_cold_start_checkpoint_correctness"),
         kani_harness: None,
         stateright_model: None,
-        integration_test: None,
+        integration_test: Some("threshold_inv_ferr_028_cold_start"),
     },
     Invariant {
         id: "INV-FERR-029",
