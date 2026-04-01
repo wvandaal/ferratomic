@@ -43,7 +43,10 @@ impl Store {
         let schema_merge = merge_schemas(&a.schema, &b.schema);
         let epoch = a.epoch.max(b.epoch);
         let genesis_agent = std::cmp::min(a.genesis_agent, b.genesis_agent);
-        let live_causal = super::query::build_live_causal(datoms.iter());
+        // INV-FERR-029: merge causal LIVE lattices via per-key max(TxId).
+        // O(min(|L_A|, |L_B|)) via im::OrdMap union — replaces the O(N) full
+        // rebuild through build_live_causal(datoms.iter()).
+        let live_causal = merge_causal(&a.live_causal, &b.live_causal);
         let live_set = super::query::derive_live_set(&live_causal);
 
         Self {
@@ -57,6 +60,28 @@ impl Store {
             schema_conflicts: schema_merge.conflicts,
         }
     }
+}
+
+/// INV-FERR-029: Merge two causal LIVE lattices by per-key `max(TxId)`.
+///
+/// For each `(entity, attribute, value)` triple present in either input,
+/// retains the event with the highest `TxId`. This is a join-semilattice
+/// operation (commutative, associative, idempotent) and a lattice
+/// homomorphism over datom set union:
+///
+///   `merge_causal(LIVE(A), LIVE(B)) = LIVE(A ∪ B)`
+///
+/// Complexity: `O(min(|L_A|, |L_B|))` via `im::OrdMap::union_with`.
+fn merge_causal(
+    a: &super::query::LiveCausal,
+    b: &super::query::LiveCausal,
+) -> super::query::LiveCausal {
+    a.clone().union_with(b.clone(), |entries_a, entries_b| {
+        entries_a.union_with(
+            entries_b,
+            |ev_a, ev_b| if ev_b.0 > ev_a.0 { ev_b } else { ev_a },
+        )
+    })
 }
 
 /// INV-FERR-043: Union two schemas with deterministic conflict resolution.
