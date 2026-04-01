@@ -391,6 +391,7 @@ fn parse_epoch(content: &[u8]) -> Result<u64, FerraError> {
 }
 
 fn parse_payload_len(content: &[u8]) -> Result<usize, FerraError> {
+    // u32→usize: lossless on 32+ bit platforms (Rust minimum).
     Ok(u32::from_le_bytes(read_header_bytes(content, 14, "4-byte payload length")?) as usize)
 }
 

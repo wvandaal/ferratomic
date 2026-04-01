@@ -87,7 +87,9 @@ impl Wal {
 /// # Errors
 ///
 /// Returns `FerraError::WalRead` on I/O errors during the read.
-pub fn recover_wal_from_reader<R: IoRead>(reader: &mut R) -> Result<Vec<WalEntry>, FerraError> {
+pub(crate) fn recover_wal_from_reader<R: IoRead>(
+    reader: &mut R,
+) -> Result<Vec<WalEntry>, FerraError> {
     let mut buf = Vec::new();
     reader
         .read_to_end(&mut buf)
@@ -145,7 +147,7 @@ fn try_parse_frame(buf: &[u8], pos: usize) -> Option<(WalEntry, usize)> {
 
     // Payload length (4 bytes)
     let len_bytes: [u8; 4] = buf[pos + 14..pos + 18].try_into().ok()?;
-    let payload_len = u32::from_le_bytes(len_bytes) as usize;
+    let payload_len = u32::from_le_bytes(len_bytes) as usize; // u32→usize: lossless on 32+ bit
 
     // HI-006: Reject frames with payload exceeding MAX_PAYLOAD_SIZE to
     // prevent OOM on crafted frames with spoofed length fields.
