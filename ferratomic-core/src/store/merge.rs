@@ -104,16 +104,15 @@ fn merge_schemas(a: &Schema, b: &Schema) -> SchemaMergeResult {
                 // INV-FERR-043: conflicting schema definitions resolved
                 // deterministically by keeping the def that sorts first.
                 // Commutativity preserved: min(a,b) == min(b,a).
-                // This is expected in federation when two stores evolve
-                // the same attribute differently.
-                let (kept, discarded) = if def < existing {
-                    (def.clone(), existing.clone())
-                } else {
-                    (existing.clone(), def.clone())
-                };
-                if def < existing {
+                // Clone existing to release the immutable borrow on schema
+                // before the potential mutable schema.define() call.
+                let existing_owned = existing.clone();
+                let (kept, discarded) = if def < &existing_owned {
                     schema.define(attr.clone(), def.clone());
-                }
+                    (def.clone(), existing_owned)
+                } else {
+                    (existing_owned, def.clone())
+                };
                 conflicts.push(SchemaConflict {
                     attribute: attr.clone(),
                     kept,

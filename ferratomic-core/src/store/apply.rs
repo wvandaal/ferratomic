@@ -49,6 +49,8 @@ impl Store {
     ///
     /// INV-FERR-014: restores committed state by inserting datoms and
     /// advancing the epoch. Used by `Database::open` during WAL replay.
+    /// INV-FERR-009: evolves schema from schema-defining datoms in the
+    /// replayed entry, preventing schema loss across crash recovery.
     ///
     /// # Errors
     ///
@@ -131,12 +133,12 @@ impl Store {
         })
     }
 
-    /// Test-only convenience: transact with a synthetic epoch-based `TxId`.
+    /// Test-only convenience: applies a transaction with a synthetic
+    /// epoch-based `TxId` derived from `self.epoch + 1`.
     ///
-    /// Production code MUST use `transact(tx, hlc_tx_id)` with an HLC-derived
-    /// `TxId` from `Database::transact`. This method exists only so that tests
-    /// calling `Store::transact` directly (without a `Database`) don't need
-    /// to construct an HLC.
+    /// Bypasses the HLC clock that `Database::transact` provides, making
+    /// it suitable for tests that operate on `Store` directly without
+    /// constructing a full `Database`.
     ///
     /// # Errors
     ///
