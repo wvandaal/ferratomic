@@ -4,6 +4,7 @@
 
 **Traces to**: SEED.md §5 (Harvest/Seed Lifecycle — durability), INV-STORE-009,
 INV-FERR-005 (Index Bijection), INV-FERR-008 (WAL Fsync Ordering)
+**Referenced by**: INV-FERR-070 (zero-copy cold start), INV-FERR-074 (homomorphic fingerprint), INV-FERR-075 (LIVE-first checkpoint)
 **Verification**: `V:PROP`, `V:KANI`, `V:LEAN`
 **Stage**: 0
 

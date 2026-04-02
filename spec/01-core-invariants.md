@@ -358,6 +358,7 @@ theorem merge_monotone_right (a b : DatomStore) : b ⊆ merge a b := by
 ### INV-FERR-005: Index Bijection
 
 **Traces to**: SEED.md 4, INV-STORE-012
+**Referenced by**: INV-FERR-071 (sorted-array backend), INV-FERR-073 (permutation index fusion)
 **Verification**: `V:PROP`, `V:KANI`
 **Stage**: 0
 
@@ -499,6 +500,7 @@ theorem index_membership_after_apply (s : DatomStore) (d : Datom) :
 
 **Traces to**: SEED.md 4 Axiom 3 (Snapshots), INV-STORE-013,
 ADR-FERR-001 (Persistent Data Structures), ADR-FERR-003 (Concurrency Model)
+**Referenced by**: INV-FERR-072 (lazy representation promotion)
 **Verification**: `V:PROP`, `V:KANI`, `V:MODEL`
 **Stage**: 0
 

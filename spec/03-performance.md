@@ -4,6 +4,7 @@
 
 **Traces to**: C8 (Substrate Independence), INV-FERR-005 (Index Bijection),
 ADR-FERR-001 (Persistent Data Structures)
+**Referenced by**: INV-FERR-071 (sorted-array backend), INV-FERR-072 (lazy promotion), INV-FERR-073 (permutation index fusion)
 **Verification**: `V:TYPE`, `V:PROP`
 **Stage**: 0
 
@@ -299,6 +300,7 @@ theorem write_amplification_model (s : DatomStore) (d : Datom) (h : d ∉ s) :
 
 **Traces to**: SEED.md §10, INV-FERR-006 (Snapshot Isolation),
 ADR-FERR-001 (Persistent Data Structures), ADR-FERR-003 (Concurrency Model)
+**Referenced by**: INV-FERR-071 (sorted-array backend — 4.5x lookup improvement)
 **Verification**: `V:PROP`
 **Stage**: 0
 
@@ -435,6 +437,7 @@ theorem read_total (s : DatomStore) (d : Datom) :
 ### INV-FERR-028: Cold Start Latency
 
 **Traces to**: SEED.md §10, INV-FERR-013 (Checkpoint Equivalence), INV-FERR-014 (Recovery)
+**Referenced by**: INV-FERR-070 (zero-copy cold start — I/O-bound target), INV-FERR-075 (LIVE-first checkpoint — 2-10x reduction)
 **Verification**: `V:PROP`
 **Stage**: 0
 
@@ -589,6 +592,7 @@ theorem cold_start_correct (s : DatomStore) :
 ### INV-FERR-029: LIVE View Resolution
 
 **Traces to**: SEED.md §4, C1, INV-STORE-001, INV-STORE-012
+**Referenced by**: INV-FERR-075 (LIVE-first checkpoint — idempotent LIVE projection)
 **Verification**: `V:PROP`, `V:KANI`, `V:LEAN`
 **Stage**: 0
 
