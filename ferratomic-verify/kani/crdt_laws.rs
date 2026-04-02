@@ -8,9 +8,14 @@ use std::collections::BTreeSet;
 use ferratom::{AgentId, Attribute, Datom, EntityId, Value};
 use ferratomic_core::{merge::merge, store::Store, writer::Transaction};
 
+#[cfg(not(kani))]
+use super::kani;
+
 /// INV-FERR-001: merge(A, B) == merge(B, A).
-#[kani::proof]
-#[kani::unwind(10)]
+#[cfg_attr(kani, kani::proof)]
+#[cfg_attr(kani, kani::unwind(10))]
+#[cfg_attr(not(kani), test)]
+#[cfg_attr(not(kani), ignore = "requires Kani verifier")]
 fn merge_commutativity() {
     let a: BTreeSet<Datom> = kani::any();
     let b: BTreeSet<Datom> = kani::any();
@@ -23,8 +28,10 @@ fn merge_commutativity() {
 }
 
 /// INV-FERR-002: merge(merge(A, B), C) == merge(A, merge(B, C)).
-#[kani::proof]
-#[kani::unwind(10)]
+#[cfg_attr(kani, kani::proof)]
+#[cfg_attr(kani, kani::unwind(10))]
+#[cfg_attr(not(kani), test)]
+#[cfg_attr(not(kani), ignore = "requires Kani verifier")]
 fn merge_associativity() {
     let a: BTreeSet<Datom> = kani::any();
     let b: BTreeSet<Datom> = kani::any();
@@ -41,8 +48,10 @@ fn merge_associativity() {
 }
 
 /// INV-FERR-003: merge(A, A) == A.
-#[kani::proof]
-#[kani::unwind(10)]
+#[cfg_attr(kani, kani::proof)]
+#[cfg_attr(kani, kani::unwind(10))]
+#[cfg_attr(not(kani), test)]
+#[cfg_attr(not(kani), ignore = "requires Kani verifier")]
 fn merge_idempotency() {
     let a: BTreeSet<Datom> = kani::any();
     kani::assume(a.len() <= 5);
@@ -52,8 +61,10 @@ fn merge_idempotency() {
 }
 
 /// INV-FERR-004: every apply step is monotone over the datom set.
-#[kani::proof]
-#[kani::unwind(10)]
+#[cfg_attr(kani, kani::proof)]
+#[cfg_attr(kani, kani::unwind(10))]
+#[cfg_attr(not(kani), test)]
+#[cfg_attr(not(kani), ignore = "requires Kani verifier")]
 fn monotonic_growth() {
     let s: BTreeSet<Datom> = kani::any();
     let d: Datom = kani::any();
@@ -67,8 +78,10 @@ fn monotonic_growth() {
 }
 
 /// INV-FERR-010: replicas that receive the same updates converge.
-#[kani::proof]
-#[kani::unwind(8)]
+#[cfg_attr(kani, kani::proof)]
+#[cfg_attr(kani, kani::unwind(8))]
+#[cfg_attr(not(kani), test)]
+#[cfg_attr(not(kani), ignore = "requires Kani verifier")]
 fn convergence_two_replicas() {
     let datoms: Vec<Datom> = (0..kani::any::<u8>().min(4)).map(|_| kani::any()).collect();
 
@@ -86,8 +99,10 @@ fn convergence_two_replicas() {
 }
 
 /// INV-FERR-010: merge preserves convergence for concrete store values.
-#[kani::proof]
-#[kani::unwind(8)]
+#[cfg_attr(kani, kani::proof)]
+#[cfg_attr(kani, kani::unwind(8))]
+#[cfg_attr(not(kani), test)]
+#[cfg_attr(not(kani), ignore = "requires Kani verifier")]
 fn convergence_under_merge() {
     let a_datoms: BTreeSet<Datom> = kani::any();
     let b_datoms: BTreeSet<Datom> = kani::any();
@@ -106,8 +121,10 @@ fn convergence_under_merge() {
 ///
 /// Bounded to 2 transactions of 1 datom each for Kani tractability.
 /// After each successful transact, store.len() is >= the previous value.
-#[kani::proof]
-#[kani::unwind(8)]
+#[cfg_attr(kani, kani::proof)]
+#[cfg_attr(kani, kani::unwind(8))]
+#[cfg_attr(not(kani), test)]
+#[cfg_attr(not(kani), ignore = "requires Kani verifier")]
 fn store_transact_monotonic_growth() {
     let mut store = Store::genesis();
     let agent = AgentId::from_bytes([1u8; 16]);
@@ -150,8 +167,10 @@ fn store_transact_monotonic_growth() {
 /// INV-FERR-031: two Store::genesis() calls produce identical stores.
 ///
 /// Genesis is deterministic: same datom set, same schema, same epoch.
-#[kani::proof]
-#[kani::unwind(4)]
+#[cfg_attr(kani, kani::proof)]
+#[cfg_attr(kani, kani::unwind(4))]
+#[cfg_attr(not(kani), test)]
+#[cfg_attr(not(kani), ignore = "requires Kani verifier")]
 fn genesis_determinism() {
     let a = Store::genesis();
     let b = Store::genesis();

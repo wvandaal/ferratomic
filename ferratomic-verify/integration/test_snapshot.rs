@@ -329,6 +329,30 @@ fn inv_ferr_011_database_observer_commit_delivery() {
     );
 }
 
+/// Assert that a `FerraError` is an `InvariantViolation` citing the expected
+/// invariant and containing the expected keyword in its details.
+fn assert_invariant_violation(
+    err: &ferratom::FerraError,
+    expected_invariant: &str,
+    expected_keyword: &str,
+) {
+    match err {
+        ferratom::FerraError::InvariantViolation { invariant, details } => {
+            assert_eq!(
+                invariant, expected_invariant,
+                "error must cite {expected_invariant}, got invariant={invariant}"
+            );
+            assert!(
+                details.contains(expected_keyword),
+                "error details must mention '{expected_keyword}', got details={details}"
+            );
+        }
+        other => {
+            panic!("expected InvariantViolation, got {other:?}");
+        }
+    }
+}
+
 /// INV-FERR-007: Epoch overflow must return InvariantViolation, not panic.
 ///
 /// When the epoch counter is at u64::MAX, `Store::transact` calls
@@ -338,22 +362,10 @@ fn inv_ferr_011_database_observer_commit_delivery() {
 ///
 /// bd-n1i: error-path test for epoch overflow.
 #[test]
-#[allow(clippy::too_many_lines)]
-// Test complexity justified — epoch overflow with error variant verification
 fn test_inv_ferr_007_epoch_overflow() {
-    // Construct a store whose epoch is already at u64::MAX via
-    // from_checkpoint — the only public constructor that accepts
-    // an arbitrary epoch value.
     let agent = AgentId::from_bytes([7u8; 16]);
-    let mut store = Store::from_checkpoint(
-        u64::MAX,
-        agent,
-        Vec::new(), // empty schema
-        Vec::new(), // empty datoms
-    );
+    let mut store = Store::from_checkpoint(u64::MAX, agent, Vec::new(), Vec::new());
 
-    // Build a transaction with at least one datom so it passes the
-    // empty-transaction guard.
     let tx = Transaction::new(agent)
         .assert_datom(
             EntityId::from_content(b"overflow-entity"),
@@ -363,31 +375,12 @@ fn test_inv_ferr_007_epoch_overflow() {
         .commit_unchecked();
 
     let result = store.transact_test(tx);
-
-    // Must be an error, not a panic or silent wrap-around.
     assert!(
         result.is_err(),
-        "INV-FERR-007: transact at epoch u64::MAX must fail, not wrap"
+        "INV-FERR-007: transact at u64::MAX must fail"
     );
 
-    let err = result.unwrap_err();
-    match &err {
-        ferratom::FerraError::InvariantViolation { invariant, details } => {
-            assert_eq!(
-                invariant, "INV-FERR-007",
-                "INV-FERR-007: error must cite INV-FERR-007, got invariant={invariant}"
-            );
-            assert!(
-                details.contains("overflow"),
-                "INV-FERR-007: error details must mention overflow, got details={details}"
-            );
-        }
-        other => {
-            panic!("INV-FERR-007: expected InvariantViolation, got {other:?}");
-        }
-    }
-
-    // Store epoch must remain at u64::MAX (unchanged by failed transaction).
+    assert_invariant_violation(&result.unwrap_err(), "INV-FERR-007", "overflow");
     assert_eq!(
         store.epoch(),
         u64::MAX,
@@ -638,13 +631,20 @@ fn inv_ferr_020_transaction_epoch_atomicity() {
     }
 }
 
+/// Assert that a `WriteLimiter` has exactly `expected` active guards.
+fn assert_limiter_count(
+    limiter: &ferratomic_core::backpressure::WriteLimiter,
+    expected: usize,
+    context: &str,
+) {
+    assert_eq!(limiter.active_count(), expected, "INV-FERR-021: {context}");
+}
+
 /// INV-FERR-021: `WriteLimiter` correctly bounds concurrent writes.
 ///
 /// Integration-level test: acquire to capacity, verify overflow rejected,
 /// release and re-acquire.
 #[test]
-#[allow(clippy::too_many_lines)]
-// Test complexity justified — full backpressure lifecycle: fill, overflow, release, re-acquire
 fn inv_ferr_021_backpressure_integration() {
     use ferratomic_core::backpressure::{BackpressurePolicy, WriteLimiter};
 
@@ -660,62 +660,57 @@ fn inv_ferr_021_backpressure_integration() {
     assert!(g1.is_some(), "INV-FERR-021: first acquire must succeed");
     assert!(g2.is_some(), "INV-FERR-021: second acquire must succeed");
     assert!(g3.is_some(), "INV-FERR-021: third acquire must succeed");
-    assert_eq!(
-        limiter.active_count(),
-        3,
-        "INV-FERR-021: active count must be 3"
-    );
+    assert_limiter_count(&limiter, 3, "active count must be 3 after 3 acquires");
 
     // 4th acquire must fail.
-    let overflow = limiter.try_acquire();
     assert!(
-        overflow.is_none(),
-        "INV-FERR-021: acquire beyond capacity must fail"
+        limiter.try_acquire().is_none(),
+        "INV-FERR-021: overflow must fail"
     );
-    assert_eq!(
-        limiter.active_count(),
-        3,
-        "INV-FERR-021: failed acquire must not change active count"
-    );
+    assert_limiter_count(&limiter, 3, "failed acquire must not change count");
 
     // Drop one guard, re-acquire.
     drop(g3);
-    assert_eq!(
-        limiter.active_count(),
-        2,
-        "INV-FERR-021: active must drop to 2"
-    );
+    assert_limiter_count(&limiter, 2, "active must drop to 2 after release");
 
-    let g4 = limiter.try_acquire();
+    let _g4 = limiter.try_acquire();
     assert!(
-        g4.is_some(),
+        _g4.is_some(),
         "INV-FERR-021: acquire after release must succeed"
     );
-    assert_eq!(
-        limiter.active_count(),
-        3,
-        "INV-FERR-021: active must return to 3"
+    assert_limiter_count(&limiter, 3, "active must return to 3");
+}
+
+/// Corrupt a checkpoint file by flipping a byte in its payload region.
+///
+/// The header is 18 bytes (magic=4 + version=2 + epoch=8 + length=4)
+/// and the BLAKE3 hash is the trailing 32 bytes, so the payload sits
+/// in [18 .. len-32).
+fn corrupt_checkpoint_payload(path: &std::path::Path) {
+    let mut data = std::fs::read(path).expect("read checkpoint file");
+    let header_size = 18usize;
+    let hash_size = 32usize;
+    assert!(
+        data.len() > header_size + hash_size,
+        "INV-FERR-013: checkpoint file must be larger than header + hash"
     );
+    let payload_mid = header_size + (data.len() - header_size - hash_size) / 2;
+    data[payload_mid] ^= 0xFF;
+    std::fs::write(path, &data).expect("write corrupted checkpoint");
 }
 
 /// INV-FERR-013: Corrupted checkpoint bytes must be detected and rejected.
 ///
-/// Write a valid checkpoint, flip a byte in the payload region (between
-/// the fixed header and the trailing BLAKE3 hash), then verify that
-/// `load_checkpoint` returns `FerraError::CheckpointCorrupted` with
-/// mismatched checksums.
+/// Write a valid checkpoint, flip a byte in the payload region, then verify
+/// that `load_checkpoint` returns `FerraError::CheckpointCorrupted`.
 ///
 /// bd-n1i: error-path test for checkpoint corruption.
 #[test]
-#[allow(clippy::too_many_lines)]
-// Test complexity justified — checkpoint corruption with error variant verification
 fn test_inv_ferr_013_checkpoint_corruption() {
     use ferratomic_core::checkpoint::{load_checkpoint, write_checkpoint};
 
     let mut store = Store::genesis();
     let agent = AgentId::from_bytes([13u8; 16]);
-
-    // Transact a datom so the payload is non-trivial.
     let tx = Transaction::new(agent)
         .assert_datom(
             EntityId::from_content(b"corruption-entity"),
@@ -727,70 +722,26 @@ fn test_inv_ferr_013_checkpoint_corruption() {
 
     let dir = tempfile::TempDir::new().expect("failed to create temp dir");
     let path = dir.path().join("corrupt.chkp");
-
-    // Write a valid checkpoint.
     write_checkpoint(&store, &path).expect("write_checkpoint failed");
+    corrupt_checkpoint_payload(&path);
 
-    // Read the raw bytes, corrupt a byte in the JSON payload region,
-    // and write it back. The header is 18 bytes (magic=4 + version=2
-    // + epoch=8 + length=4) and the BLAKE3 hash is the trailing 32
-    // bytes, so the payload sits in [18 .. len-32).
-    let mut data = std::fs::read(&path).expect("read checkpoint file");
-    let header_size = 18usize;
-    let hash_size = 32usize;
-    assert!(
-        data.len() > header_size + hash_size,
-        "INV-FERR-013: checkpoint file must be larger than header + hash"
-    );
-
-    // Flip a byte near the middle of the payload.
-    let payload_mid = header_size + (data.len() - header_size - hash_size) / 2;
-    data[payload_mid] ^= 0xFF;
-    std::fs::write(&path, &data).expect("write corrupted checkpoint");
-
-    // Attempt to load — must fail.
     let result = load_checkpoint(&path);
     assert!(
         result.is_err(),
-        "INV-FERR-013: loading a corrupted checkpoint must return an error"
+        "INV-FERR-013: corrupted checkpoint must error"
     );
 
-    let err = result.unwrap_err();
-    match &err {
+    match &result.unwrap_err() {
         ferratom::FerraError::CheckpointCorrupted { expected, actual } => {
-            // The expected and actual fields should be different hex
-            // hash strings, confirming the BLAKE3 integrity check caught
-            // the corruption.
-            assert_ne!(
-                expected, actual,
-                "INV-FERR-013: expected and actual checksums must differ"
-            );
+            assert_ne!(expected, actual, "INV-FERR-013: checksums must differ");
         }
-        other => {
-            panic!("INV-FERR-013: expected CheckpointCorrupted, got {other:?}");
-        }
+        other => panic!("INV-FERR-013: expected CheckpointCorrupted, got {other:?}"),
     }
 }
 
-/// INV-FERR-025: `OrdMapBackend` satisfies `IndexBackend`, bijection holds.
-///
-/// bd-7tb0: verifies that the default `OrdMap`-based index backend maintains
-/// bijection after multiple insertions. All four indexes must have
-/// identical cardinality to the primary datom set.
-#[test]
-#[allow(clippy::too_many_lines)]
-// Test complexity justified — four index backends plus bijection verification
-fn test_inv_ferr_025_index_backend_trait() {
-    use ferratomic_core::indexes::{AevtKey, AvetKey, EavtKey, IndexBackend, VaetKey};
-    use im::OrdMap;
-
-    // Verify OrdMap implements IndexBackend (compile-time check via usage).
-    let mut eavt: OrdMap<EavtKey, ferratom::Datom> = OrdMap::new();
-    let mut aevt: OrdMap<AevtKey, ferratom::Datom> = OrdMap::new();
-    let mut vaet: OrdMap<VaetKey, ferratom::Datom> = OrdMap::new();
-    let mut avet: OrdMap<AvetKey, ferratom::Datom> = OrdMap::new();
-
-    let datoms = vec![
+/// Build test datoms for index backend verification.
+fn build_index_test_datoms() -> Vec<ferratom::Datom> {
+    vec![
         ferratom::Datom::new(
             EntityId::from_content(b"idx-e1"),
             Attribute::from("user/name"),
@@ -812,51 +763,66 @@ fn test_inv_ferr_025_index_backend_trait() {
             ferratom::TxId::new(3, 0, 0),
             ferratom::Op::Assert,
         ),
-    ];
+    ]
+}
 
-    for d in &datoms {
+/// Insert datoms into all four OrdMap index backends and verify cardinality.
+fn verify_ordmap_index_cardinality(datoms: &[ferratom::Datom]) {
+    use ferratomic_core::indexes::{AevtKey, AvetKey, EavtKey, IndexBackend, VaetKey};
+    use im::OrdMap;
+
+    let mut eavt: OrdMap<EavtKey, ferratom::Datom> = OrdMap::new();
+    let mut aevt: OrdMap<AevtKey, ferratom::Datom> = OrdMap::new();
+    let mut vaet: OrdMap<VaetKey, ferratom::Datom> = OrdMap::new();
+    let mut avet: OrdMap<AvetKey, ferratom::Datom> = OrdMap::new();
+
+    for d in datoms {
         eavt.backend_insert(EavtKey::from_datom(d), d.clone());
         aevt.backend_insert(AevtKey::from_datom(d), d.clone());
         vaet.backend_insert(VaetKey::from_datom(d), d.clone());
         avet.backend_insert(AvetKey::from_datom(d), d.clone());
     }
 
-    // All four indexes must have identical cardinality (bijection).
     let expected = datoms.len();
     assert_eq!(
         eavt.backend_len(),
         expected,
-        "INV-FERR-025: EAVT backend len {}, expected {expected}",
-        eavt.backend_len()
+        "INV-FERR-025: EAVT len mismatch"
     );
     assert_eq!(
         aevt.backend_len(),
         expected,
-        "INV-FERR-025: AEVT backend len {}, expected {expected}",
-        aevt.backend_len()
+        "INV-FERR-025: AEVT len mismatch"
     );
     assert_eq!(
         vaet.backend_len(),
         expected,
-        "INV-FERR-025: VAET backend len {}, expected {expected}",
-        vaet.backend_len()
+        "INV-FERR-025: VAET len mismatch"
     );
     assert_eq!(
         avet.backend_len(),
         expected,
-        "INV-FERR-025: AVET backend len {}, expected {expected}",
-        avet.backend_len()
+        "INV-FERR-025: AVET len mismatch"
     );
 
-    // Exact lookup must succeed for each datom.
-    for d in &datoms {
+    for d in datoms {
         let key = EavtKey::from_datom(d);
         assert!(
             eavt.backend_get(&key).is_some(),
-            "INV-FERR-025: EAVT lookup failed for datom with entity {:?}",
+            "INV-FERR-025: EAVT lookup failed for {:?}",
             d.entity()
         );
     }
+}
+
+/// INV-FERR-025: `OrdMapBackend` satisfies `IndexBackend`, bijection holds.
+///
+/// bd-7tb0: verifies that the default `OrdMap`-based index backend maintains
+/// bijection after multiple insertions.
+#[test]
+fn test_inv_ferr_025_index_backend_trait() {
+    let datoms = build_index_test_datoms();
+    verify_ordmap_index_cardinality(&datoms);
 
     // Also verify via the Store-level verify_bijection.
     let mut store = Store::genesis();
@@ -926,55 +892,45 @@ fn test_inv_ferr_029_live_resolution() {
     );
 }
 
-/// INV-FERR-032: LIVE resolution correctness — end-to-end assert+retract+query.
+/// Assert a datom on a database and return the committed transaction result.
+fn assert_on_db(db: &Database, agent: AgentId, entity: EntityId, attr: &Attribute, val: &Value) {
+    let tx = Transaction::new(agent)
+        .assert_datom(entity, attr.clone(), val.clone())
+        .commit(&db.schema())
+        .expect("INV-FERR-032: assert commit");
+    db.transact(tx).expect("INV-FERR-032: assert transact");
+}
+
+/// Retract a datom on a database (unchecked commit for retract).
+fn retract_on_db(db: &Database, agent: AgentId, entity: EntityId, attr: &Attribute, val: &Value) {
+    let tx = Transaction::new(agent)
+        .retract_datom(entity, attr.clone(), val.clone())
+        .commit_unchecked();
+    db.transact(tx).expect("INV-FERR-032: retract transact");
+}
+
+/// INV-FERR-032: LIVE resolution correctness -- end-to-end assert+retract+query.
 ///
 /// bd-7tb0: strengthens INV-FERR-029 by testing multiple entities, attributes,
 /// and interleaved assert/retract sequences via the Database API.
 #[test]
-#[allow(clippy::too_many_lines)]
-// Test complexity justified — multi-entity assert/retract/re-assert sequence
 fn test_inv_ferr_032_live_correctness() {
     let db = Database::genesis();
     let agent = AgentId::from_bytes([32u8; 16]);
-
     let entity_a = EntityId::from_content(b"live-correct-a");
     let entity_b = EntityId::from_content(b"live-correct-b");
     let attr = Attribute::from("db/doc");
     let val_old = Value::String("old-value".into());
     let val_new = Value::String("new-value".into());
 
-    // Step 1: Assert fact A with old value.
-    let tx1 = Transaction::new(agent)
-        .assert_datom(entity_a, attr.clone(), val_old.clone())
-        .commit(&db.schema())
-        .expect("INV-FERR-032: tx1 commit");
-    db.transact(tx1).expect("INV-FERR-032: tx1 transact");
+    assert_on_db(&db, agent, entity_a, &attr, &val_old);
+    assert_on_db(&db, agent, entity_b, &attr, &val_new);
+    retract_on_db(&db, agent, entity_a, &attr, &val_old);
+    assert_on_db(&db, agent, entity_a, &attr, &val_new);
 
-    // Step 2: Assert fact B with new value.
-    let tx2 = Transaction::new(agent)
-        .assert_datom(entity_b, attr.clone(), val_new.clone())
-        .commit(&db.schema())
-        .expect("INV-FERR-032: tx2 commit");
-    db.transact(tx2).expect("INV-FERR-032: tx2 transact");
-
-    // Step 3: Retract fact A with old value.
-    let tx3 = Transaction::new(agent)
-        .retract_datom(entity_a, attr.clone(), val_old.clone())
-        .commit_unchecked();
-    db.transact(tx3).expect("INV-FERR-032: tx3 transact");
-
-    // Step 4: Re-assert fact A with new value.
-    let tx4 = Transaction::new(agent)
-        .assert_datom(entity_a, attr.clone(), val_new.clone())
-        .commit(&db.schema())
-        .expect("INV-FERR-032: tx4 commit");
-    db.transact(tx4).expect("INV-FERR-032: tx4 transact");
-
-    // Compute live view from the current snapshot.
     let snap = db.snapshot();
     let live = compute_live_view_from_snapshot(&snap);
 
-    // Entity A: old value retracted, new value asserted => only new is live.
     assert!(
         !live.contains(&(entity_a, attr.clone(), val_old)),
         "INV-FERR-032: retracted (entity_a, old_value) must not be live"
@@ -983,8 +939,6 @@ fn test_inv_ferr_032_live_correctness() {
         live.contains(&(entity_a, attr.clone(), val_new.clone())),
         "INV-FERR-032: re-asserted (entity_a, new_value) must be live"
     );
-
-    // Entity B: only asserted, never retracted => live.
     assert!(
         live.contains(&(entity_b, attr, val_new)),
         "INV-FERR-032: (entity_b, new_value) was never retracted, must be live"

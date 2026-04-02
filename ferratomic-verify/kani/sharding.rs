@@ -7,9 +7,13 @@ use std::collections::BTreeSet;
 use ferratom::Datom;
 use ferratomic_core::{merge::merge, store::Store};
 
+#[cfg(not(kani))]
+use super::kani;
+
 /// Deterministic entity-hash shard assignment.
 fn shard_id(datom: &Datom, shard_count: usize) -> usize {
-    let entity_hash = datom.entity().as_bytes();
+    let entity = datom.entity();
+    let entity_hash = entity.as_bytes();
     let hash_u64 = u64::from_le_bytes(
         entity_hash[0..8]
             .try_into()
@@ -32,14 +36,18 @@ fn shard(store: &Store, shard_count: usize) -> Vec<Store> {
 
 /// Recompose a sharded store by set union.
 fn unshard(shards: &[Store]) -> Store {
-    shards.iter().fold(Store::empty(), |acc, s| {
-        merge(&acc, s).expect("INV-FERR-017: unshard merge must succeed")
-    })
+    shards
+        .iter()
+        .fold(Store::from_datoms(BTreeSet::new()), |acc, s| {
+            merge(&acc, s).expect("INV-FERR-017: unshard merge must succeed")
+        })
 }
 
 /// INV-FERR-017: sharding followed by unsharding is identity.
-#[kani::proof]
-#[kani::unwind(8)]
+#[cfg_attr(kani, kani::proof)]
+#[cfg_attr(kani, kani::unwind(8))]
+#[cfg_attr(not(kani), test)]
+#[cfg_attr(not(kani), ignore = "requires Kani verifier")]
 fn shard_equivalence() {
     let datoms: BTreeSet<Datom> = kani::any();
     kani::assume(datoms.len() <= 4);
@@ -54,23 +62,25 @@ fn shard_equivalence() {
 }
 
 /// INV-FERR-017: shards form a pairwise-disjoint partition.
-#[kani::proof]
-#[kani::unwind(8)]
+#[cfg_attr(kani, kani::proof)]
+#[cfg_attr(kani, kani::unwind(8))]
+#[cfg_attr(not(kani), test)]
+#[cfg_attr(not(kani), ignore = "requires Kani verifier")]
 fn shard_disjointness() {
     let datoms: BTreeSet<Datom> = kani::any();
     kani::assume(datoms.len() <= 4);
     let shard_count: usize = kani::any();
-    kani::assume(shard_count >= 2 && shard_count <= 4);
+    kani::assume((2..=4).contains(&shard_count));
 
     let store = Store::from_datoms(datoms);
     let shards = shard(&store, shard_count);
 
     for i in 0..shards.len() {
         for j in (i + 1)..shards.len() {
-            let intersection: BTreeSet<_> = shards[i]
+            let intersection = shards[i]
                 .datom_set()
-                .intersection(shards[j].datom_set())
-                .collect();
+                .clone()
+                .intersection(shards[j].datom_set().clone());
             assert!(
                 intersection.is_empty(),
                 "INV-FERR-017: shards {} and {} share datoms",

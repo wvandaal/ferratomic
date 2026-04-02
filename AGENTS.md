@@ -216,10 +216,16 @@ too-many-lines-threshold = 50
 **C4: CRDT merge = set union.** Commutative, associative, idempotent.
 **INV-FERR-023: `#![forbid(unsafe_code)]`** in ALL crates. No exceptions.
 **NEG-FERR-001: No panics.** No `unwrap()`, no `expect()` in production code.
-**Zero clippy suppressions.** No `#[allow(clippy::...)]` or `#[allow(dead_code)]` in
-production code. If clippy flags it, fix the root cause. Suppressions defeat the
-purpose of static analysis. If the lint is genuinely wrong, restructure the code so
-the lint no longer fires — do not silence it.
+**Zero lint escape hatches — in ALL code, including tests and verification.**
+No `#[allow(clippy::...)]`, `#[allow(dead_code)]`, `#[allow(unused_imports)]`, or
+ANY form of lint/warning suppression ANYWHERE in the codebase. No `#[cfg(...)]`
+gating that hides code from the type checker or clippy. No exceptions for test
+code, verification code, or "temporary" suppressions. If clippy or rustc flags it,
+fix the root cause — split the function, restructure the code, remove the dead
+item. Suppressions are a direct violation of the zero-defect cleanroom standard.
+The Kani harness incident proved this: `cfg(kani)` hid 7 API drift bugs that
+would have been caught by normal compilation. Every line of code is always
+type-checked and linted, or it does not exist in this repository.
 **Forbidden crates in core:** `tokio`, `hyper`, `reqwest`, `axum`, `async-std`, `smol`.
 Tokio-only dependencies must be behind `asupersync-tokio-compat` adapter modules.
 Core domain code depends on `asupersync` only (ADR-FERR-002).

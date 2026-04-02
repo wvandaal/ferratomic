@@ -74,13 +74,20 @@ pub enum FerraError {
     /// **Cause**: Generic filesystem or device I/O failure not specific to
     /// WAL or checkpoint operations.
     /// **Fault**: Infrastructure.
-    /// **Recovery**: Retry with backoff. Inspect the `ErrorKind` to
-    /// distinguish `NotFound` from `PermissionDenied` from `Other`.
+    /// **Recovery**: Retry with backoff. Match on `kind` to distinguish
+    /// `"NotFound"` from `"PermissionDenied"` from `"Other"` without
+    /// parsing the message string.
     ///
-    /// HI-017: Preserves `io::ErrorKind` so callers can pattern-match on
-    /// error category without parsing message strings. The `String` holds
-    /// the display message for diagnostics.
-    Io(String),
+    /// HI-017: Preserves `io::ErrorKind` as its `Debug` string so callers
+    /// can pattern-match on error category programmatically. The `message`
+    /// field holds the display message for diagnostics.
+    Io {
+        /// The `io::ErrorKind` debug string (e.g. `"NotFound"`,
+        /// `"PermissionDenied"`, `"Other"`).
+        kind: String,
+        /// Human-readable error message for diagnostics.
+        message: String,
+    },
 
     // ── Validation errors (caller bug, not retryable) ───────────────
     /// Unknown attribute in transaction.
@@ -198,7 +205,7 @@ impl fmt::Display for FerraError {
                 write!(f, "Checkpoint corrupted: expected {expected}, got {actual}")
             }
             Self::CheckpointWrite(msg) => write!(f, "Checkpoint write failed: {msg}"),
-            Self::Io(msg) => write!(f, "I/O error: {msg}"),
+            Self::Io { kind, message } => write!(f, "I/O error ({kind}): {message}"),
             Self::UnknownAttribute { attribute } => {
                 write!(f, "Unknown attribute: {attribute}")
             }
@@ -236,13 +243,15 @@ impl fmt::Display for FerraError {
 impl std::error::Error for FerraError {}
 
 /// Convert `std::io::Error` into `FerraError::Io` for `?` propagation.
+///
+/// HI-017: Preserves `io::ErrorKind` as its `Debug` string so callers
+/// can match on error category without parsing the message.
 impl From<std::io::Error> for FerraError {
     fn from(e: std::io::Error) -> Self {
-        // HI-017: Include ErrorKind in the message string so callers have
-        // some visibility into the error category. A proper fix (changing
-        // the Io variant to include ErrorKind) is deferred to Phase 4b
-        // as it requires updating ~30 callsites.
-        Self::Io(format!("{}: {e}", e.kind()))
+        Self::Io {
+            kind: format!("{:?}", e.kind()),
+            message: e.to_string(),
+        }
     }
 }
 
@@ -270,7 +279,13 @@ mod tests {
             (FerraError::WalWrite("disk full".into()), "WAL"),
             (FerraError::WalRead("truncated entry".into()), "WAL"),
             (FerraError::CheckpointWrite("denied".into()), "Checkpoint"),
-            (FerraError::Io("broken pipe".into()), "I/O"),
+            (
+                FerraError::Io {
+                    kind: "Other".into(),
+                    message: "broken pipe".into(),
+                },
+                "I/O",
+            ),
             (FerraError::EmptyTransaction, "Empty transaction"),
             (FerraError::Backpressure, "backpressure"),
         ]
@@ -350,7 +365,10 @@ mod tests {
                 actual: "b".into(),
             },
             FerraError::CheckpointWrite("test".into()),
-            FerraError::Io("test".into()),
+            FerraError::Io {
+                kind: "Other".into(),
+                message: "test".into(),
+            },
             FerraError::UnknownAttribute {
                 attribute: "x".into(),
             },
@@ -388,13 +406,16 @@ mod tests {
     /// `FerraError` implements `std::error::Error`.
     #[test]
     fn implements_std_error() {
-        let err: Box<dyn std::error::Error> = Box::new(FerraError::Io("test".into()));
+        let err: Box<dyn std::error::Error> = Box::new(FerraError::Io {
+            kind: "Other".into(),
+            message: "test".into(),
+        });
         // Display through the trait object — proves the impl is wired up.
         let msg = format!("{err}");
         assert!(msg.contains("I/O"), "std::error::Error Display should work");
     }
 
-    /// `From<std::io::Error>` produces `FerraError::Io`.
+    /// `From<std::io::Error>` produces `FerraError::Io` with kind preserved.
     #[test]
     fn from_io_error() {
         let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "file missing");
@@ -405,5 +426,15 @@ mod tests {
             msg.contains("file missing"),
             "inner message should be preserved"
         );
+        // HI-017: ErrorKind is preserved as a struct field.
+        if let FerraError::Io { kind, message } = &ferra_err {
+            assert_eq!(kind, "NotFound", "ErrorKind must be preserved");
+            assert!(
+                message.contains("file missing"),
+                "message must contain original text"
+            );
+        } else {
+            panic!("expected FerraError::Io variant");
+        }
     }
 }

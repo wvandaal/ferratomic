@@ -7,8 +7,35 @@
 use ferratom::{AgentId, Attribute, EntityId, FerraError, Value};
 use ferratomic_core::{
     store::Store,
-    writer::{Transaction, TxValidationError},
+    writer::{Building, Transaction, TxValidationError},
 };
+
+/// Build a transaction that defines a new schema attribute with the given ident,
+/// value type, and cardinality on the given entity.
+fn build_define_attribute_tx(
+    agent: AgentId,
+    entity: EntityId,
+    ident: &str,
+    value_type: &str,
+    cardinality: &str,
+) -> Transaction<Building> {
+    Transaction::new(agent)
+        .assert_datom(
+            entity,
+            Attribute::from("db/ident"),
+            Value::Keyword(ident.into()),
+        )
+        .assert_datom(
+            entity,
+            Attribute::from("db/valueType"),
+            Value::Keyword(value_type.into()),
+        )
+        .assert_datom(
+            entity,
+            Attribute::from("db/cardinality"),
+            Value::Keyword(cardinality.into()),
+        )
+}
 
 /// INV-FERR-009 + INV-FERR-031: Genesis schema has axiomatic meta-schema attributes.
 /// All genesis() calls produce identical schemas.
@@ -85,31 +112,19 @@ fn inv_ferr_009_reject_wrong_type() {
 
 /// INV-FERR-009: Schema evolution — define new attribute then use it.
 #[test]
-#[allow(clippy::too_many_lines)]
-// Test complexity justified — schema evolution: define attribute then use it
 fn inv_ferr_009_schema_evolution() {
     let mut store = Store::genesis();
     let agent = AgentId::from_bytes([1u8; 16]);
     let new_attr_entity = EntityId::from_content(b"new-attr-entity");
 
     // First transaction: define a new attribute
-    let define_tx = Transaction::new(agent)
-        .assert_datom(
-            new_attr_entity,
-            Attribute::from("db/ident"),
-            Value::Keyword("user/email".into()),
-        )
-        .assert_datom(
-            new_attr_entity,
-            Attribute::from("db/valueType"),
-            Value::Keyword("db.type/string".into()),
-        )
-        .assert_datom(
-            new_attr_entity,
-            Attribute::from("db/cardinality"),
-            Value::Keyword("db.cardinality/one".into()),
-        );
-
+    let define_tx = build_define_attribute_tx(
+        agent,
+        new_attr_entity,
+        "user/email",
+        "db.type/string",
+        "db.cardinality/one",
+    );
     let committed = define_tx
         .commit(store.schema())
         .expect("define tx should succeed");
@@ -123,7 +138,6 @@ fn inv_ferr_009_schema_evolution() {
         Attribute::from("user/email"),
         Value::String("alice@example.com".into()),
     );
-
     let committed = use_tx
         .commit(store.schema())
         .expect("use tx should succeed");
@@ -257,18 +271,9 @@ fn test_inv_ferr_009_reject_invalid_cardinality() {
     );
 }
 
-/// INV-FERR-019: Every `FerraError` variant can be constructed and exhaustively matched.
-///
-/// This test enumerates ALL variants of `FerraError` without using a wildcard (`_ =>`).
-/// If a new variant is added to the enum, this test will fail to compile until it is
-/// updated — which is the point.
-#[test]
-#[allow(clippy::too_many_lines)]
-// Test complexity justified — exhaustive match over all FerraError variants
-fn test_inv_ferr_019_error_exhaustiveness() {
-    use ferratom::FerraError;
-
-    let variants: Vec<FerraError> = vec![
+/// Construct one instance of every `FerraError` variant for exhaustive testing.
+fn build_all_ferra_error_variants() -> Vec<FerraError> {
+    vec![
         FerraError::WalWrite("test wal write".into()),
         FerraError::WalRead("test wal read".into()),
         FerraError::CheckpointCorrupted {
@@ -276,7 +281,10 @@ fn test_inv_ferr_019_error_exhaustiveness() {
             actual: "def456".into(),
         },
         FerraError::CheckpointWrite("test checkpoint write".into()),
-        FerraError::Io("test io error".into()),
+        FerraError::Io {
+            kind: "Other".into(),
+            message: "test io error".into(),
+        },
         FerraError::UnknownAttribute {
             attribute: "test/attr".into(),
         },
@@ -300,82 +308,85 @@ fn test_inv_ferr_019_error_exhaustiveness() {
             invariant: "INV-FERR-005".into(),
             details: "test invariant violation".into(),
         },
-    ];
+    ]
+}
 
-    // Exhaustive match on every variant — no wildcards.
-    // Adding a new FerraError variant will cause a compile error here.
-    for error in &variants {
-        match error {
-            FerraError::WalWrite(msg) => {
-                assert!(!msg.is_empty(), "WalWrite message should not be empty");
-            }
-            FerraError::WalRead(msg) => {
-                assert!(!msg.is_empty(), "WalRead message should not be empty");
-            }
-            FerraError::CheckpointCorrupted { expected, actual } => {
-                assert_ne!(expected, actual, "CheckpointCorrupted expected != actual");
-            }
-            FerraError::CheckpointWrite(msg) => {
-                assert!(
-                    !msg.is_empty(),
-                    "CheckpointWrite message should not be empty"
-                );
-            }
-            FerraError::Io(msg) => {
-                assert!(!msg.is_empty(), "Io message should not be empty");
-            }
-            FerraError::UnknownAttribute { attribute } => {
-                assert!(
-                    !attribute.is_empty(),
-                    "UnknownAttribute attribute should not be empty"
-                );
-            }
-            FerraError::SchemaViolation {
-                attribute,
-                expected,
-                got,
-            } => {
-                assert!(
-                    !attribute.is_empty(),
-                    "SchemaViolation attribute should not be empty"
-                );
-                assert_ne!(expected, got, "SchemaViolation expected != got");
-            }
-            FerraError::EmptyTransaction => {
-                // Unit variant — construction is sufficient proof.
-            }
-            FerraError::SchemaIncompatible {
-                attribute,
-                left,
-                right,
-            } => {
-                assert!(
-                    !attribute.is_empty(),
-                    "SchemaIncompatible attribute should not be empty"
-                );
-                assert_ne!(left, right, "SchemaIncompatible left != right");
-            }
-            FerraError::Backpressure => {
-                // Unit variant — construction is sufficient proof.
-            }
-            FerraError::PeerUnreachable { addr, reason } => {
-                assert!(!addr.is_empty(), "PeerUnreachable addr should not be empty");
-                assert!(
-                    !reason.is_empty(),
-                    "PeerUnreachable reason should not be empty"
-                );
-            }
-            FerraError::InvariantViolation { invariant, details } => {
-                assert!(
-                    invariant.starts_with("INV-FERR-"),
-                    "InvariantViolation invariant should follow naming convention"
-                );
-                assert!(
-                    !details.is_empty(),
-                    "InvariantViolation details should not be empty"
-                );
-            }
+/// Assert fields valid for message-only FerraError variants.
+fn assert_message_variant_valid(msg: &str, variant: &str) {
+    assert!(!msg.is_empty(), "{variant} message should not be empty");
+}
+
+/// Assert non-empty attribute, plus distinct left/right for dual-field variants.
+fn assert_attr_non_empty(attribute: &str, variant: &str) {
+    assert!(
+        !attribute.is_empty(),
+        "{variant} attribute should not be empty"
+    );
+}
+
+/// Assert struct-field FerraError variants with attribute + pair fields.
+fn assert_attr_pair_distinct(attr: &str, left: &str, right: &str, variant: &str) {
+    assert_attr_non_empty(attr, variant);
+    assert_ne!(left, right, "{variant} fields should differ");
+}
+
+/// Exhaustive match on every `FerraError` variant -- no wildcards.
+/// Adding a new variant will cause a compile error here.
+fn assert_ferra_error_fields_valid(error: &FerraError) {
+    match error {
+        FerraError::WalWrite(msg) => assert_message_variant_valid(msg, "WalWrite"),
+        FerraError::WalRead(msg) => assert_message_variant_valid(msg, "WalRead"),
+        FerraError::CheckpointCorrupted { expected, actual } => {
+            assert_ne!(expected, actual, "CheckpointCorrupted expected != actual");
         }
+        FerraError::CheckpointWrite(msg) => assert_message_variant_valid(msg, "CheckpointWrite"),
+        FerraError::Io { kind, message } => {
+            assert_message_variant_valid(kind, "Io kind");
+            assert_message_variant_valid(message, "Io message");
+        }
+        FerraError::UnknownAttribute { attribute } => {
+            assert_attr_non_empty(attribute, "UnknownAttribute")
+        }
+        FerraError::SchemaViolation {
+            attribute,
+            expected,
+            got,
+        } => {
+            assert_attr_pair_distinct(attribute, expected, got, "SchemaViolation");
+        }
+        FerraError::EmptyTransaction | FerraError::Backpressure => {}
+        FerraError::SchemaIncompatible {
+            attribute,
+            left,
+            right,
+        } => {
+            assert_attr_pair_distinct(attribute, left, right, "SchemaIncompatible");
+        }
+        FerraError::PeerUnreachable { addr, reason } => {
+            assert_message_variant_valid(addr, "PeerUnreachable addr");
+            assert_message_variant_valid(reason, "PeerUnreachable reason");
+        }
+        FerraError::InvariantViolation { invariant, details } => {
+            assert!(
+                invariant.starts_with("INV-FERR-"),
+                "InvariantViolation naming"
+            );
+            assert_message_variant_valid(details, "InvariantViolation details");
+        }
+    }
+}
+
+/// INV-FERR-019: Every `FerraError` variant can be constructed and exhaustively matched.
+///
+/// This test enumerates ALL variants of `FerraError` without using a wildcard (`_ =>`).
+/// If a new variant is added to the enum, this test will fail to compile until it is
+/// updated -- which is the point.
+#[test]
+fn test_inv_ferr_019_error_exhaustiveness() {
+    let variants = build_all_ferra_error_variants();
+
+    for error in &variants {
+        assert_ferra_error_fields_valid(error);
     }
 
     // Verify Display impl works for every variant (INV-FERR-019: typed errors).
@@ -396,22 +407,13 @@ fn test_inv_ferr_019_error_exhaustiveness() {
     assert_eq!(
         variants.len(),
         12,
-        "INV-FERR-019: expected 12 FerraError variants — update this test if variants are added"
+        "INV-FERR-019: expected 12 FerraError variants -- update this test if variants are added"
     );
 }
 
-/// INV-FERR-019: Every `FerraError` variant produces non-empty `Display` output.
-///
-/// Constructs every variant and verifies that `fmt::Display` and
-/// `std::error::Error` produce meaningful, non-empty strings. This is the
-/// Display-focused integration complement to the exhaustive-match test above.
-///
-/// bd-oizy: raises INV-FERR-019 verification depth to 4+ layers.
-#[test]
-fn test_inv_ferr_019_error_display_all_variants() {
-    use ferratom::FerraError;
-
-    let variants: Vec<(&str, FerraError)> = vec![
+/// Build simple (message-only and unit) FerraError variants for Display testing.
+fn build_simple_ferra_error_variants() -> Vec<(&'static str, FerraError)> {
+    vec![
         ("WalWrite", FerraError::WalWrite("disk full".into())),
         ("WalRead", FerraError::WalRead("corrupt frame".into())),
         (
@@ -425,13 +427,27 @@ fn test_inv_ferr_019_error_display_all_variants() {
             "CheckpointWrite",
             FerraError::CheckpointWrite("io error".into()),
         ),
-        ("Io", FerraError::Io("permission denied".into())),
+        (
+            "Io",
+            FerraError::Io {
+                kind: "PermissionDenied".into(),
+                message: "permission denied".into(),
+            },
+        ),
         (
             "UnknownAttribute",
             FerraError::UnknownAttribute {
                 attribute: "ghost/attr".into(),
             },
         ),
+        ("EmptyTransaction", FerraError::EmptyTransaction),
+        ("Backpressure", FerraError::Backpressure),
+    ]
+}
+
+/// Build struct-field FerraError variants for Display testing.
+fn build_struct_ferra_error_variants() -> Vec<(&'static str, FerraError)> {
+    vec![
         (
             "SchemaViolation",
             FerraError::SchemaViolation {
@@ -440,8 +456,6 @@ fn test_inv_ferr_019_error_display_all_variants() {
                 got: "String".into(),
             },
         ),
-        ("EmptyTransaction", FerraError::EmptyTransaction),
-        ("Backpressure", FerraError::Backpressure),
         (
             "PeerUnreachable",
             FerraError::PeerUnreachable {
@@ -464,29 +478,47 @@ fn test_inv_ferr_019_error_display_all_variants() {
                 details: "epoch overflow".into(),
             },
         ),
-    ];
+    ]
+}
 
+/// Build all named FerraError variants for Display testing.
+fn build_named_ferra_error_variants() -> Vec<(&'static str, FerraError)> {
+    let mut variants = build_simple_ferra_error_variants();
+    variants.extend(build_struct_ferra_error_variants());
+    variants
+}
+
+/// Assert that a FerraError's Display and Error outputs are non-empty and identical.
+fn assert_display_and_error_match(name: &str, error: &FerraError) {
+    let display = format!("{error}");
+    assert!(
+        !display.is_empty(),
+        "INV-FERR-019: Display for {name} must produce non-empty output"
+    );
+    let as_error: &dyn std::error::Error = error;
+    let error_str = format!("{as_error}");
+    assert!(
+        !error_str.is_empty(),
+        "INV-FERR-019: Error trait for {name} must produce non-empty output"
+    );
+    assert_eq!(
+        display, error_str,
+        "INV-FERR-019: Display and Error output must match for {name}"
+    );
+}
+
+/// INV-FERR-019: Every `FerraError` variant produces non-empty `Display` output.
+///
+/// Constructs every variant and verifies that `fmt::Display` and
+/// `std::error::Error` produce meaningful, non-empty strings. This is the
+/// Display-focused integration complement to the exhaustive-match test above.
+///
+/// bd-oizy: raises INV-FERR-019 verification depth to 4+ layers.
+#[test]
+fn test_inv_ferr_019_error_display_all_variants() {
+    let variants = build_named_ferra_error_variants();
     for (name, error) in &variants {
-        // Display must produce non-empty output.
-        let display = format!("{error}");
-        assert!(
-            !display.is_empty(),
-            "INV-FERR-019: Display for {name} must produce non-empty output"
-        );
-
-        // std::error::Error must also produce non-empty output.
-        let as_error: &dyn std::error::Error = error;
-        let error_str = format!("{as_error}");
-        assert!(
-            !error_str.is_empty(),
-            "INV-FERR-019: Error trait for {name} must produce non-empty output"
-        );
-
-        // Display and Error should produce the same string.
-        assert_eq!(
-            display, error_str,
-            "INV-FERR-019: Display and Error output must match for {name}"
-        );
+        assert_display_and_error_match(name, error);
     }
 }
 

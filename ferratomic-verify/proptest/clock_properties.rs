@@ -80,7 +80,6 @@ proptest! {
     }
 
     /// INV-FERR-016: causality is transitive across a chain of agents.
-    #[allow(clippy::too_many_lines, clippy::needless_range_loop)]
     #[test]
     fn inv_ferr_016_hlc_causality_chain(
         chain_length in 2usize..10,
@@ -96,9 +95,9 @@ proptest! {
         // Agent 0 ticks, sends to agent 1, who ticks and sends to agent 2, etc.
         let mut prev_tx = agents[0].tick();
 
-        for i in 1..chain_length {
-            agents[i].receive(&prev_tx);
-            let current = agents[i].tick();
+        for (i, agent) in agents.iter_mut().enumerate().skip(1) {
+            agent.receive(&prev_tx);
+            let current = agent.tick();
             prop_assert!(
                 current > prev_tx,
                 "INV-FERR-016: agent {} tick {:?} not after agent {} tick {:?}",

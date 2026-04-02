@@ -13,18 +13,57 @@
 //! generics), both benchmarks should produce statistically identical
 //! results at each size.
 
+use std::{collections::BTreeSet, sync::Arc};
+
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use ferratomic_core::indexes::{EavtKey, IndexBackend};
+use ferratom::{Attribute, Datom, EntityId, Op, TxId, Value};
+use ferratomic_core::{
+    indexes::{EavtKey, IndexBackend},
+    store::Store,
+};
 use im::OrdMap;
 
-mod common;
+const DOC_ATTRIBUTE: &str = "db/doc";
+
+fn doc_entity(index: usize) -> EntityId {
+    EntityId::from_content(format!("entity-{index}").as_bytes())
+}
+
+fn doc_value(index: usize) -> Value {
+    Value::String(Arc::from(format!("document-{index}").as_str()))
+}
+
+fn doc_datom(index: usize) -> Datom {
+    Datom::new(
+        doc_entity(index),
+        Attribute::from(DOC_ATTRIBUTE),
+        doc_value(index),
+        TxId::new(index as u64 + 1, 0, 1),
+        Op::Assert,
+    )
+}
+
+fn build_shifted_store(start: usize, count: usize) -> Store {
+    let datoms = (start..start + count)
+        .map(doc_datom)
+        .collect::<BTreeSet<_>>();
+    Store::from_datoms(datoms)
+}
+
+fn build_store(count: usize) -> Store {
+    build_shifted_store(0, count)
+}
+
+fn lookup_key(index: usize) -> EavtKey {
+    EavtKey::from_datom(&doc_datom(index))
+}
 
 /// Build a bare `OrdMap<EavtKey, Datom>` with the same data the store would
 /// hold, bypassing the `IndexBackend` trait entirely.
-fn build_direct_ordmap(count: usize) -> OrdMap<EavtKey, ferratom::Datom> {
+fn build_direct_ordmap(count: usize) -> OrdMap<EavtKey, Datom> {
     let mut map = OrdMap::new();
     for i in 0..count {
-        let datom = common::doc_datom(i);
+        let datom = doc_datom(i);
         let key = EavtKey::from_datom(&datom);
         map.insert(key, datom);
     }
@@ -35,9 +74,9 @@ fn bench_index_backend(c: &mut Criterion) {
     let mut group = c.benchmark_group("inv_ferr_025_index_backend");
 
     for &size in &[1_000usize, 10_000] {
-        let store = common::build_store(size);
+        let store = build_store(size);
         let direct = build_direct_ordmap(size);
-        let key = common::lookup_key(size / 2);
+        let key = lookup_key(size / 2);
 
         group.throughput(Throughput::Elements(size as u64));
 
@@ -97,9 +136,9 @@ fn bench_perf3_overhead_assertion(c: &mut Criterion) {
     // 1.5x generous bound to avoid flaky CI on loaded machines
     const MAX_OVERHEAD_RATIO: f64 = 1.5;
 
-    let store = common::build_store(DATOM_COUNT);
+    let store = build_store(DATOM_COUNT);
     let direct = build_direct_ordmap(DATOM_COUNT);
-    let key = common::lookup_key(DATOM_COUNT / 2);
+    let key = lookup_key(DATOM_COUNT / 2);
 
     // --- Wall-clock comparison with hard assertion ---
     // Warm up both paths first to avoid cold-cache bias.

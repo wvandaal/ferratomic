@@ -7,9 +7,14 @@ use std::collections::BTreeSet;
 use ferratom::{AgentId, Attribute, Datom, EntityId, Value};
 use ferratomic_core::{store::Store, writer::Transaction};
 
+#[cfg(not(kani))]
+use super::kani;
+
 /// INV-FERR-013: checkpoint serialization is a round trip on store state.
-#[kani::proof]
-#[kani::unwind(8)]
+#[cfg_attr(kani, kani::proof)]
+#[cfg_attr(kani, kani::unwind(8))]
+#[cfg_attr(not(kani), test)]
+#[cfg_attr(not(kani), ignore = "requires Kani verifier")]
 fn checkpoint_roundtrip() {
     let datoms: BTreeSet<Datom> = kani::any();
     kani::assume(datoms.len() <= 4);
@@ -26,8 +31,10 @@ fn checkpoint_roundtrip() {
 }
 
 /// INV-FERR-014: recovery never loses committed datoms.
-#[kani::proof]
-#[kani::unwind(8)]
+#[cfg_attr(kani, kani::proof)]
+#[cfg_attr(kani, kani::unwind(8))]
+#[cfg_attr(not(kani), test)]
+#[cfg_attr(not(kani), ignore = "requires Kani verifier")]
 fn recovery_superset() {
     let committed: BTreeSet<Datom> = kani::any();
     kani::assume(committed.len() <= 4);
@@ -47,8 +54,10 @@ fn recovery_superset() {
 }
 
 /// INV-FERR-018: the datom set is append-only.
-#[kani::proof]
-#[kani::unwind(10)]
+#[cfg_attr(kani, kani::proof)]
+#[cfg_attr(kani, kani::unwind(10))]
+#[cfg_attr(not(kani), test)]
+#[cfg_attr(not(kani), ignore = "requires Kani verifier")]
 fn append_only() {
     let initial: BTreeSet<Datom> = kani::any();
     kani::assume(initial.len() <= 4);
@@ -62,8 +71,10 @@ fn append_only() {
 }
 
 /// INV-FERR-020: a committed transaction assigns one epoch to all of its datoms.
-#[kani::proof]
-#[kani::unwind(8)]
+#[cfg_attr(kani, kani::proof)]
+#[cfg_attr(kani, kani::unwind(8))]
+#[cfg_attr(not(kani), test)]
+#[cfg_attr(not(kani), ignore = "requires Kani verifier")]
 fn transaction_atomicity() {
     let mut store = Store::genesis();
     let n_datoms: u8 = kani::any();
@@ -79,9 +90,9 @@ fn transaction_atomicity() {
     let committed = tx
         .commit(store.schema())
         .expect("INV-FERR-020: harness transaction should validate");
-    let tx_datoms: BTreeSet<_> = committed.datoms().cloned().collect();
+    let tx_datoms: BTreeSet<_> = committed.datoms().iter().cloned().collect();
     let _receipt = store
-        .transact(committed)
+        .transact_test(committed)
         .expect("INV-FERR-020: harness transaction should apply");
 
     let snapshot = store.snapshot();
@@ -116,7 +127,7 @@ enum WalPhase {
 }
 
 /// Result of attempting a WAL commit with a given step ordering.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CommitResult {
     /// The commit completed with correct ordering.
     Ok,
@@ -157,22 +168,13 @@ fn try_commit(steps: [WalPhase; 4]) -> CommitResult {
     }
 }
 
-/// INV-FERR-008: WAL fsync ordering — the two-fsync barrier property.
-///
-/// Verifies that the WAL commit state machine accepts ONLY the correct
-/// ordering (Write -> Fsync -> Apply -> Advance) and rejects all other
-/// permutations of the four steps.
-///
-/// Kani explores all possible 4-element orderings of the WAL pipeline
-/// phases. The harness asserts:
-/// 1. The canonical ordering succeeds.
-/// 2. Any ordering accepted by the state machine IS the canonical ordering.
-/// 3. Specifically: data is written before fsync, and fsync completes
-///    before the epoch advances (the two-fsync barrier).
-#[kani::proof]
-#[kani::unwind(5)]
-fn kani_inv_ferr_008_wal_fsync_ordering() {
-    // --- Part 1: The canonical ordering succeeds ---
+/// Assert that a particular step ordering is rejected by the WAL state machine.
+fn assert_ordering_rejected(steps: [WalPhase; 4], msg: &str) {
+    assert_eq!(try_commit(steps), CommitResult::OrderingViolation, "{msg}");
+}
+
+/// Part 1+2: Verify canonical ordering succeeds and Kani symbolic exploration.
+fn verify_canonical_and_symbolic() {
     let canonical = [
         WalPhase::Written,
         WalPhase::Fsynced,
@@ -185,76 +187,80 @@ fn kani_inv_ferr_008_wal_fsync_ordering() {
         "INV-FERR-008: canonical Write->Fsync->Apply->Advance must succeed"
     );
 
-    // --- Part 2: Symbolic exploration of all orderings ---
-    // Kani assigns arbitrary phase values to each of the 4 steps.
     let s0: u8 = kani::any();
     let s1: u8 = kani::any();
     let s2: u8 = kani::any();
     let s3: u8 = kani::any();
-
-    // Constrain to valid phase values (1..=4 maps to the four pipeline steps).
-    kani::assume(s0 >= 1 && s0 <= 4);
-    kani::assume(s1 >= 1 && s1 <= 4);
-    kani::assume(s2 >= 1 && s2 <= 4);
-    kani::assume(s3 >= 1 && s3 <= 4);
+    kani::assume((1..=4).contains(&s0));
+    kani::assume((1..=4).contains(&s1));
+    kani::assume((1..=4).contains(&s2));
+    kani::assume((1..=4).contains(&s3));
 
     let to_phase = |v: u8| -> WalPhase {
         match v {
             1 => WalPhase::Written,
             2 => WalPhase::Fsynced,
             3 => WalPhase::Applied,
-            _ => WalPhase::Advanced, // 4
+            _ => WalPhase::Advanced,
         }
     };
-
-    let steps = [to_phase(s0), to_phase(s1), to_phase(s2), to_phase(s3)];
-    let result = try_commit(steps);
-
+    let result = try_commit([to_phase(s0), to_phase(s1), to_phase(s2), to_phase(s3)]);
     if result == CommitResult::Ok {
-        // The ONLY accepted ordering is the canonical one.
         assert_eq!(s0, 1, "INV-FERR-008: step 0 must be Write (1)");
         assert_eq!(s1, 2, "INV-FERR-008: step 1 must be Fsync (2)");
         assert_eq!(s2, 3, "INV-FERR-008: step 2 must be Apply (3)");
         assert_eq!(s3, 4, "INV-FERR-008: step 3 must be Advance (4)");
     }
+}
 
-    // --- Part 3: Explicit two-fsync barrier violations ---
-    // Advance before Fsync: MUST be rejected.
-    let advance_before_fsync = [
-        WalPhase::Written,
-        WalPhase::Advanced,
-        WalPhase::Fsynced,
-        WalPhase::Applied,
-    ];
-    assert_eq!(
-        try_commit(advance_before_fsync),
-        CommitResult::OrderingViolation,
-        "INV-FERR-008: advancing epoch before fsync must be rejected"
+/// Part 3: Explicit two-fsync barrier violations.
+fn verify_barrier_violations() {
+    assert_ordering_rejected(
+        [
+            WalPhase::Written,
+            WalPhase::Advanced,
+            WalPhase::Fsynced,
+            WalPhase::Applied,
+        ],
+        "INV-FERR-008: advancing epoch before fsync must be rejected",
     );
+    assert_ordering_rejected(
+        [
+            WalPhase::Fsynced,
+            WalPhase::Written,
+            WalPhase::Applied,
+            WalPhase::Advanced,
+        ],
+        "INV-FERR-008: fsync before write must be rejected",
+    );
+    assert_ordering_rejected(
+        [
+            WalPhase::Advanced,
+            WalPhase::Applied,
+            WalPhase::Fsynced,
+            WalPhase::Written,
+        ],
+        "INV-FERR-008: fully inverted ordering must be rejected",
+    );
+}
 
-    // Fsync before Write: MUST be rejected.
-    let fsync_before_write = [
-        WalPhase::Fsynced,
-        WalPhase::Written,
-        WalPhase::Applied,
-        WalPhase::Advanced,
-    ];
-    assert_eq!(
-        try_commit(fsync_before_write),
-        CommitResult::OrderingViolation,
-        "INV-FERR-008: fsync before write must be rejected"
-    );
-
-    // Advance before Write (total inversion): MUST be rejected.
-    let total_inversion = [
-        WalPhase::Advanced,
-        WalPhase::Applied,
-        WalPhase::Fsynced,
-        WalPhase::Written,
-    ];
-    assert_eq!(
-        try_commit(total_inversion),
-        CommitResult::OrderingViolation,
-        "INV-FERR-008: fully inverted ordering must be rejected"
-    );
+/// INV-FERR-008: WAL fsync ordering -- the two-fsync barrier property.
+///
+/// Verifies that the WAL commit state machine accepts ONLY the correct
+/// ordering (Write -> Fsync -> Apply -> Advance) and rejects all other
+/// permutations of the four steps.
+///
+/// Kani explores all possible 4-element orderings of the WAL pipeline
+/// phases. The harness asserts:
+/// 1. The canonical ordering succeeds.
+/// 2. Any ordering accepted by the state machine IS the canonical ordering.
+/// 3. Specifically: data is written before fsync, and fsync completes
+///    before the epoch advances (the two-fsync barrier).
+#[cfg_attr(kani, kani::proof)]
+#[cfg_attr(kani, kani::unwind(5))]
+#[cfg_attr(not(kani), test)]
+#[cfg_attr(not(kani), ignore = "requires Kani verifier")]
+fn kani_inv_ferr_008_wal_fsync_ordering() {
+    verify_canonical_and_symbolic();
+    verify_barrier_violations();
 }

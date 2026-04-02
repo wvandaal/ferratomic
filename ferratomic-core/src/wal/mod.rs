@@ -99,7 +99,10 @@ impl Wal {
             .write(true)
             .read(true)
             .open(path)
-            .map_err(|e| FerraError::Io(e.to_string()))?;
+            .map_err(|e| FerraError::Io {
+                kind: format!("{:?}", e.kind()),
+                message: e.to_string(),
+            })?;
 
         // HI-002: fsync parent directory so the WAL file's directory entry
         // is durable. Without this, a crash after create but before the first
@@ -131,7 +134,10 @@ impl Wal {
             .read(true)
             .write(true)
             .open(path)
-            .map_err(|e| FerraError::Io(e.to_string()))?;
+            .map_err(|e| FerraError::Io {
+                kind: format!("{:?}", e.kind()),
+                message: e.to_string(),
+            })?;
         Ok(Self {
             path: path.to_path_buf(),
             file,

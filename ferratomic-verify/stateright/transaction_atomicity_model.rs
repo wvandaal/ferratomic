@@ -156,6 +156,133 @@ impl Default for TxAtomicityModel {
     }
 }
 
+/// Start a new transaction with the given datom ids.
+fn apply_start_tx(next: &mut TxAtomicityState, datom_ids: BTreeSet<u64>) -> Option<()> {
+    if next.pending_tx.is_some() || next.crashed || next.current_epoch > MAX_EPOCH {
+        return None;
+    }
+    next.pending_tx = Some(PendingTx {
+        datom_ids,
+        assigned_epoch: next.current_epoch,
+        wal_state: WalState::NotWritten,
+    });
+    Some(())
+}
+
+/// Commit the pending transaction: write WAL, fsync, apply to store.
+fn apply_commit_tx(next: &mut TxAtomicityState) -> Option<()> {
+    let pending = next.pending_tx.take()?;
+    if next.crashed {
+        return None;
+    }
+    let committed = CommittedTx {
+        epoch: pending.assigned_epoch,
+        datom_ids: pending.datom_ids,
+    };
+    next.durable_wal.push(committed.clone());
+    next.committed_txns.push(committed);
+    next.current_epoch = next
+        .current_epoch
+        .checked_add(1)
+        .unwrap_or(next.current_epoch);
+    Some(())
+}
+
+/// Take a snapshot at the current epoch.
+fn apply_take_snapshot(next: &mut TxAtomicityState) -> Option<()> {
+    if next.crashed || next.committed_txns.is_empty() {
+        return None;
+    }
+    let snap_epoch = next.current_epoch.saturating_sub(1);
+    let visible = TxAtomicityModel::visible_at_epoch(&next.committed_txns, snap_epoch);
+    next.snapshots.push(SnapshotView {
+        at_epoch: snap_epoch,
+        visible_datom_ids: visible,
+    });
+    Some(())
+}
+
+/// Crash before the pending tx is committed.
+fn apply_crash_before_commit(next: &mut TxAtomicityState) -> Option<()> {
+    let pending = next.pending_tx.as_ref()?;
+    if pending.wal_state != WalState::NotWritten {
+        return None;
+    }
+    next.pending_tx = None;
+    apply_crash(next);
+    Some(())
+}
+
+/// Crash after the pending tx has been committed.
+fn apply_crash_after_commit(next: &mut TxAtomicityState) -> Option<()> {
+    if next.pending_tx.is_some() || next.crashed {
+        return None;
+    }
+    apply_crash(next);
+    Some(())
+}
+
+/// INV-FERR-020: Recover from crash by replaying durable WAL entries.
+fn apply_tx_recover(next: &mut TxAtomicityState) -> Option<()> {
+    if !next.crashed {
+        return None;
+    }
+    next.committed_txns = next.durable_wal.clone();
+    next.crashed = false;
+    let max_epoch = next
+        .durable_wal
+        .iter()
+        .map(|tx| tx.epoch)
+        .max()
+        .unwrap_or(0);
+    next.current_epoch = max_epoch + 1;
+    Some(())
+}
+
+/// Apply a crash: clear in-memory state, mark as crashed.
+fn apply_crash(next: &mut TxAtomicityState) {
+    next.crashed = true;
+    next.committed_txns.clear();
+    next.snapshots.clear();
+}
+
+/// INV-FERR-020: Epoch uniformity -- all committed txns have valid, unique epochs.
+fn check_epoch_uniformity(state: &TxAtomicityState) -> bool {
+    for tx in &state.committed_txns {
+        if tx.epoch == 0 || tx.epoch > MAX_EPOCH {
+            return false;
+        }
+    }
+    let epochs: BTreeSet<u64> = state.committed_txns.iter().map(|tx| tx.epoch).collect();
+    epochs.len() == state.committed_txns.len()
+}
+
+/// INV-FERR-020: All-or-nothing visibility at every snapshot.
+fn check_all_or_nothing_visibility(state: &TxAtomicityState) -> bool {
+    for snap in &state.snapshots {
+        for tx in &state.committed_txns {
+            if tx.epoch <= snap.at_epoch {
+                for id in &tx.datom_ids {
+                    if !snap.visible_datom_ids.contains(id) {
+                        return false;
+                    }
+                }
+            }
+        }
+    }
+    true
+}
+
+/// INV-FERR-020: Crash atomicity -- committed_txns matches durable_wal.
+fn check_crash_atomicity(state: &TxAtomicityState) -> bool {
+    if state.crashed {
+        return state.committed_txns.is_empty();
+    }
+    let committed_set: BTreeSet<&CommittedTx> = state.committed_txns.iter().collect();
+    let wal_set: BTreeSet<&CommittedTx> = state.durable_wal.iter().collect();
+    committed_set == wal_set
+}
+
 impl Model for TxAtomicityModel {
     type State = TxAtomicityState;
     type Action = TxAction;
@@ -173,12 +300,9 @@ impl Model for TxAtomicityModel {
 
     fn actions(&self, state: &Self::State, actions: &mut Vec<Self::Action>) {
         if state.crashed {
-            // Only recovery is possible after a crash.
             actions.push(TxAction::Recover);
             return;
         }
-
-        // StartTx: only if no pending tx, under transaction bound, epoch in range.
         if state.pending_tx.is_none()
             && state.committed_txns.len() < MAX_TRANSACTIONS
             && state.current_epoch <= MAX_EPOCH
@@ -187,25 +311,17 @@ impl Model for TxAtomicityModel {
                 actions.push(TxAction::StartTx(datom_set.clone()));
             }
         }
-
-        // CommitTx: only if there is a pending tx.
         if state.pending_tx.is_some() {
             actions.push(TxAction::CommitTx);
         }
-
-        // TakeSnapshot: only if there are committed txns and under snapshot bound.
         if !state.committed_txns.is_empty() && state.snapshots.len() < MAX_SNAPSHOTS {
             actions.push(TxAction::TakeSnapshot);
         }
-
-        // CrashBeforeCommit: pending tx exists but WAL not fsynced.
         if let Some(ref pending) = state.pending_tx {
             if pending.wal_state == WalState::NotWritten {
                 actions.push(TxAction::CrashBeforeCommit);
             }
         }
-
-        // CrashAfterCommit: can crash after any committed state.
         if state.pending_tx.is_none() && !state.committed_txns.is_empty() {
             actions.push(TxAction::CrashAfterCommit);
         }
@@ -214,84 +330,12 @@ impl Model for TxAtomicityModel {
     fn next_state(&self, state: &Self::State, action: Self::Action) -> Option<Self::State> {
         let mut next = state.clone();
         match action {
-            TxAction::StartTx(datom_ids) => {
-                if next.pending_tx.is_some() || next.crashed || next.current_epoch > MAX_EPOCH {
-                    return None;
-                }
-                next.pending_tx = Some(PendingTx {
-                    datom_ids,
-                    assigned_epoch: next.current_epoch,
-                    wal_state: WalState::NotWritten,
-                });
-            }
-            TxAction::CommitTx => {
-                let pending = next.pending_tx.take()?;
-                if next.crashed {
-                    return None;
-                }
-                let committed = CommittedTx {
-                    epoch: pending.assigned_epoch,
-                    datom_ids: pending.datom_ids,
-                };
-                // WAL fsync + apply atomically (modeled as single step).
-                next.durable_wal.push(committed.clone());
-                next.committed_txns.push(committed);
-                next.current_epoch = next
-                    .current_epoch
-                    .checked_add(1)
-                    .unwrap_or(next.current_epoch);
-            }
-            TxAction::TakeSnapshot => {
-                if next.crashed || next.committed_txns.is_empty() {
-                    return None;
-                }
-                let snap_epoch = next.current_epoch.saturating_sub(1);
-                let visible = Self::visible_at_epoch(&next.committed_txns, snap_epoch);
-                next.snapshots.push(SnapshotView {
-                    at_epoch: snap_epoch,
-                    visible_datom_ids: visible,
-                });
-            }
-            TxAction::CrashBeforeCommit => {
-                // Crash with pending tx whose WAL was not fsynced.
-                let pending = next.pending_tx.as_ref()?;
-                if pending.wal_state != WalState::NotWritten {
-                    return None;
-                }
-                // Pending tx is lost. Committed txns stay in durable WAL.
-                next.pending_tx = None;
-                next.crashed = true;
-                // In-memory committed_txns are lost; only durable_wal survives.
-                next.committed_txns.clear();
-                next.snapshots.clear();
-            }
-            TxAction::CrashAfterCommit => {
-                if next.pending_tx.is_some() || next.crashed {
-                    return None;
-                }
-                // All committed txns are in durable_wal (fsynced).
-                // In-memory state is lost.
-                next.crashed = true;
-                next.committed_txns.clear();
-                next.snapshots.clear();
-            }
-            TxAction::Recover => {
-                if !next.crashed {
-                    return None;
-                }
-                // INV-FERR-020 + INV-FERR-008: replay all durable WAL entries.
-                // Incomplete (not fsynced) entries were never added to durable_wal.
-                next.committed_txns = next.durable_wal.clone();
-                next.crashed = false;
-                // Epoch resumes after the highest committed epoch.
-                let max_epoch = next
-                    .durable_wal
-                    .iter()
-                    .map(|tx| tx.epoch)
-                    .max()
-                    .unwrap_or(0);
-                next.current_epoch = max_epoch + 1;
-            }
+            TxAction::StartTx(datom_ids) => apply_start_tx(&mut next, datom_ids)?,
+            TxAction::CommitTx => apply_commit_tx(&mut next)?,
+            TxAction::TakeSnapshot => apply_take_snapshot(&mut next)?,
+            TxAction::CrashBeforeCommit => apply_crash_before_commit(&mut next)?,
+            TxAction::CrashAfterCommit => apply_crash_after_commit(&mut next)?,
+            TxAction::Recover => apply_tx_recover(&mut next)?,
         }
         Some(next)
     }
@@ -305,95 +349,23 @@ impl Model for TxAtomicityModel {
 
     fn properties(&self) -> Vec<Property<Self>> {
         vec![
-            // 1. Safety: epoch uniformity — all datoms in a committed tx
-            //    share the same epoch.
             Property::always(
                 "inv_ferr_020_epoch_uniformity",
-                |_: &TxAtomicityModel, state: &TxAtomicityState| {
-                    // INV-FERR-020: For every committed transaction, all its
-                    // datoms are stored under a single epoch. Since our model
-                    // assigns epoch at commit time to the entire datom set
-                    // atomically, this checks that no committed tx has an
-                    // inconsistent representation (e.g., split across epochs).
-                    for tx in &state.committed_txns {
-                        // A committed tx must have a valid epoch.
-                        if tx.epoch == 0 {
-                            return false;
-                        }
-                        // Epoch must be within the model bounds.
-                        if tx.epoch > MAX_EPOCH {
-                            return false;
-                        }
-                    }
-                    // No two committed txns share the same epoch (each gets unique).
-                    let epochs: BTreeSet<u64> =
-                        state.committed_txns.iter().map(|tx| tx.epoch).collect();
-                    epochs.len() == state.committed_txns.len()
-                },
+                |_: &TxAtomicityModel, state: &TxAtomicityState| check_epoch_uniformity(state),
             ),
-            // 2. Safety: all-or-nothing visibility — for any snapshot, either
-            //    ALL datoms of a tx are visible or NONE are.
             Property::always(
                 "inv_ferr_020_all_or_nothing_visibility",
                 |_: &TxAtomicityModel, state: &TxAtomicityState| {
-                    // INV-FERR-020: at any snapshot epoch e, a transaction T
-                    // is either fully visible (epoch(T) <= e) or fully
-                    // invisible (epoch(T) > e). Visibility is determined by
-                    // epoch comparison, not datom membership (datom IDs may
-                    // overlap across transactions).
-                    for snap in &state.snapshots {
-                        for tx in &state.committed_txns {
-                            let should_be_visible = tx.epoch <= snap.at_epoch;
-                            if should_be_visible {
-                                // All datoms from this tx must be in snapshot.
-                                for id in &tx.datom_ids {
-                                    if !snap.visible_datom_ids.contains(id) {
-                                        return false;
-                                    }
-                                }
-                            }
-                            // Note: we don't check the inverse (invisible tx has
-                            // no visible datoms) because datom IDs can appear in
-                            // multiple transactions — earlier visible txs may
-                            // contain the same datom IDs as later invisible ones.
-                        }
-                    }
-                    true
+                    check_all_or_nothing_visibility(state)
                 },
             ),
-            // 3. Safety: crash atomicity — if the system crashed and recovered,
-            //    committed_txns exactly matches durable_wal (no partial txns).
             Property::always(
                 "inv_ferr_020_crash_atomicity",
-                |_: &TxAtomicityModel, state: &TxAtomicityState| {
-                    // INV-FERR-020: after recovery, the store state equals
-                    // the durable WAL contents. A tx that was not fsynced
-                    // before the crash is absent. A tx that WAS fsynced
-                    // is present.
-                    if state.crashed {
-                        // While crashed, committed_txns should be empty
-                        // (in-memory state lost).
-                        return state.committed_txns.is_empty();
-                    }
-                    // After recovery (not crashed), committed_txns must
-                    // be a subset of durable_wal. In our model they are
-                    // always equal since we replay all durable entries.
-                    // Allow the initial state (no wal, no commits) and
-                    // the normal operating state.
-                    let committed_set: BTreeSet<&CommittedTx> =
-                        state.committed_txns.iter().collect();
-                    let wal_set: BTreeSet<&CommittedTx> = state.durable_wal.iter().collect();
-                    committed_set == wal_set
-                },
+                |_: &TxAtomicityModel, state: &TxAtomicityState| check_crash_atomicity(state),
             ),
-            // 4. Liveness: a state with at least one committed tx and a
-            //    verified snapshot is reachable.
             Property::sometimes(
                 "inv_ferr_020_committed_snapshot_reachable",
                 |_: &TxAtomicityModel, state: &TxAtomicityState| {
-                    // INV-FERR-020: the model can reach a state where a
-                    // transaction has been committed and a snapshot taken
-                    // that includes its datoms.
                     !state.committed_txns.is_empty()
                         && !state.snapshots.is_empty()
                         && state
@@ -402,13 +374,9 @@ impl Model for TxAtomicityModel {
                             .any(|s| !s.visible_datom_ids.is_empty())
                 },
             ),
-            // 5. Liveness: crash recovery with replay is reachable.
             Property::sometimes(
                 "inv_ferr_020_crash_recovery_reachable",
                 |_: &TxAtomicityModel, state: &TxAtomicityState| {
-                    // INV-FERR-020: the model can reach a state where
-                    // the system crashed and recovered, with previously
-                    // committed txns restored from the WAL.
                     !state.crashed
                         && !state.durable_wal.is_empty()
                         && !state.committed_txns.is_empty()

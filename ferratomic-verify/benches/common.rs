@@ -1,7 +1,6 @@
 // Bench helper module — individual items are used across multiple criterion bench
 // targets (cold_start, merge_throughput, read_latency, etc.) but each target
-// only uses a subset, so clippy sees unused items per-target.
-#![allow(dead_code)]
+// only uses a subset. Every item is used by at least one bench target.
 
 use std::{collections::BTreeSet, path::Path, sync::Arc};
 

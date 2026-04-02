@@ -5,12 +5,17 @@
 
 use ferratomic_core::backpressure::{BackpressurePolicy, WriteLimiter};
 
+#[cfg(not(kani))]
+use super::kani;
+
 /// INV-FERR-021: WriteLimiter enforces capacity — acquire up to max
 /// succeeds, then the next attempt returns None.
 ///
 /// Bounded to max_concurrent_writes = 3 for Kani tractability.
-#[kani::proof]
-#[kani::unwind(6)]
+#[cfg_attr(kani, kani::proof)]
+#[cfg_attr(kani, kani::unwind(6))]
+#[cfg_attr(not(kani), test)]
+#[cfg_attr(not(kani), ignore = "requires Kani verifier")]
 fn write_limiter_capacity_enforcement() {
     let policy = BackpressurePolicy {
         max_concurrent_writes: 3,
@@ -44,8 +49,10 @@ fn write_limiter_capacity_enforcement() {
 /// INV-FERR-021: WriteLimiter releases slots on guard drop.
 ///
 /// After dropping a guard, a new acquire succeeds.
-#[kani::proof]
-#[kani::unwind(4)]
+#[cfg_attr(kani, kani::proof)]
+#[cfg_attr(kani, kani::unwind(4))]
+#[cfg_attr(not(kani), test)]
+#[cfg_attr(not(kani), ignore = "requires Kani verifier")]
 fn write_limiter_release_on_drop() {
     let policy = BackpressurePolicy {
         max_concurrent_writes: 1,
@@ -81,11 +88,13 @@ fn write_limiter_release_on_drop() {
 
 /// INV-FERR-021: symbolic capacity — for any capacity 1..=3 and
 /// any number of acquires, active_count never exceeds max.
-#[kani::proof]
-#[kani::unwind(6)]
+#[cfg_attr(kani, kani::proof)]
+#[cfg_attr(kani, kani::unwind(6))]
+#[cfg_attr(not(kani), test)]
+#[cfg_attr(not(kani), ignore = "requires Kani verifier")]
 fn write_limiter_active_count_bounded() {
     let max: usize = kani::any();
-    kani::assume(max >= 1 && max <= 3);
+    kani::assume((1..=3).contains(&max));
 
     let policy = BackpressurePolicy {
         max_concurrent_writes: max,

@@ -115,6 +115,54 @@ impl Default for CrashRecoveryModel {
 // Model implementation
 // ---------------------------------------------------------------------------
 
+/// Generate write actions for a state that can accept new writes.
+fn generate_write_actions(
+    max_datoms: u64,
+    max_commits: usize,
+    state: &CrashRecoveryState,
+    actions: &mut Vec<CrashRecoveryAction>,
+) {
+    if state.committed_count < max_commits {
+        for seed in 0..max_datoms {
+            let datom = Datom::from_seed(seed);
+            if !state.committed_store.contains(&datom) {
+                actions.push(CrashRecoveryAction::BeginWrite(datom));
+            }
+        }
+    }
+}
+
+/// Apply the FsyncWal transition: commit pending datoms to WAL and store.
+fn apply_fsync_wal_transition(
+    next: &mut CrashRecoveryState,
+    state: &CrashRecoveryState,
+) -> Option<()> {
+    let pending = match &state.phase {
+        Phase::Writing { pending } => pending.clone(),
+        _ => return None,
+    };
+    next.wal = next.wal.union(&pending).cloned().collect();
+    next.committed_store = next.committed_store.union(&pending).cloned().collect();
+    next.committed_count += 1;
+    next.phase = Phase::Idle;
+    Some(())
+}
+
+/// Apply the recovery procedure to a crashed state.
+///
+/// INV-FERR-014 Level 1: Load checkpoint, replay fsynced WAL entries,
+/// truncate incomplete entries.
+fn apply_recovery(next: &mut CrashRecoveryState, fsynced: bool, pending: &BTreeSet<Datom>) {
+    let mut recovered = next.committed_store.clone();
+    if fsynced {
+        recovered = recovered.union(pending).cloned().collect();
+        next.committed_store = recovered.clone();
+        next.wal = next.wal.union(pending).cloned().collect();
+    }
+    next.recovered_store = recovered;
+    next.phase = Phase::Recovered;
+}
+
 impl Model for CrashRecoveryModel {
     type State = CrashRecoveryState;
     type Action = CrashRecoveryAction;
@@ -132,44 +180,19 @@ impl Model for CrashRecoveryModel {
     fn actions(&self, state: &Self::State, actions: &mut Vec<Self::Action>) {
         match &state.phase {
             Phase::Idle => {
-                // Can start a new write if under the commit budget.
-                if state.committed_count < self.max_commits {
-                    for seed in 0..self.max_datoms {
-                        let datom = Datom::from_seed(seed);
-                        if !state.committed_store.contains(&datom) {
-                            actions.push(CrashRecoveryAction::BeginWrite(datom));
-                        }
-                    }
-                }
-                // Can crash while idle (clean crash).
+                generate_write_actions(self.max_datoms, self.max_commits, state, actions);
                 actions.push(CrashRecoveryAction::CrashIdle);
             }
             Phase::Writing { .. } => {
-                // Either the fsync completes or the process crashes first.
                 actions.push(CrashRecoveryAction::FsyncWal);
                 actions.push(CrashRecoveryAction::CrashBeforeFsync);
             }
             Phase::Crashed { .. } => {
-                // Only action from a crashed state is recovery.
                 actions.push(CrashRecoveryAction::Recover);
             }
-            Phase::Recovering => {
-                // Recovery is modeled as atomic (single transition).
-                // No further actions — the Recover action already moved
-                // us to Recovered.
-            }
+            Phase::Recovering => {}
             Phase::Recovered => {
-                // After recovery, the system returns to Idle for new work.
-                // Model this as: recovered systems can write again.
-                if state.committed_count < self.max_commits {
-                    for seed in 0..self.max_datoms {
-                        let datom = Datom::from_seed(seed);
-                        if !state.committed_store.contains(&datom) {
-                            actions.push(CrashRecoveryAction::BeginWrite(datom));
-                        }
-                    }
-                }
-                // Can also crash again from recovered state.
+                generate_write_actions(self.max_datoms, self.max_commits, state, actions);
                 actions.push(CrashRecoveryAction::CrashIdle);
             }
         }
@@ -184,52 +207,28 @@ impl Model for CrashRecoveryModel {
                     _ => return None,
                 }
                 next.phase = Phase::Writing {
-                    pending: {
-                        let mut set = BTreeSet::new();
-                        set.insert(datom);
-                        set
-                    },
+                    pending: BTreeSet::from([datom]),
                 };
             }
             CrashRecoveryAction::FsyncWal => {
-                let pending = match &state.phase {
-                    Phase::Writing { pending } => pending.clone(),
-                    _ => return None,
-                };
-                // WAL fsync succeeded — datoms are now in the WAL.
-                // Transaction not yet visible in the store (commit not published).
-                next.wal = next.wal.union(&pending).cloned().collect();
-                // Commit immediately: WAL fsynced → apply to store.
-                next.committed_store = next.committed_store.union(&pending).cloned().collect();
-                next.committed_count += 1;
-                next.phase = Phase::Idle;
+                apply_fsync_wal_transition(&mut next, state)?;
             }
-            CrashRecoveryAction::Commit => {
-                // Commit is folded into FsyncWal for simplicity.
-                return None;
-            }
+            CrashRecoveryAction::Commit | CrashRecoveryAction::CrashAfterFsync => return None,
             CrashRecoveryAction::CrashBeforeFsync => {
                 let pending = match &state.phase {
                     Phase::Writing { pending } => pending.clone(),
                     _ => return None,
                 };
-                // Crash before fsync: WAL entry is NOT durable.
                 next.phase = Phase::Crashed {
                     fsynced: false,
                     pending,
                 };
-            }
-            CrashRecoveryAction::CrashAfterFsync => {
-                // This case is handled by the FsyncWal → CrashIdle path
-                // (fsync completes, then crash before next operation).
-                return None;
             }
             CrashRecoveryAction::CrashIdle => {
                 match &state.phase {
                     Phase::Idle | Phase::Recovered => {}
                     _ => return None,
                 }
-                // Clean crash: no in-flight transaction.
                 next.phase = Phase::Crashed {
                     fsynced: false,
                     pending: BTreeSet::new(),
@@ -240,29 +239,7 @@ impl Model for CrashRecoveryModel {
                     Phase::Crashed { fsynced, pending } => (*fsynced, pending.clone()),
                     _ => return None,
                 };
-
-                // Recovery procedure (INV-FERR-014 Level 1):
-                // 1. Load checkpoint (= committed_store)
-                // 2. Replay WAL entries after checkpoint epoch
-                // 3. Truncate incomplete WAL entries
-                //
-                // The recovered store starts from the committed store
-                // (checkpoint + previously replayed WAL).
-                let mut recovered = next.committed_store.clone();
-
-                if fsynced {
-                    // WAL was fsynced: pending datoms are durable and
-                    // replayed during recovery. They also become committed.
-                    recovered = recovered.union(&pending).cloned().collect();
-                    next.committed_store = recovered.clone();
-                    next.wal = next.wal.union(&pending).cloned().collect();
-                }
-                // If NOT fsynced: incomplete WAL entry is truncated.
-                // Pending datoms are lost. This is correct per spec:
-                // "Datoms from uncommitted transactions may or may not survive."
-
-                next.recovered_store = recovered;
-                next.phase = Phase::Recovered;
+                apply_recovery(&mut next, fsynced, &pending);
             }
         }
         Some(next)

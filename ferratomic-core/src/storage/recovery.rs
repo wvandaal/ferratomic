@@ -144,8 +144,10 @@ fn recover_wal_only<B: StorageBackend>(backend: &B) -> Result<ColdStartResult, F
 /// Returns `FerraError` if the data directory cannot be created or
 /// recovery encounters a non-corruption I/O error.
 pub fn cold_start(data_dir: &Path) -> Result<ColdStartResult, FerraError> {
-    std::fs::create_dir_all(data_dir)
-        .map_err(|e| FerraError::Io(format!("cannot create data dir: {e}")))?;
+    std::fs::create_dir_all(data_dir).map_err(|e| FerraError::Io {
+        kind: format!("{:?}", e.kind()),
+        message: format!("cannot create data dir: {e}"),
+    })?;
 
     let checkpoint_path = data_dir.join(CHECKPOINT_FILENAME);
     let wal_path = data_dir.join(WAL_FILENAME);

@@ -7,9 +7,14 @@ use std::collections::BTreeSet;
 use ferratom::{AgentId, Attribute, Datom, EntityId, Value};
 use ferratomic_core::{store::Store, writer::Transaction};
 
+#[cfg(not(kani))]
+use super::kani;
+
 /// INV-FERR-005: every secondary index is a permutation of primary datoms.
-#[kani::proof]
-#[kani::unwind(10)]
+#[cfg_attr(kani, kani::proof)]
+#[cfg_attr(kani, kani::unwind(10))]
+#[cfg_attr(not(kani), test)]
+#[cfg_attr(not(kani), ignore = "requires Kani verifier")]
 fn index_bijection() {
     let datoms: BTreeSet<Datom> = kani::any();
     kani::assume(datoms.len() <= 4);
@@ -36,8 +41,10 @@ fn index_bijection() {
 }
 
 /// INV-FERR-006: a snapshot must not see future datoms.
-#[kani::proof]
-#[kani::unwind(8)]
+#[cfg_attr(kani, kani::proof)]
+#[cfg_attr(kani, kani::unwind(8))]
+#[cfg_attr(not(kani), test)]
+#[cfg_attr(not(kani), ignore = "requires Kani verifier")]
 fn snapshot_isolation() {
     let mut store = Store::genesis();
     let snapshot = store.snapshot();
@@ -58,8 +65,10 @@ fn snapshot_isolation() {
 }
 
 /// INV-FERR-007: committed write epochs are strictly increasing.
-#[kani::proof]
-#[kani::unwind(8)]
+#[cfg_attr(kani, kani::proof)]
+#[cfg_attr(kani, kani::unwind(8))]
+#[cfg_attr(not(kani), test)]
+#[cfg_attr(not(kani), ignore = "requires Kani verifier")]
 fn write_linearizability() {
     let mut epochs: Vec<u64> = Vec::new();
     let mut store = Store::genesis();
@@ -67,7 +76,7 @@ fn write_linearizability() {
 
     for _ in 0..kani::any::<u8>().min(5) {
         let datom_id = kani::any::<u8>();
-        let tx = Transaction::new(agent.clone())
+        let tx = Transaction::new(agent)
             .assert_datom(
                 EntityId::from_content(&[datom_id]),
                 Attribute::from("test/counter"),
@@ -87,8 +96,10 @@ fn write_linearizability() {
 }
 
 /// INV-FERR-011: observer epochs never regress.
-#[kani::proof]
-#[kani::unwind(10)]
+#[cfg_attr(kani, kani::proof)]
+#[cfg_attr(kani, kani::unwind(10))]
+#[cfg_attr(not(kani), test)]
+#[cfg_attr(not(kani), ignore = "requires Kani verifier")]
 fn observer_monotonicity() {
     let mut epochs: Vec<u64> = Vec::new();
     let mut last: u64 = 0;

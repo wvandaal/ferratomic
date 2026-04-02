@@ -20,8 +20,6 @@ pub mod invariant_catalog;
 #[path = "../stateright/mod.rs"]
 pub mod stateright_models;
 
-// Kani-only module: cfg(kani) is set by the Kani verifier, not rustc.
-#[allow(unexpected_cfgs)]
-#[cfg(kani)]
-#[path = "../kani/mod.rs"]
-pub mod kani;
+// Kani harnesses are a [[test]] target (kani/mod.rs), not a library module.
+// This ensures they compile under `cargo check --all-targets` and `cargo
+// clippy --all-targets` without any allow-suppressions.

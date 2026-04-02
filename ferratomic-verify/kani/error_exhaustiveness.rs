@@ -10,8 +10,10 @@ use ferratom::FerraError;
 /// Constructs all 11 FerraError variants with minimal content and verifies
 /// that `fmt::Display` produces a non-empty string for each. This ensures
 /// no variant is accidentally forgotten in the `Display` implementation.
-#[kani::proof]
-#[kani::unwind(4)]
+#[cfg_attr(kani, kani::proof)]
+#[cfg_attr(kani, kani::unwind(4))]
+#[cfg_attr(not(kani), test)]
+#[cfg_attr(not(kani), ignore = "requires Kani verifier")]
 fn error_display_non_empty() {
     let variants: [FerraError; 11] = [
         FerraError::WalWrite("w".to_string()),
@@ -21,7 +23,10 @@ fn error_display_non_empty() {
             actual: "b".to_string(),
         },
         FerraError::CheckpointWrite("c".to_string()),
-        FerraError::Io("i".to_string()),
+        FerraError::Io {
+            kind: "Other".to_string(),
+            message: "i".to_string(),
+        },
         FerraError::UnknownAttribute {
             attribute: "x".to_string(),
         },
@@ -68,8 +73,10 @@ fn error_display_non_empty() {
 /// Verifies that the Error trait is satisfied for a representative variant,
 /// which guarantees it is implemented for the enum (since it is not
 /// per-variant).
-#[kani::proof]
-#[kani::unwind(4)]
+#[cfg_attr(kani, kani::proof)]
+#[cfg_attr(kani, kani::unwind(4))]
+#[cfg_attr(not(kani), test)]
+#[cfg_attr(not(kani), ignore = "requires Kani verifier")]
 fn error_trait_implemented() {
     let err: FerraError = FerraError::Backpressure;
     // std::error::Error requires Display + Debug. If this compiles,

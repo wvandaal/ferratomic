@@ -21,6 +21,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use ferratom::{Attribute, Datom, EntityId, Op, TxId, Value};
 
+#[cfg(not(kani))]
+use super::kani;
+
 /// Compute the live view from a set of datoms.
 ///
 /// For each (entity, attribute, value) triple, the live view contains
@@ -52,8 +55,10 @@ fn live_view(datoms: &BTreeSet<Datom>) -> BTreeSet<(EntityId, Attribute, Value)>
 ///
 /// Assert a datom, then retract it at a later TxId. The live view
 /// must not contain the retracted triple.
-#[kani::proof]
-#[kani::unwind(6)]
+#[cfg_attr(kani, kani::proof)]
+#[cfg_attr(kani, kani::unwind(6))]
+#[cfg_attr(not(kani), test)]
+#[cfg_attr(not(kani), ignore = "requires Kani verifier")]
 fn retraction_removes_from_live_view() {
     let entity = EntityId::from_content(b"kani-live-029");
     let attr = Attribute::from("test/name");
@@ -85,8 +90,10 @@ fn retraction_removes_from_live_view() {
 /// INV-FERR-029: retraction of one triple does not affect others.
 ///
 /// Assert two triples, retract one. The other must remain live.
-#[kani::proof]
-#[kani::unwind(8)]
+#[cfg_attr(kani, kani::proof)]
+#[cfg_attr(kani, kani::unwind(8))]
+#[cfg_attr(not(kani), test)]
+#[cfg_attr(not(kani), ignore = "requires Kani verifier")]
 fn retraction_is_targeted() {
     let e1 = EntityId::from_content(b"kani-live-e1");
     let e2 = EntityId::from_content(b"kani-live-e2");
@@ -120,8 +127,10 @@ fn retraction_is_targeted() {
 ///
 /// Symbolic: for a bounded set of datoms, every triple in the live view
 /// must have its latest operation be Assert (not Retract).
-#[kani::proof]
-#[kani::unwind(6)]
+#[cfg_attr(kani, kani::proof)]
+#[cfg_attr(kani, kani::unwind(6))]
+#[cfg_attr(not(kani), test)]
+#[cfg_attr(not(kani), ignore = "requires Kani verifier")]
 fn live_view_contains_only_asserted() {
     let entity = EntityId::from_content(b"kani-live-032");
     let attr = Attribute::from("test/val");

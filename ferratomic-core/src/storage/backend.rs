@@ -130,8 +130,10 @@ impl StorageBackend for FsBackend {
     }
 
     fn open_checkpoint_reader(&self) -> Result<Box<dyn IoRead>, FerraError> {
-        let file = std::fs::File::open(self.checkpoint_path())
-            .map_err(|e| FerraError::Io(e.to_string()))?;
+        let file = std::fs::File::open(self.checkpoint_path()).map_err(|e| FerraError::Io {
+            kind: format!("{:?}", e.kind()),
+            message: e.to_string(),
+        })?;
         Ok(Box::new(std::io::BufReader::new(file)))
     }
 
@@ -146,13 +148,18 @@ impl StorageBackend for FsBackend {
             .read(true)
             .truncate(false)
             .open(self.wal_path())
-            .map_err(|e| FerraError::Io(e.to_string()))?;
+            .map_err(|e| FerraError::Io {
+                kind: format!("{:?}", e.kind()),
+                message: e.to_string(),
+            })?;
         Ok(Box::new(file))
     }
 
     fn open_wal_reader(&self) -> Result<Box<dyn ReadSeek>, FerraError> {
-        let file =
-            std::fs::File::open(self.wal_path()).map_err(|e| FerraError::Io(e.to_string()))?;
+        let file = std::fs::File::open(self.wal_path()).map_err(|e| FerraError::Io {
+            kind: format!("{:?}", e.kind()),
+            message: e.to_string(),
+        })?;
         Ok(Box::new(file))
     }
 
@@ -161,8 +168,10 @@ impl StorageBackend for FsBackend {
     }
 
     fn create_dirs(&self) -> Result<(), FerraError> {
-        std::fs::create_dir_all(&self.data_dir)
-            .map_err(|e| FerraError::Io(format!("cannot create data dir: {e}")))
+        std::fs::create_dir_all(&self.data_dir).map_err(|e| FerraError::Io {
+            kind: format!("{:?}", e.kind()),
+            message: format!("cannot create data dir: {e}"),
+        })
     }
 }
 
@@ -277,10 +286,10 @@ impl StorageBackend for InMemoryBackend {
     }
 
     fn open_checkpoint_reader(&self) -> Result<Box<dyn IoRead>, FerraError> {
-        let guard = self
-            .checkpoint
-            .lock()
-            .map_err(|_| FerraError::Io("checkpoint mutex poisoned".to_string()))?;
+        let guard = self.checkpoint.lock().map_err(|_| FerraError::Io {
+            kind: "Other".to_string(),
+            message: "checkpoint mutex poisoned".to_string(),
+        })?;
         Ok(Box::new(Cursor::new(guard.clone())))
     }
 
@@ -289,15 +298,18 @@ impl StorageBackend for InMemoryBackend {
     }
 
     fn open_wal_writer(&self) -> Result<Box<dyn WriteSeek>, FerraError> {
-        let guard = self
-            .wal
-            .lock()
-            .map_err(|_| FerraError::Io("WAL mutex poisoned".to_string()))?;
+        let guard = self.wal.lock().map_err(|_| FerraError::Io {
+            kind: "Other".to_string(),
+            message: "WAL mutex poisoned".to_string(),
+        })?;
         let existing = guard.clone();
         let mut cursor = Cursor::new(existing);
         cursor
             .seek(std::io::SeekFrom::End(0))
-            .map_err(|e| FerraError::Io(format!("WAL seek to end failed: {e}")))?;
+            .map_err(|e| FerraError::Io {
+                kind: format!("{:?}", e.kind()),
+                message: format!("WAL seek to end failed: {e}"),
+            })?;
         Ok(Box::new(SharedBufferSeekWriter {
             target: Arc::clone(&self.wal),
             cursor,
@@ -305,10 +317,10 @@ impl StorageBackend for InMemoryBackend {
     }
 
     fn open_wal_reader(&self) -> Result<Box<dyn ReadSeek>, FerraError> {
-        let guard = self
-            .wal
-            .lock()
-            .map_err(|_| FerraError::Io("WAL mutex poisoned".to_string()))?;
+        let guard = self.wal.lock().map_err(|_| FerraError::Io {
+            kind: "Other".to_string(),
+            message: "WAL mutex poisoned".to_string(),
+        })?;
         Ok(Box::new(Cursor::new(guard.clone())))
     }
 

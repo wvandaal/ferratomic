@@ -8,9 +8,14 @@ use ferratomic_core::{
     writer::{Transaction, TxValidationError},
 };
 
+#[cfg(not(kani))]
+use super::kani;
+
 /// INV-FERR-009: unknown attributes are rejected at commit time.
-#[kani::proof]
-#[kani::unwind(6)]
+#[cfg_attr(kani, kani::proof)]
+#[cfg_attr(kani, kani::unwind(6))]
+#[cfg_attr(not(kani), test)]
+#[cfg_attr(not(kani), ignore = "requires Kani verifier")]
 fn schema_rejects_unknown_attr() {
     let store = Store::genesis();
     let tx = Transaction::new(AgentId::from_bytes([0u8; 16])).assert_datom(
@@ -27,8 +32,10 @@ fn schema_rejects_unknown_attr() {
 }
 
 /// INV-FERR-012: identical content produces identical entity identities.
-#[kani::proof]
-#[kani::unwind(4)]
+#[cfg_attr(kani, kani::proof)]
+#[cfg_attr(kani, kani::unwind(4))]
+#[cfg_attr(not(kani), test)]
+#[cfg_attr(not(kani), ignore = "requires Kani verifier")]
 fn content_identity() {
     let content: [u8; 16] = kani::any();
     let id1 = EntityId::from_content(&content);

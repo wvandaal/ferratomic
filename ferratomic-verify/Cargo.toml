@@ -81,6 +81,12 @@ path = "integration/test_schema.rs"
 name = "integration_thresholds"
 path = "integration/test_thresholds.rs"
 
+# --- Kani bounded model checking harnesses (kani/) ---
+
+[[test]]
+name = "kani_harnesses"
+path = "kani/mod.rs"
+
 # --- Criterion benchmark suites (benches/) ---
 
 [[bench]]

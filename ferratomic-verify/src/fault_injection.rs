@@ -122,9 +122,10 @@ impl<B: StorageBackend> FaultInjectingBackend<B> {
     /// Return an IO error if power cut is active.
     fn check_power_cut(&self) -> Result<(), FerraError> {
         if self.is_power_cut() {
-            return Err(FerraError::Io(
-                "power cut: all operations failed".to_string(),
-            ));
+            return Err(FerraError::Io {
+                kind: "Other".to_string(),
+                message: "power cut: all operations failed".to_string(),
+            });
         }
         Ok(())
     }

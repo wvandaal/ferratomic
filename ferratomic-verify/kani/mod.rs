@@ -2,18 +2,35 @@
 //!
 //! These modules mirror the Level 2 Rust contracts in
 //! `spec/01-core-invariants.md` and `spec/02-concurrency.md`.
-//! They are red-phase verification artifacts: the referenced runtime APIs are
-//! expected to arrive in later phases, so these harnesses intentionally lead the
-//! implementation surface.
+//!
+//! **Dual-mode compilation**: Under the Kani verifier (`cargo kani`),
+//! harnesses run as bounded proofs with symbolic execution. Under normal
+//! `cargo check --all-targets` / `cargo test`, they compile as
+//! `#[test] #[ignore]` functions — ensuring type-level API compatibility
+//! is continuously checked without requiring the Kani toolchain.
 
-#![cfg(kani)]
+/// Stub implementations of Kani primitives for non-Kani compilation.
+///
+/// Under Kani, `kani::any()` and `kani::assume()` are provided by the
+/// verifier. Under normal cargo, these stubs satisfy the type checker.
+/// Harnesses using them are `#[ignore]`d, so the stubs never execute.
+#[cfg(not(kani))]
+mod kani {
+    /// Symbolic value stub — panics if called outside Kani.
+    pub fn any<T>() -> T {
+        unreachable!("kani::any() requires the Kani verifier — run with `cargo kani`")
+    }
 
-pub mod backpressure_bounds;
-pub mod clock;
-pub mod crdt_laws;
-pub mod durability;
-pub mod error_exhaustiveness;
-pub mod live_resolution;
-pub mod schema_identity;
-pub mod sharding;
-pub mod store_views;
+    /// Precondition stub — no-op outside Kani.
+    pub fn assume(_condition: bool) {}
+}
+
+mod backpressure_bounds;
+mod clock;
+mod crdt_laws;
+mod durability;
+mod error_exhaustiveness;
+mod live_resolution;
+mod schema_identity;
+mod sharding;
+mod store_views;

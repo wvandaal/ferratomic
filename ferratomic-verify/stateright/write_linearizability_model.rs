@@ -161,6 +161,105 @@ impl Default for WriteLinModel {
     }
 }
 
+/// INV-FERR-007: Acquire the exclusive writer lock for writer `id`.
+fn apply_acquire_lock(next: &mut WriteLinState, id: usize) -> Option<()> {
+    if next.writer_lock != WriterLock::Free
+        || next.crash_mode != CrashMode::Normal
+        || id >= next.pending_txns.len()
+        || next.pending_txns[id] != PendingTxn::Waiting
+    {
+        return None;
+    }
+    next.writer_lock = WriterLock::Held(id);
+    Some(())
+}
+
+/// INV-FERR-007: Assign the next epoch under the held lock.
+fn apply_assign_epoch(next: &mut WriteLinState, id: usize) -> Option<()> {
+    if next.writer_lock != WriterLock::Held(id) || next.pending_txns[id] != PendingTxn::Waiting {
+        return None;
+    }
+    if next.current_epoch > MAX_EPOCH {
+        return None;
+    }
+    let epoch = next.current_epoch;
+    next.pending_txns[id] = PendingTxn::EpochAssigned(epoch);
+    next.current_epoch = epoch + 1;
+    Some(())
+}
+
+/// INV-FERR-008: Fsync the WAL entry for writer `id`.
+fn apply_fsync_wal(next: &mut WriteLinState, id: usize) -> Option<()> {
+    if let PendingTxn::EpochAssigned(epoch) = next.pending_txns[id] {
+        next.pending_txns[id] = PendingTxn::Fsynced(epoch);
+        next.wal_fsynced_epoch = Some(epoch);
+        Some(())
+    } else {
+        None
+    }
+}
+
+/// INV-FERR-007: Release lock and publish epoch for writer `id`.
+fn apply_release_lock(next: &mut WriteLinState, id: usize) -> Option<()> {
+    if next.writer_lock != WriterLock::Held(id) {
+        return None;
+    }
+    if let PendingTxn::Fsynced(epoch) = next.pending_txns[id] {
+        next.committed_epochs.push(epoch);
+        next.pending_txns[id] = PendingTxn::Done(epoch);
+        next.writer_lock = WriterLock::Free;
+        next.wal_fsynced_epoch = None;
+        Some(())
+    } else {
+        None
+    }
+}
+
+/// Reset in-flight txns to Waiting based on which states should be discarded.
+fn reset_inflight_txns(pending: &mut [PendingTxn], reset_fsynced: bool) {
+    for txn in pending.iter_mut() {
+        match txn {
+            PendingTxn::EpochAssigned(_) => *txn = PendingTxn::Waiting,
+            PendingTxn::Fsynced(_) if reset_fsynced => *txn = PendingTxn::Waiting,
+            _ => {}
+        }
+    }
+}
+
+/// Crash before WAL fsync: in-flight write is lost.
+fn apply_crash_before_fsync(next: &mut WriteLinState) {
+    next.writer_lock = WriterLock::Free;
+    next.wal_fsynced_epoch = None;
+    reset_inflight_txns(&mut next.pending_txns, false);
+    next.crash_mode = CrashMode::Recovering;
+}
+
+/// Crash after WAL fsync but before publication.
+fn apply_crash_after_fsync(next: &mut WriteLinState) {
+    next.writer_lock = WriterLock::Free;
+    reset_inflight_txns(&mut next.pending_txns, true);
+    next.crash_mode = CrashMode::Recovering;
+}
+
+/// INV-FERR-007: Recover from crash, replaying fsynced WAL entries.
+fn apply_recover(next: &mut WriteLinState) -> Option<()> {
+    if next.crash_mode != CrashMode::Recovering {
+        return None;
+    }
+    if let Some(wal_epoch) = next.wal_fsynced_epoch.take() {
+        let last_committed = next.committed_epochs.last().copied().unwrap_or(0);
+        if wal_epoch > last_committed {
+            next.committed_epochs.push(wal_epoch);
+        }
+    }
+    let last = next.committed_epochs.last().copied().unwrap_or(0);
+    if next.current_epoch <= last {
+        next.current_epoch = last + 1;
+    }
+    next.crash_mode = CrashMode::Normal;
+    Some(())
+}
+
 impl Model for WriteLinModel {
     type State = WriteLinState;
     type Action = WriteLinAction;
@@ -222,134 +321,29 @@ impl Model for WriteLinModel {
 
     fn next_state(&self, state: &Self::State, action: Self::Action) -> Option<Self::State> {
         let mut next = state.clone();
-
         match action {
             WriteLinAction::AcquireLock(id) => {
-                // INV-FERR-007: serialize writers via exclusive lock.
-                if next.writer_lock != WriterLock::Free {
-                    return None;
-                }
-                if next.crash_mode != CrashMode::Normal {
-                    return None;
-                }
-                if id >= next.pending_txns.len() {
-                    return None;
-                }
-                if next.pending_txns[id] != PendingTxn::Waiting {
-                    return None;
-                }
-                next.writer_lock = WriterLock::Held(id);
-                // Txn stays Waiting until AssignEpoch.
+                apply_acquire_lock(&mut next, id)?;
             }
-
             WriteLinAction::AssignEpoch(id) => {
-                // INV-FERR-007: epoch assigned under the lock, strictly
-                // monotonic with respect to all previously committed epochs.
-                if next.writer_lock != WriterLock::Held(id) {
-                    return None;
-                }
-                if next.pending_txns[id] != PendingTxn::Waiting {
-                    return None;
-                }
-                if next.current_epoch > MAX_EPOCH {
-                    return None; // boundary
-                }
-                let epoch = next.current_epoch;
-                next.pending_txns[id] = PendingTxn::EpochAssigned(epoch);
-                next.current_epoch = epoch + 1;
+                apply_assign_epoch(&mut next, id)?;
             }
-
             WriteLinAction::FsyncWal(id) => {
-                // INV-FERR-008: WAL must be fsynced before publication.
-                if let PendingTxn::EpochAssigned(epoch) = next.pending_txns[id] {
-                    next.pending_txns[id] = PendingTxn::Fsynced(epoch);
-                    next.wal_fsynced_epoch = Some(epoch);
-                } else {
-                    return None;
-                }
+                apply_fsync_wal(&mut next, id)?;
             }
-
             WriteLinAction::ReleaseLock(id) => {
-                // INV-FERR-007: publish epoch and release lock.
-                if next.writer_lock != WriterLock::Held(id) {
-                    return None;
-                }
-                if let PendingTxn::Fsynced(epoch) = next.pending_txns[id] {
-                    next.committed_epochs.push(epoch);
-                    next.pending_txns[id] = PendingTxn::Done(epoch);
-                    next.writer_lock = WriterLock::Free;
-                    next.wal_fsynced_epoch = None;
-                } else {
-                    return None;
-                }
+                apply_release_lock(&mut next, id)?;
             }
-
             WriteLinAction::CrashBeforeFsync => {
-                // Crash before WAL fsync: the in-flight write is lost.
-                // The epoch was consumed but never durably committed.
-                // Reset all non-Done transactions to Waiting.
-                next.writer_lock = WriterLock::Free;
-                next.wal_fsynced_epoch = None;
-                for txn in &mut next.pending_txns {
-                    match txn {
-                        PendingTxn::EpochAssigned(_) => {
-                            *txn = PendingTxn::Waiting;
-                        }
-                        PendingTxn::Waiting | PendingTxn::Fsynced(_) | PendingTxn::Done(_) => {}
-                    }
-                }
-                next.crash_mode = CrashMode::Recovering;
+                apply_crash_before_fsync(&mut next);
             }
-
             WriteLinAction::CrashAfterFsync => {
-                // Crash after WAL fsync but before lock release.
-                // The WAL entry is durable, but the epoch was not yet
-                // published to committed_epochs. Recovery must replay it.
-                // Keep wal_fsynced_epoch so Recover can replay.
-                next.writer_lock = WriterLock::Free;
-                for txn in &mut next.pending_txns {
-                    match txn {
-                        PendingTxn::Fsynced(_) => {
-                            // Keep as-is: recovery will handle.
-                            *txn = PendingTxn::Waiting;
-                        }
-                        PendingTxn::EpochAssigned(_) => {
-                            *txn = PendingTxn::Waiting;
-                        }
-                        PendingTxn::Waiting | PendingTxn::Done(_) => {}
-                    }
-                }
-                next.crash_mode = CrashMode::Recovering;
+                apply_crash_after_fsync(&mut next);
             }
-
             WriteLinAction::Recover => {
-                // INV-FERR-007 safety: recovery must not produce an epoch
-                // less than the last committed epoch.
-                if next.crash_mode != CrashMode::Recovering {
-                    return None;
-                }
-
-                // Replay fsynced WAL entry if present.
-                if let Some(wal_epoch) = next.wal_fsynced_epoch.take() {
-                    let last_committed = next.committed_epochs.last().copied().unwrap_or(0);
-                    // Only replay if the WAL epoch is strictly greater
-                    // than the last committed epoch (INV-FERR-007).
-                    if wal_epoch > last_committed {
-                        next.committed_epochs.push(wal_epoch);
-                    }
-                }
-
-                // current_epoch must be at least last_committed + 1 so
-                // the next write gets a strictly higher epoch.
-                let last = next.committed_epochs.last().copied().unwrap_or(0);
-                if next.current_epoch <= last {
-                    next.current_epoch = last + 1;
-                }
-
-                next.crash_mode = CrashMode::Normal;
+                apply_recover(&mut next)?;
             }
         }
-
         Some(next)
     }
 

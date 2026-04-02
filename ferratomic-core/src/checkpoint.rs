@@ -263,7 +263,10 @@ fn fsync_parent_dir(dir: &Path) -> Result<(), FerraError> {
 /// `FerraError::Io` on read failure, or `FerraError::CheckpointWrite`
 /// on deserialization failure.
 pub fn load_checkpoint(path: &Path) -> Result<Store, FerraError> {
-    let data = std::fs::read(path).map_err(|e| FerraError::Io(e.to_string()))?;
+    let data = std::fs::read(path).map_err(|e| FerraError::Io {
+        kind: format!("{:?}", e.kind()),
+        message: e.to_string(),
+    })?;
 
     deserialize_checkpoint_bytes(&data)
 }
@@ -280,9 +283,10 @@ pub(crate) fn load_checkpoint_from_reader<R: std::io::Read>(
     reader: &mut R,
 ) -> Result<Store, FerraError> {
     let mut data = Vec::new();
-    reader
-        .read_to_end(&mut data)
-        .map_err(|e| FerraError::Io(e.to_string()))?;
+    reader.read_to_end(&mut data).map_err(|e| FerraError::Io {
+        kind: format!("{:?}", e.kind()),
+        message: e.to_string(),
+    })?;
     deserialize_checkpoint_bytes(&data)
 }
 

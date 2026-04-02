@@ -119,7 +119,7 @@ proptest! {
                 let snap = cs.database.snapshot();
                 let _ = snap.datoms().count();
             }
-            Err(ferratom::FerraError::Io(_)) => {}
+            Err(ferratom::FerraError::Io { .. }) => {}
             Err(e) => {
                 prop_assert!(false, "unexpected error: {e}");
             }

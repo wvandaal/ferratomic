@@ -1,0 +1,5 @@
+# Pinned nightly toolchain for reproducible builds.
+# Update only with tested evidence that the new nightly passes all gates.
+[toolchain]
+channel = "nightly-2026-02-20"
+components = ["rustfmt", "clippy"]

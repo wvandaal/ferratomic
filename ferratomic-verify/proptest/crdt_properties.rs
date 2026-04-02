@@ -377,95 +377,98 @@ proptest! {
     }
 }
 
-/// INV-FERR-029: merge_causal homomorphism — adversarial cross-store retraction.
+/// Build a store with a single assert datom at the given tx epoch.
+fn store_with_assert(
+    entity: EntityId,
+    attribute: &ferratom::Attribute,
+    value: &ferratom::Value,
+    tx_epoch: u64,
+) -> Store {
+    Store::from_datoms(BTreeSet::from([Datom::new(
+        entity,
+        attribute.clone(),
+        value.clone(),
+        ferratom::TxId::new(tx_epoch, 0, 0),
+        ferratom::Op::Assert,
+    )]))
+}
+
+/// Build a store with an assert at one epoch and a retract at another.
+fn store_with_assert_and_retract(
+    entity: EntityId,
+    attribute: &ferratom::Attribute,
+    value: &ferratom::Value,
+    assert_epoch: u64,
+    retract_epoch: u64,
+) -> Store {
+    Store::from_datoms(BTreeSet::from([
+        Datom::new(
+            entity,
+            attribute.clone(),
+            value.clone(),
+            ferratom::TxId::new(assert_epoch, 0, 0),
+            ferratom::Op::Assert,
+        ),
+        Datom::new(
+            entity,
+            attribute.clone(),
+            value.clone(),
+            ferratom::TxId::new(retract_epoch, 0, 0),
+            ferratom::Op::Retract,
+        ),
+    ]))
+}
+
+/// Check whether a value is live after merging two stores.
+fn is_value_live_after_merge(
+    a: &Store,
+    b: &Store,
+    entity: EntityId,
+    attribute: &ferratom::Attribute,
+    value: &ferratom::Value,
+) -> bool {
+    let merged = merge(a, b).expect("merge must succeed");
+    merged
+        .live_values(entity, attribute)
+        .is_some_and(|vals| vals.contains(value))
+}
+
+/// INV-FERR-029: merge_causal homomorphism -- adversarial cross-store retraction.
 ///
 /// Verifies that merge_causal produces correct LIVE resolution when one store
 /// asserts a value and another store retracts it. This is the exact scenario
 /// that proved the naive LIVE set union incorrect (bd-glir).
 #[test]
 fn inv_ferr_029_merge_causal_cross_retraction() {
-    use ferratom::{Attribute, Op, TxId, Value};
-
     let entity = EntityId::from_content(b"cross-retract-e1");
-    let attribute = Attribute::from("user/name");
-    let value = Value::String("contested".into());
+    let attribute = ferratom::Attribute::from("user/name");
+    let value = ferratom::Value::String("contested".into());
 
-    // Case 1: B's retract has higher TxId than A's assert → value NOT live.
-    let a1 = Store::from_datoms(BTreeSet::from([Datom::new(
-        entity,
-        attribute.clone(),
-        value.clone(),
-        TxId::new(10, 0, 0),
-        Op::Assert,
-    )]));
-    let b1 = Store::from_datoms(BTreeSet::from([
-        Datom::new(
-            entity,
-            attribute.clone(),
-            value.clone(),
-            TxId::new(5, 0, 0),
-            Op::Assert,
-        ),
-        Datom::new(
-            entity,
-            attribute.clone(),
-            value.clone(),
-            TxId::new(20, 0, 0),
-            Op::Retract,
-        ),
-    ]));
-
-    let merged1 = merge(&a1, &b1).expect("merge must succeed");
+    // Case 1: B's retract (tx=20) > A's assert (tx=10) -- value NOT live.
+    let a1 = store_with_assert(entity, &attribute, &value, 10);
+    let b1 = store_with_assert_and_retract(entity, &attribute, &value, 5, 20);
     assert!(
-        merged1.live_values(entity, &attribute).is_none()
-            || !merged1
-                .live_values(entity, &attribute)
-                .expect("live_values")
-                .contains(&value),
-        "INV-FERR-029: retract at tx=20 must override assert at tx=10. \
-         Value should NOT be live after cross-store retraction."
+        !is_value_live_after_merge(&a1, &b1, entity, &attribute, &value),
+        "INV-FERR-029: retract at tx=20 must override assert at tx=10"
     );
 
-    // Case 2: A's assert has higher TxId than B's retract → value IS live.
-    let a2 = Store::from_datoms(BTreeSet::from([Datom::new(
-        entity,
-        attribute.clone(),
-        value.clone(),
-        TxId::new(30, 0, 0),
-        Op::Assert,
-    )]));
-    let b2 = Store::from_datoms(BTreeSet::from([
-        Datom::new(
-            entity,
-            attribute.clone(),
-            value.clone(),
-            TxId::new(5, 0, 0),
-            Op::Assert,
-        ),
-        Datom::new(
-            entity,
-            attribute.clone(),
-            value.clone(),
-            TxId::new(20, 0, 0),
-            Op::Retract,
-        ),
-    ]));
-
-    let merged2 = merge(&a2, &b2).expect("merge must succeed");
-    let live_vals = merged2.live_values(entity, &attribute);
+    // Case 2: A's assert (tx=30) > B's retract (tx=20) -- value IS live.
+    let a2 = store_with_assert(entity, &attribute, &value, 30);
+    let b2 = store_with_assert_and_retract(entity, &attribute, &value, 5, 20);
     assert!(
-        live_vals.is_some() && live_vals.expect("live_values").contains(&value),
-        "INV-FERR-029: assert at tx=30 must override retract at tx=20. \
-         Value SHOULD be live when assert is causally later."
+        is_value_live_after_merge(&a2, &b2, entity, &attribute, &value),
+        "INV-FERR-029: assert at tx=30 must override retract at tx=20"
     );
 
     // Case 3: Commutativity holds for both cases.
+    let merged1 = merge(&a1, &b1).expect("merge must succeed");
     let merged1_rev = merge(&b1, &a1).expect("reverse merge must succeed");
     assert_eq!(
         merged1.live_values(entity, &attribute),
         merged1_rev.live_values(entity, &attribute),
         "INV-FERR-001/029: cross-retraction merge must be commutative"
     );
+    let merged2 = merge(&a2, &b2).expect("merge must succeed");
     let merged2_rev = merge(&b2, &a2).expect("reverse merge must succeed");
     assert_eq!(
         merged2.live_values(entity, &attribute),
