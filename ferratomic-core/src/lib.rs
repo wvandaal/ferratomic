@@ -179,6 +179,7 @@ pub mod db;
 pub mod indexes;
 pub mod merge;
 pub mod observer;
+pub mod positional;
 pub(crate) mod schema_evolution;
 pub(crate) mod snapshot;
 pub mod storage;

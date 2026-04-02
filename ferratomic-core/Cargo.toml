@@ -13,6 +13,7 @@ im = { workspace = true }
 arc-swap = { workspace = true }
 blake3 = { workspace = true }
 bincode = { workspace = true }
+bitvec = { workspace = true }
 serde = { workspace = true }
 asupersync = { workspace = true }
 # tokio: optional, for asupersync-tokio-compat adapter modules only
