@@ -52,6 +52,25 @@ cass search "OrdMap cold start 89" --robot --fields minimal --limit 5
 
 # The zero-copy mmap design discussion:
 cass search "zero-copy mmap checkpoint" --robot --fields minimal --limit 5 --workspace /data/projects/ddis/ferratomic
+
+# CRITICAL: The merge-sort insight — why CRDT merge IS merge-sort on arrays.
+# This is the theoretical foundation for merge_positional. The session proves
+# that merge-sort on contiguous canonical arrays is algebraically equivalent
+# to OrdSet union, but 1,780x faster at 200K datoms (50ms vs 89s). It also
+# shows that LIVE merge reduces to bitwise OR (~1 microsecond for 200K datoms).
+# Lines 615, 824, 832 in session 97a9dbc5 contain the core reasoning.
+cass search "merge sort sequential access cache" --robot --fields minimal --limit 5 --workspace /data/projects/ddis/ferratomic
+
+# The "Five Concrete Wins" analysis — quantified impact per subsystem.
+# Covers: (1) 32-byte→4-byte internal references, (2) LIVE as bitvector,
+# (3) checkpoint file IS the runtime format, (4) merge as merge-sort,
+# (5) federation diff as position XOR.
+cass search "50ms merge sort contiguous" --robot --fields minimal --limit 5
+
+# To read the full session end-to-end (10K lines, ~30min read):
+cass export "/home/ubuntu/.claude/projects/-data-projects-ddis-ferratomic/97a9dbc5-6bf9-43ac-976e-7eb36fe1dfca.jsonl" --format markdown 2>/dev/null > /tmp/session006.md
+# Then search within it:
+# grep -n "merge-sort\|Concrete Wins\|faithful functor\|LIVE.*bitvector\|arrays ARE" /tmp/session006.md
 ```
 
 **Why this matters for THIS session:** Steps 3-5 are surgery on Store
@@ -60,6 +79,13 @@ snapshot representation (not a mutable store), WHY transact must keep
 OrdMap (positions shift on insert), and WHY the lazy promotion pattern
 exists. Without this context, you will likely try to make PositionalStore
 mutable — which contradicts the architecture.
+
+The merge-sort insight is especially critical for Step 3: when wiring
+`merge_positional` into `Store::from_merge`, you need to understand that
+the O(n+m) merge-sort + O(n log n) permutation rebuild is the CORRECT
+cost — it replaces O(n log n) OrdSet tree union + O(n) 4x OrdMap rebuild
+with cache-hostile pointer chasing. The constant factors make merge-sort
+dramatically faster despite the same asymptotic complexity.
 
 ## Session 007-008 Summary
 
