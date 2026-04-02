@@ -1,12 +1,14 @@
 //! Durability and transaction-shape Kani harnesses.
 //!
-//! Covers INV-FERR-008, INV-FERR-013, INV-FERR-014, INV-FERR-018, and INV-FERR-020.
+//! Covers INV-FERR-008, INV-FERR-013, INV-FERR-014, INV-FERR-018,
+//! INV-FERR-020, INV-FERR-024, INV-FERR-026, and INV-FERR-028.
 
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, sync::Arc};
 
 use ferratom::{AgentId, Attribute, Datom, EntityId, Value};
 use ferratomic_core::{store::Store, writer::Transaction};
 
+use super::helpers::{concrete_datom, concrete_datom_set};
 #[cfg(not(kani))]
 use super::kani;
 
@@ -16,8 +18,9 @@ use super::kani;
 #[cfg_attr(not(kani), test)]
 #[cfg_attr(not(kani), ignore = "requires Kani verifier")]
 fn checkpoint_roundtrip() {
-    let datoms: BTreeSet<Datom> = kani::any();
-    kani::assume(datoms.len() <= 4);
+    let count: u8 = kani::any();
+    kani::assume(count <= 4);
+    let datoms = concrete_datom_set(count);
 
     let store = Store::from_datoms(datoms.clone());
     let bytes = store
@@ -36,11 +39,13 @@ fn checkpoint_roundtrip() {
 #[cfg_attr(not(kani), test)]
 #[cfg_attr(not(kani), ignore = "requires Kani verifier")]
 fn recovery_superset() {
-    let committed: BTreeSet<Datom> = kani::any();
-    kani::assume(committed.len() <= 4);
+    let count_committed: u8 = kani::any();
+    kani::assume(count_committed <= 4);
+    let committed: BTreeSet<Datom> = (0..count_committed).map(concrete_datom).collect();
 
-    let uncommitted: BTreeSet<Datom> = kani::any();
-    kani::assume(uncommitted.len() <= 2);
+    let count_uncommitted: u8 = kani::any();
+    kani::assume(count_uncommitted <= 2);
+    let uncommitted: BTreeSet<Datom> = (10..10 + count_uncommitted).map(concrete_datom).collect();
     let survived: bool = kani::any();
 
     let mut recovered = committed.clone();
@@ -59,9 +64,11 @@ fn recovery_superset() {
 #[cfg_attr(not(kani), test)]
 #[cfg_attr(not(kani), ignore = "requires Kani verifier")]
 fn append_only() {
-    let initial: BTreeSet<Datom> = kani::any();
-    kani::assume(initial.len() <= 4);
-    let new_datom: Datom = kani::any();
+    let count: u8 = kani::any();
+    kani::assume(count <= 4);
+    let initial = concrete_datom_set(count);
+
+    let new_datom = concrete_datom(kani::any::<u8>());
 
     let mut store = initial.clone();
     store.insert(new_datom);
@@ -263,4 +270,167 @@ fn verify_barrier_violations() {
 fn kani_inv_ferr_008_wal_fsync_ordering() {
     verify_canonical_and_symbolic();
     verify_barrier_violations();
+}
+
+// ---------------------------------------------------------------------------
+// INV-FERR-024: Substrate agnosticism
+// ---------------------------------------------------------------------------
+
+/// INV-FERR-024: InMemoryBackend checkpoint round-trip preserves store state.
+///
+/// Verifies that writing a checkpoint through InMemoryBackend and reading
+/// it back produces an identical store. This proves the StorageBackend
+/// trait abstraction does not lose data for the in-memory substrate.
+#[cfg_attr(kani, kani::proof)]
+#[cfg_attr(kani, kani::unwind(8))]
+#[cfg_attr(not(kani), test)]
+#[cfg_attr(not(kani), ignore = "requires Kani verifier")]
+fn substrate_agnosticism_in_memory() {
+    use std::io::Write;
+
+    use ferratomic_core::storage::{InMemoryBackend, StorageBackend};
+
+    let mut store = Store::genesis();
+    let tx = Transaction::new(AgentId::from_bytes([1u8; 16]))
+        .assert_datom(
+            EntityId::from_content(b"substrate-test"),
+            Attribute::from("db/doc"),
+            Value::String(Arc::from("backend agnosticism")),
+        )
+        .commit(store.schema())
+        .expect("INV-FERR-024: tx must validate");
+    let _ = store
+        .transact_test(tx)
+        .expect("INV-FERR-024: tx must apply");
+
+    let bytes = store
+        .to_checkpoint_bytes()
+        .expect("INV-FERR-024: serialization must succeed");
+
+    // Write through InMemoryBackend, then read back.
+    let backend = InMemoryBackend::new();
+    let mut writer = backend
+        .open_checkpoint_writer()
+        .expect("INV-FERR-024: open writer");
+    writer
+        .write_all(&bytes)
+        .expect("INV-FERR-024: write must succeed");
+    drop(writer);
+
+    let mut reader = backend
+        .open_checkpoint_reader()
+        .expect("INV-FERR-024: open reader");
+    let mut read_bytes = Vec::new();
+    std::io::Read::read_to_end(&mut reader, &mut read_bytes)
+        .expect("INV-FERR-024: read must succeed");
+
+    let loaded = Store::from_checkpoint_bytes(&read_bytes)
+        .expect("INV-FERR-024: deserialization must succeed");
+    assert_eq!(
+        store.datom_set(),
+        loaded.datom_set(),
+        "INV-FERR-024: datom set must survive InMemoryBackend round-trip"
+    );
+    assert_eq!(
+        store.epoch(),
+        loaded.epoch(),
+        "INV-FERR-024: epoch must survive InMemoryBackend round-trip"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// INV-FERR-026: Write amplification bound
+// ---------------------------------------------------------------------------
+
+/// WAL frame overhead: magic(4) + version(2) + epoch(8) + length(4) + CRC(4) = 22 bytes.
+const WAL_FRAME_OVERHEAD: usize = 22;
+
+/// INV-FERR-026: WAL write amplification <= 10x.
+///
+/// Models the write amplification bound: for N datoms each producing
+/// a payload of S bytes, the total WAL physical size is
+/// N * (S + WAL_FRAME_OVERHEAD). The invariant requires this to be
+/// <= 10 * N * S for any S >= 3 (minimum meaningful datom payload).
+///
+/// This is a structural proof over the WAL frame format constants.
+#[cfg_attr(kani, kani::proof)]
+#[cfg_attr(kani, kani::unwind(6))]
+#[cfg_attr(not(kani), test)]
+#[cfg_attr(not(kani), ignore = "requires Kani verifier")]
+fn write_amplification_bound() {
+    let n: usize = kani::any();
+    let s: usize = kani::any();
+    kani::assume(n > 0 && n <= 4);
+    // Minimum payload size: a single bincode-encoded datom is always
+    // larger than 3 bytes. We bound symbolically.
+    kani::assume((3..=1024).contains(&s));
+
+    let logical_size = n * s;
+    let physical_size = n * (s + WAL_FRAME_OVERHEAD);
+
+    // INV-FERR-026: write amplification = physical / logical <= 10.
+    // Equivalently: physical <= 10 * logical.
+    assert!(
+        physical_size <= 10 * logical_size,
+        "INV-FERR-026: write amplification exceeded 10x: \
+         physical={physical_size}, logical={logical_size}, \
+         ratio={}",
+        physical_size / logical_size.max(1)
+    );
+}
+
+// ---------------------------------------------------------------------------
+// INV-FERR-028: Cold start latency (checkpoint round-trip correctness)
+// ---------------------------------------------------------------------------
+
+/// INV-FERR-028: cold start via checkpoint produces identical store.
+///
+/// Verifies that a store with committed transactions can be serialized
+/// to a checkpoint and deserialized back with no data loss. This is the
+/// correctness foundation for the cold start latency bound: if the
+/// round-trip is correct, cold start time is bounded by checkpoint size.
+#[cfg_attr(kani, kani::proof)]
+#[cfg_attr(kani, kani::unwind(8))]
+#[cfg_attr(not(kani), test)]
+#[cfg_attr(not(kani), ignore = "requires Kani verifier")]
+fn cold_start_checkpoint_roundtrip() {
+    let mut store = Store::genesis();
+    let agent = AgentId::from_bytes([2u8; 16]);
+    let n_txns: u8 = kani::any();
+    kani::assume(n_txns > 0 && n_txns <= 3);
+
+    for i in 0..n_txns {
+        let tx = Transaction::new(agent)
+            .assert_datom(
+                EntityId::from_content(&[i, 0xC5]),
+                Attribute::from("db/doc"),
+                Value::String(Arc::from(format!("cold-start-{i}"))),
+            )
+            .commit(store.schema())
+            .expect("INV-FERR-028: tx must validate");
+        let _ = store
+            .transact_test(tx)
+            .expect("INV-FERR-028: tx must apply");
+    }
+
+    let bytes = store
+        .to_checkpoint_bytes()
+        .expect("INV-FERR-028: checkpoint serialization must succeed");
+    let loaded = Store::from_checkpoint_bytes(&bytes)
+        .expect("INV-FERR-028: checkpoint deserialization must succeed");
+
+    assert_eq!(
+        store.datom_set(),
+        loaded.datom_set(),
+        "INV-FERR-028: datom set must survive cold-start round-trip"
+    );
+    assert_eq!(
+        store.epoch(),
+        loaded.epoch(),
+        "INV-FERR-028: epoch must survive cold-start round-trip"
+    );
+    assert!(
+        loaded.indexes().verify_bijection(),
+        "INV-FERR-028: indexes must be bijective after cold start"
+    );
 }

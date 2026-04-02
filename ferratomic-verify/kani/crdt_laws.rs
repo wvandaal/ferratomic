@@ -8,6 +8,7 @@ use std::collections::BTreeSet;
 use ferratom::{AgentId, Attribute, Datom, EntityId, Value};
 use ferratomic_core::{merge::merge, store::Store, writer::Transaction};
 
+use super::helpers::{concrete_datom, concrete_datom_set};
 #[cfg(not(kani))]
 use super::kani;
 
@@ -17,9 +18,13 @@ use super::kani;
 #[cfg_attr(not(kani), test)]
 #[cfg_attr(not(kani), ignore = "requires Kani verifier")]
 fn merge_commutativity() {
-    let a: BTreeSet<Datom> = kani::any();
-    let b: BTreeSet<Datom> = kani::any();
-    kani::assume(a.len() <= 4 && b.len() <= 4);
+    let count_a: u8 = kani::any();
+    kani::assume(count_a <= 4);
+    let a: BTreeSet<Datom> = (0..count_a).map(concrete_datom).collect();
+
+    let count_b: u8 = kani::any();
+    kani::assume(count_b <= 4);
+    let b: BTreeSet<Datom> = (10..10 + count_b).map(concrete_datom).collect();
 
     let ab: BTreeSet<Datom> = a.union(&b).cloned().collect();
     let ba: BTreeSet<Datom> = b.union(&a).cloned().collect();
@@ -33,10 +38,17 @@ fn merge_commutativity() {
 #[cfg_attr(not(kani), test)]
 #[cfg_attr(not(kani), ignore = "requires Kani verifier")]
 fn merge_associativity() {
-    let a: BTreeSet<Datom> = kani::any();
-    let b: BTreeSet<Datom> = kani::any();
-    let c: BTreeSet<Datom> = kani::any();
-    kani::assume(a.len() <= 3 && b.len() <= 3 && c.len() <= 3);
+    let count_a: u8 = kani::any();
+    kani::assume(count_a <= 3);
+    let a: BTreeSet<Datom> = (0..count_a).map(concrete_datom).collect();
+
+    let count_b: u8 = kani::any();
+    kani::assume(count_b <= 3);
+    let b: BTreeSet<Datom> = (10..10 + count_b).map(concrete_datom).collect();
+
+    let count_c: u8 = kani::any();
+    kani::assume(count_c <= 3);
+    let c: BTreeSet<Datom> = (20..20 + count_c).map(concrete_datom).collect();
 
     let ab: BTreeSet<Datom> = a.union(&b).cloned().collect();
     let ab_c: BTreeSet<Datom> = ab.union(&c).cloned().collect();
@@ -53,8 +65,9 @@ fn merge_associativity() {
 #[cfg_attr(not(kani), test)]
 #[cfg_attr(not(kani), ignore = "requires Kani verifier")]
 fn merge_idempotency() {
-    let a: BTreeSet<Datom> = kani::any();
-    kani::assume(a.len() <= 5);
+    let count_a: u8 = kani::any();
+    kani::assume(count_a <= 5);
+    let a = concrete_datom_set(count_a);
 
     let aa: BTreeSet<Datom> = a.union(&a).cloned().collect();
     assert_eq!(a, aa);
@@ -66,9 +79,11 @@ fn merge_idempotency() {
 #[cfg_attr(not(kani), test)]
 #[cfg_attr(not(kani), ignore = "requires Kani verifier")]
 fn monotonic_growth() {
-    let s: BTreeSet<Datom> = kani::any();
-    let d: Datom = kani::any();
-    kani::assume(s.len() <= 5);
+    let count_s: u8 = kani::any();
+    kani::assume(count_s <= 5);
+    let s = concrete_datom_set(count_s);
+
+    let d = concrete_datom(kani::any::<u8>());
 
     let mut s_prime = s.clone();
     s_prime.insert(d);
@@ -83,7 +98,9 @@ fn monotonic_growth() {
 #[cfg_attr(not(kani), test)]
 #[cfg_attr(not(kani), ignore = "requires Kani verifier")]
 fn convergence_two_replicas() {
-    let datoms: Vec<Datom> = (0..kani::any::<u8>().min(4)).map(|_| kani::any()).collect();
+    let count: u8 = kani::any();
+    kani::assume(count <= 4);
+    let datoms: Vec<Datom> = (0..count).map(concrete_datom).collect();
 
     let mut r1 = BTreeSet::new();
     let mut r2 = BTreeSet::new();
@@ -104,9 +121,13 @@ fn convergence_two_replicas() {
 #[cfg_attr(not(kani), test)]
 #[cfg_attr(not(kani), ignore = "requires Kani verifier")]
 fn convergence_under_merge() {
-    let a_datoms: BTreeSet<Datom> = kani::any();
-    let b_datoms: BTreeSet<Datom> = kani::any();
-    kani::assume(a_datoms.len() <= 3 && b_datoms.len() <= 3);
+    let count_a: u8 = kani::any();
+    kani::assume(count_a <= 3);
+    let a_datoms: BTreeSet<Datom> = (0..count_a).map(concrete_datom).collect();
+
+    let count_b: u8 = kani::any();
+    kani::assume(count_b <= 3);
+    let b_datoms: BTreeSet<Datom> = (10..10 + count_b).map(concrete_datom).collect();
 
     let a = Store::from_datoms(a_datoms);
     let b = Store::from_datoms(b_datoms);

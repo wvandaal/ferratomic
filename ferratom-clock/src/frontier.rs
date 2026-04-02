@@ -73,7 +73,10 @@ impl Frontier {
         self.map.is_empty()
     }
 
-    /// Iterate over `(agent, tx_id)` pairs.
+    /// Iterate over `(agent, tx_id)` pairs in this frontier.
+    ///
+    /// INV-FERR-016: Exposes per-agent progress tracking for delta
+    /// computation during causal replication.
     pub fn iter(&self) -> impl Iterator<Item = (&AgentId, &TxId)> {
         self.map.iter()
     }

@@ -4919,3 +4919,842 @@ calibration for the legacy key (no predictions were made under it).
 
 ---
 
+## 23.8.5 Phase 4a.5: Federation Foundations
+
+Phase 4a.5 implements the federation features that have **zero dependency on the
+prolly tree (Phase 4b) or actor-based writer**. It sits between Phase 4a (core
+store) and Phase 4b (prolly tree) in a diamond topology: 4a.5 and 4b both
+depend on 4a; 4c depends on both.
+
+**Scope**: Transaction signing, causal predecessors, store identity, provenance
+typing, positive-only DatomFilter, selective merge with receipts, filtered
+observers, transaction-level federation (SignedTransactionBundle), LocalTransport,
+and the universal index algebra trait (Stage 1 spec only).
+
+**Not in scope**: Prolly tree, actor writer, group commit, TcpTransport, QUIC,
+Merkle proofs, full VKN trust gradient, DatomFilter::Not/Custom/AfterEpoch,
+non-monotonic query barriers, observer-as-engine-concept.
+
+**Design principles**:
+
+1. **Signed from day one.** Every federated datom carries provenance from birth.
+   Deferring signing creates the HTTP→HTTPS problem.
+
+2. **Causal predecessors compound.** Signed transactions + causal predecessors +
+   CRDT merge = decentralized trustless knowledge chain without consensus.
+
+3. **The transaction is the natural unit of federation.** Signatures cover
+   transactions, not datoms. Causality is per-transaction. Content-addressed
+   dedup is per-transaction (braid filesystem design insight).
+
+4. **The store is the verification oracle.** The bootstrap test (B17) stores
+   the Phase 4a.5 spec as signed datoms. Gate closure becomes a query over the
+   store. The store knows whether it is correct by querying itself.
+
+5. **Graceful degradation.** Optional indexes (Text, Vector) use
+   `Option<Box<dyn Trait>>`. When absent: text falls back to O(n) scan, vector
+   returns empty. The store is always correct regardless of optional index state.
+
+---
+
+### ADR-FERR-011: Signature Storage as Datoms
+
+**Traces to**: INV-FERR-051, INV-FERR-012 (content-addressed identity)
+**Stage**: 0
+
+**Problem**: Where do Ed25519 signatures live after a transaction is committed?
+The store holds datoms, not transactions. Signatures must survive WAL, checkpoint,
+merge, recovery, and federation without a parallel data structure.
+
+**Options**:
+
+| Option | Description | Pros | Cons |
+|--------|-------------|------|------|
+| A: Datoms | `:tx/signature` and `:tx/signer` as metadata datoms | Single substrate. Indexed, merged, federated automatically. No parallel structure. | Signing message must exclude signature datoms (circular otherwise). |
+| B: Parallel map | `BTreeMap<TxId, (Signature, VerifyingKey)>` alongside Store | Simpler signing message (no exclusion). | Two data structures to maintain. Separate serialization in WAL/checkpoint. Not federable via standard merge. |
+
+**Decision**: **Option A: Datoms**
+
+Signature datoms follow the same pattern as `:tx/time` and `:tx/agent` — metadata
+datoms added by the engine after the signing message is computed. The signing
+message covers user datoms + TxId + predecessors + signer public key. The
+`:tx/signature` and `:tx/signer` datoms are NOT part of the signing message —
+they are metadata about the transaction, not content of the transaction.
+
+This preserves the fundamental simplicity of `(P(D), ∪)`: everything is a datom.
+Signatures participate in all existing infrastructure without modification.
+
+**Rejected**: Option B adds a second consistency model. Two structures that must
+stay in sync through WAL, checkpoint, merge, and recovery. Every path that touches
+the store must also touch the signature map. This violates "everything is datoms"
+(doc 005) and doubles the verification surface.
+
+**Consequence**: The signing message definition must explicitly exclude metadata
+datoms (`:tx/signature`, `:tx/signer`, `:tx/predecessor`, `:tx/provenance`,
+`:tx/time`, `:tx/agent`). Only user-asserted datoms are signed. The exclusion is
+deterministic: metadata datoms are identified by their attribute namespace (`tx/*`).
+
+**Source**: SEED.md §4 (append-only store), doc 005 (everything is datoms).
+
+---
+
+### ADR-FERR-012: Phase 4a.5 DatomFilter Scope
+
+**Traces to**: INV-FERR-039, INV-FERR-044, CALM theorem
+**Stage**: 0
+
+**Problem**: Which DatomFilter variants should Phase 4a.5 implement? The full spec
+(§23.8) defines `All`, `AttributeNamespace`, `Entities`, `FromAgents`, `AfterEpoch`,
+`And`, `Or`, `Not`, `Custom`.
+
+**Options**:
+
+| Option | Description | Pros | Cons |
+|--------|-------------|------|------|
+| A: All variants | Full DatomFilter enum | Complete. | `Not` is non-monotone (can mask retractions). `Custom` not serializable. `AfterEpoch` needs prolly tree epoch index. |
+| B: Positive-only | `All`, `AttributeNamespace`, `FromAgents`, `Entities`, `And`, `Or` | Monotone: CALM theorem applies (no coordination needed). Serializable. No prolly tree dependency. | Missing negation, custom predicates, temporal filtering. |
+
+**Decision**: **Option B: Positive-only**
+
+Positive filters are monotone functions: adding datoms to the store can only ADD
+matches, never REMOVE them. By the CALM theorem, monotone queries/filters are
+exactly the class that can be evaluated without coordination. This is the
+algebraic guarantee that makes DatomFilter safe for federation.
+
+`Not` introduces non-monotonicity: a retraction in a filtered-OUT namespace can
+affect an entity in the filtered-IN namespace, creating a LIVE view divergence
+that the receiving agent never sees. `Custom` is not serializable (can't cross
+transport boundaries). `AfterEpoch` needs an epoch-indexed structure (prolly tree).
+
+**Rejected**: Option A defers safety analysis to Phase 4c. The non-monotonicity
+risk of `Not` requires careful design of the interaction with LIVE resolution.
+
+**Consequence**: Phase 4a.5 DatomFilter has 6 variants. `Not`, `Custom`, and
+`AfterEpoch` are deferred to Phase 4c with their own safety analysis.
+
+**Source**: CALM theorem (Hellerstein 2010), INV-FERR-037 (federated query).
+
+---
+
+### ADR-FERR-013: Per-Transaction Signing
+
+**Traces to**: INV-FERR-051
+**Stage**: 0
+
+**Problem**: Where does the signing key live? Options: per-Database (auto-sign),
+per-Transaction (explicit), per-Agent lookup table.
+
+**Options**:
+
+| Option | Description | Pros | Cons |
+|--------|-------------|------|------|
+| A: Per-Database | `Database` holds a `SigningKey`. All txns auto-signed. | Simple API. | Single-agent: can't have different agents sign through same Database. |
+| B: Per-Transaction | Signing key passed explicitly per transaction. | Multi-agent: different agents sign through same Database. | Callers must manage keys. |
+| C: Per-Agent lookup | Database holds `Map<AgentId, SigningKey>`. | Auto-sign per agent. | Key management in engine. Couples engine to key storage. |
+
+**Decision**: **Option B: Per-Transaction**
+
+The goal is massively distributed multi-agent support. Multiple agents write
+through the same Database (e.g., via LocalTransport federation). Each agent has
+its own signing key. Per-Database signing limits to single agent. Per-Agent
+lookup couples key management to the engine, violating "not an application
+framework."
+
+The signing step is explicit: `Transaction::new(agent).assert_datom(...)
+.sign(signature, signer).commit(&schema)`. Signing is between building and
+committing — it doesn't require schema validation to happen first.
+
+**Rejected**: Option A limits to single-agent stores. Option C puts key
+management in the engine, creating a dependency on key storage infrastructure.
+
+**Consequence**: The `Transaction<Building>` typestate gains an optional
+`sign(TxSignature, TxSigner)` method. Unsigned transactions remain valid
+(backward compatible). The Database does not store signing keys.
+
+**Source**: doc 003 (multi-agent cognition), GOALS.md §2 ("not an application
+framework").
+
+---
+
+### ADR-FERR-014: Async Transport via std::future
+
+**Traces to**: INV-FERR-038, ADR-FERR-002 (async runtime)
+**Stage**: 0
+
+**Problem**: The Transport trait needs async methods (for network transports in
+Phase 4c) but ferratomic-core must not depend on any async runtime.
+
+**Options**:
+
+| Option | Description | Pros | Cons |
+|--------|-------------|------|------|
+| A: `#[async_trait]` | Proc-macro crate desugars async fn to Pin<Box<dyn Future>>. | Ergonomic. | External dependency in core. |
+| B: `Pin<Box<dyn Future>>` | Manual return type, zero deps. | Zero deps. Dyn-compatible. | Verbose method signatures. |
+| C: Synchronous | All methods synchronous. Add async in Phase 4c. | Simplest now. | Breaking API change later. |
+| D: Native AFIT | `async fn` in trait (Rust 1.75+). | Clean syntax. | Not dyn-compatible (`Box<dyn Transport>` doesn't work). |
+
+**Decision**: **Option B: Manual Pin<Box<dyn Future>>**
+
+Uses only `std::pin::Pin`, `std::future::Future`, and `Box` — all in the
+standard library. Zero external dependencies. Dyn-compatible (`Box<dyn Transport>`
+works for runtime polymorphism in `Federation { stores: Vec<StoreHandle> }`).
+LocalTransport resolves immediately inside the future (never yields). Network
+transports (Phase 4c) bring their own async runtime.
+
+**Rejected**: Option A adds a proc-macro dependency to core. Option C requires
+a breaking API change. Option D isn't dyn-compatible.
+
+**Consequence**: Transport method signatures are verbose but stable. The
+`+ '_` lifetime captures `&self` correctly. All transports implement the same
+trait regardless of whether they're in-process, TCP, or QUIC.
+
+**Source**: ADR-FERR-002 (asupersync-first), GOALS.md §2 ("substrate-independent").
+
+---
+
+### ADR-FERR-015: Transaction-Level Federation
+
+**Traces to**: INV-FERR-038, INV-FERR-040 (provenance preservation), INV-FERR-051
+**Stage**: 0
+
+**Problem**: Should the Transport trait operate on individual datoms or on
+transaction-grouped bundles?
+
+**Options**:
+
+| Option | Description | Pros | Cons |
+|--------|-------------|------|------|
+| A: Datom-only | `fetch_datoms(filter) -> Vec<Datom>` | Simple. | Lossy: strips transaction boundaries. Receiver can't verify signatures (doesn't know which datoms were in the same tx). |
+| B: Transaction bundles | `fetch_signed_transactions(filter) -> Vec<SignedTransactionBundle>` alongside datom fetch. | Preserves signing boundary. Enables content-addressed dedup per tx. Aligns with braid's per-transaction-file design. | Two methods to maintain. Bundle reconstruction has O(n) cost. |
+
+**Decision**: **Option B: Transaction bundles**
+
+The Transport trait provides BOTH `fetch_datoms` (for simple queries) and
+`fetch_signed_transactions` (for federation with signing). Signatures cover
+transactions, not datoms. Causality is per-transaction (predecessors link txns).
+Content-addressed dedup is per-transaction (braid filesystem insight: each
+transaction file named by BLAKE3 hash).
+
+A datom-only API is lossy — the receiver must reconstruct transaction boundaries
+by grouping datoms by TxId, which is fragile (a TxId that appears in only one
+datom might be a metadata datom, not a user datom). The explicit bundle
+preserves the boundary with zero ambiguity.
+
+**Rejected**: Option A forces every federation consumer to implement transaction
+reconstruction logic. The bundle is the natural unit — exposing it prevents
+repeated error-prone reconstruction.
+
+**Consequence**: `SignedTransactionBundle` type in ferratom. `Transport` trait
+gains `fetch_signed_transactions` method. LocalTransport implements both methods.
+
+**Source**: Braid filesystem design (per-transaction content-addressed files),
+INV-FERR-040 (provenance preservation through merge).
+
+---
+
+### ADR-FERR-016: Causal Predecessors as Datoms
+
+**Traces to**: INV-FERR-061, INV-FERR-016 (HLC causality), INV-FERR-051
+**Stage**: 0
+
+**Problem**: The Frontier tracks per-agent progress, but it's ephemeral — lost on
+federation. How do we record causal ordering durably?
+
+**Options**:
+
+| Option | Description | Pros | Cons |
+|--------|-------------|------|------|
+| A: Frontier-only | Frontier is maintained in memory; not persisted per-transaction. | Zero overhead. | Causal ordering lost on federation. Can't detect true conflicts (concurrent vs ordered). |
+| B: Predecessor field on TxId | Add `predecessors: Vec<TxId>` to TxId. | Compact. | Changes the leaf type (ferratom-clock). Breaks existing serialization. |
+| C: Predecessor datoms | `:tx/predecessor` (Ref, Many) datoms emitted from Frontier at commit time. | No leaf type changes. Datoms are indexed, merged, federated automatically. Part of signing message. | O(agents) extra datoms per transaction. |
+
+**Decision**: **Option C: Predecessor datoms**
+
+At commit time, the Database emits one `:tx/predecessor` datom per agent in the
+current Frontier, each a Ref to that agent's latest transaction entity. This
+records "at the time of this transaction, I had seen up to TxId X from agent A,
+TxId Y from agent B, ..." The predecessor TxIds are included in the signing
+message, making the causal chain tamper-proof.
+
+Implementation cost: ~30 LOC in the transact path. Overhead: O(agents) datoms per
+transaction (at 3-10 agents: 3-10 extra datoms — negligible).
+
+**Rejected**: Option A loses causal ordering on federation. Option B changes the
+leaf type, breaking all existing serialization and the wire format.
+
+**Consequence**: Genesis schema gains `:tx/predecessor` (Ref, Many, MultiValue).
+The signing message becomes: `blake3(sorted_user_datoms ∥ tx_id ∥
+sorted_predecessor_tx_ids ∥ signer_public_key)`. Conflict detection (Phase 4c)
+uses predecessor DAG reachability.
+
+**Source**: Braid's `tx/causal-predecessors` pattern, INV-FERR-016 (HLC causality).
+
+---
+
+### ADR-FERR-017: Store Identity via Self-Signed Transaction
+
+**Traces to**: INV-FERR-060, INV-FERR-051
+**Stage**: 0
+
+**Problem**: How does a verifier discover a store's public key? Signing produces
+valid signatures, but without a discoverable root of trust, the verifier can't
+confirm "this key belongs to this store."
+
+**Options**:
+
+| Option | Description | Pros | Cons |
+|--------|-------------|------|------|
+| A: External PKI | Public keys distributed out-of-band. | Decoupled from store. | Requires external infrastructure. Not self-describing. |
+| B: Identity in genesis | Genesis schema includes store public key. | Always present. | Opinionated: forces signing on all stores. Genesis changes per store (breaks INV-FERR-031 determinism). |
+| C: Self-signed identity tx | First signed transaction asserts `{store_entity, "store/public-key", pubkey_bytes}`. Self-bootstrapping: the identity tx defines its own schema attributes via schema-as-data evolution. | Self-describing. Optional (unsigned stores have no identity tx). Root of trust is a datom. | Self-referential (key that signs declares the key). |
+
+**Decision**: **Option C: Self-signed identity transaction**
+
+The identity transaction is a self-signed certificate: the key it declares is the
+key that signs it. This is the same pattern as X.509 root CAs and SSH host keys.
+It establishes the root of the trust chain.
+
+Self-bootstrapping: the identity transaction includes schema-defining datoms for
+`:store/public-key` (Bytes, One, LWW) and `:store/created` (Instant, One, LWW),
+then asserts values for those attributes. Schema evolution runs during transact,
+so the attributes are defined before validation.
+
+Optional: `Database::genesis_with_identity(signing_key)` is a convenience
+constructor. `Database::genesis()` still works for unsigned stores.
+
+**Rejected**: Option A requires external infrastructure, violating
+"substrate-independent." Option B breaks genesis determinism and forces signing.
+
+**Consequence**: `Database` gains `genesis_with_identity(signing_key)` constructor.
+The identity transaction is the first signed transaction in the causal DAG — all
+subsequent transactions chain back to it via predecessors.
+
+**Source**: X.509 self-signed certificates, SSH host key pattern.
+
+---
+
+### ADR-FERR-018: ProvenanceType Lattice on Transactions
+
+**Traces to**: INV-FERR-051, braid's ProvenanceType pattern
+**Stage**: 0
+
+**Problem**: When two federated stores have competing assertions for the same
+(entity, attribute) under Cardinality::One, what determines which assertion
+takes precedence? Pure LWW-by-timestamp has no epistemic basis — a stale but
+directly-observed fact should outrank a recent but hypothesized inference.
+
+**Options**:
+
+| Option | Description | Pros | Cons |
+|--------|-------------|------|------|
+| A: No provenance | LWW-by-TxId only. | Simplest. | No epistemic ordering. A hypothesis stamped 1ms later overrides an observation. |
+| B: ProvenanceType lattice | `Observed(1.0) > Derived(0.8) > Inferred(0.5) > Hypothesized(0.2)` as a `:tx/provenance` metadata datom. | Principled resolution: observations outrank hypotheses. Federable. Queryable. | One more genesis attribute. Callers must specify provenance. |
+
+**Decision**: **Option B: ProvenanceType lattice**
+
+The provenance type forms a total order (join-semilattice) that enriches LWW
+resolution. At LIVE view query time, the resolution mode can use provenance
+weight as a tiebreaker: among assertions with the same TxId ordering, higher
+provenance wins. The weights (0.2/0.5/0.8/1.0) are from braid's proven design.
+
+Default provenance: `:provenance/observed` (the common case — asserting what
+you directly computed/measured). Hypothesized provenance for speculative
+assertions. The provenance lattice composes with the existing LWW resolution:
+`resolve(assertions) = max_by(|a| (a.provenance_weight, a.tx_id))`.
+
+**Rejected**: Option A makes federation resolution purely temporal. Two agents
+observing the same entity at different times get different "winners" based on
+clock skew, not epistemic quality.
+
+**Consequence**: Genesis schema gains `:tx/provenance` (Keyword, One, LWW).
+`ProvenanceType` enum in ferratom with `confidence() -> f64` method.
+
+**Source**: Braid kernel `datom.rs` ProvenanceType lattice.
+
+---
+
+### ADR-FERR-019: Merge Receipts as Datoms
+
+**Traces to**: INV-FERR-062, INV-FERR-004 (monotonic growth)
+**Stage**: 0
+
+**Problem**: After `selective_merge`, how do you know what happened? What was
+merged, from where, with what filter, how many datoms transferred?
+
+**Options**:
+
+| Option | Description | Pros | Cons |
+|--------|-------------|------|------|
+| A: Return value only | `selective_merge() -> MergeReceipt` as return type. | Simple. Ephemeral. | Not queryable after the fact. Lost on restart. Not federable. |
+| B: Receipt datoms | `selective_merge` emits `:merge/*` datoms. | Queryable: "when did I last merge with store X?" Federable. Temporally versioned. | Extra datoms per merge operation. |
+
+**Decision**: **Option B: Receipt datoms**
+
+Federation history must be queryable. "When did I last merge with store X?"
+"What filter did I use?" "How many datoms came across?" These are operational
+questions that agents need answered from the store itself. Receipt datoms
+participate in the causal chain (they have TxIds and predecessors), so the
+merge event is part of the auditable history.
+
+**Rejected**: Option A makes merge history ephemeral. In a multi-agent system
+with ongoing federation, knowing WHAT you merged and WHEN is essential for
+incremental sync ("only transfer datoms newer than my last merge with you").
+
+**Consequence**: `selective_merge` emits datoms: `:merge/source` (String),
+`:merge/filter` (String — serialized DatomFilter), `:merge/transferred` (Long),
+`:merge/timestamp` (Instant).
+
+**Source**: Braid's MergeCascadeReceipt pattern.
+
+---
+
+### INV-FERR-060: Store Identity Persistence
+
+**Traces to**: ADR-FERR-017, INV-FERR-051, INV-FERR-040 (provenance preservation),
+INV-FERR-014 (recovery correctness)
+**Verification**: `V:PROP`, `V:KANI`, `V:LEAN`, `V:INTEGRATION`
+**Stage**: 0
+
+#### Level 0 (Algebraic Law)
+```
+Let SK be an Ed25519 signing key and VK = public(SK).
+Let genesis_with_identity(SK) produce store S₀ containing identity transaction T_id.
+
+∀ signed stores S created via genesis_with_identity(SK):
+  ∃! T_id ∈ transactions(S) such that:
+    1. T_id is the first signed transaction (min TxId among signed txns)
+    2. T_id contains datom (store_entity, "store/public-key", bytes(VK))
+    3. T_id.signer = VK  (self-signed: declares and uses same key)
+    4. verify(VK, signing_message(T_id), T_id.signature) = ok
+
+Preservation through operations:
+  ∀ merges M = merge(S, S'): T_id ∈ M
+    Proof: By INV-FERR-004 (monotonic growth) and INV-FERR-040
+    (provenance preservation). Merge is set union; no datom is lost.
+    T_id's datoms are in S, therefore in S ∪ S'.
+
+  ∀ recoveries R = recover(checkpoint, wal): T_id ∈ R
+    Proof: By INV-FERR-014 (recovery correctness). Recovery produces
+    the last committed state. T_id was committed, therefore recovered.
+
+  ∀ selective merges SM = selective_merge(local, remote, f) where f(T_id) = true:
+    T_id ∈ SM
+    Proof: T_id matches the filter, so it is included in the merge.
+    If f(T_id) = false, T_id is not transferred — but it persists in
+    the originating store (monotonic growth).
+```
+
+#### Level 1 (State Invariant)
+Every signed store has a unique, verifiable identity established by its first
+signed transaction. The identity transaction is a self-signed certificate: the
+key it declares (`:store/public-key`) is the key that signs the transaction.
+This provides the cryptographic root of trust for the entire signing chain.
+
+The identity persists through all operations — merge, recovery, federation,
+checkpoint — because it is composed of ordinary datoms that participate in all
+existing infrastructure. No special handling is needed; the identity IS datoms.
+
+Without store identity, signatures are internally consistent but unanchored:
+you can verify "this signature matches this key" but not "this key belongs to
+this store." The identity transaction closes this gap, enabling agents to
+verify remote stores' identities during federation.
+
+The identity transaction is self-bootstrapping: it defines the `:store/public-key`
+attribute via schema-as-data evolution (C3) in the same transaction that uses it.
+This works because `evolve_schema()` processes all datoms before validation.
+
+#### Level 2 (Implementation Contract)
+```rust
+/// Create a signed store with verifiable identity (INV-FERR-060).
+///
+/// The first transaction is the identity assertion — a self-signed certificate.
+/// Self-bootstrapping: the identity tx defines store/public-key via
+/// schema-as-data evolution and signs with the declared key.
+pub fn genesis_with_identity(signing_key: &SigningKey) -> Result<Database, FerraError> {
+    let db = Database::genesis();
+    let pubkey = signing_key.verifying_key();
+    let agent = AgentId::from_bytes(pubkey.as_bytes()[..16].try_into()?);
+    let store_entity = EntityId::from_content(pubkey.as_bytes());
+    let schema_entity_pk = EntityId::from_content(b"store/public-key");
+    let schema_entity_cr = EntityId::from_content(b"store/created");
+
+    let tx = Transaction::new(agent)
+        // Define store/public-key attribute (schema-as-data, C3)
+        .assert_datom(schema_entity_pk, Attribute::from("db/ident"),
+                     Value::Keyword("store/public-key".into()))
+        .assert_datom(schema_entity_pk, Attribute::from("db/valueType"),
+                     Value::Keyword("db.type/bytes".into()))
+        .assert_datom(schema_entity_pk, Attribute::from("db/cardinality"),
+                     Value::Keyword("db.cardinality/one".into()))
+        // Define store/created attribute
+        .assert_datom(schema_entity_cr, Attribute::from("db/ident"),
+                     Value::Keyword("store/created".into()))
+        .assert_datom(schema_entity_cr, Attribute::from("db/valueType"),
+                     Value::Keyword("db.type/instant".into()))
+        .assert_datom(schema_entity_cr, Attribute::from("db/cardinality"),
+                     Value::Keyword("db.cardinality/one".into()))
+        // Assert the store's public key and creation time
+        .assert_datom(store_entity, Attribute::from("store/public-key"),
+                     Value::Bytes(pubkey.as_bytes().into()))
+        .assert_datom(store_entity, Attribute::from("store/created"),
+                     Value::Instant(now_millis()))
+        .sign(sign_transaction(&datoms, tx_id, &[], signing_key))
+        .commit(&db.schema())?;
+
+    db.transact(tx)?;
+    Ok(db)
+}
+
+#[kani::proof]
+#[kani::unwind(5)]
+fn identity_survives_merge() {
+    let sk: [u8; 32] = kani::any();
+    // Simplified: verify that identity datom is in the union
+    let identity_datom = Datom::new(
+        EntityId::from_content(&sk),
+        Attribute::from("store/public-key"),
+        Value::Bytes(sk.to_vec().into()),
+        TxId::new(1, 0, 0),
+        Op::Assert,
+    );
+    let store_a: BTreeSet<Datom> = BTreeSet::from([identity_datom.clone()]);
+    let store_b: BTreeSet<Datom> = kani::any();
+    kani::assume(store_b.len() <= 3);
+
+    let merged: BTreeSet<Datom> = store_a.union(&store_b).cloned().collect();
+    assert!(merged.contains(&identity_datom),
+        "INV-FERR-060: identity datom must survive merge");
+}
+```
+
+**Falsification**: Any signed store S created via `genesis_with_identity(SK)` where,
+after any sequence of merge, recovery, or selective_merge operations, the identity
+transaction T_id is not present in the resulting store, OR `verify(VK, msg(T_id),
+T_id.signature)` fails.
+
+**proptest strategy**:
+```rust
+proptest! {
+    #[test]
+    fn identity_persists_through_merge(
+        other_datoms in prop::collection::btree_set(arb_datom(), 0..100),
+    ) {
+        let signing_key = SigningKey::generate(&mut OsRng);
+        let db = Database::genesis_with_identity(&signing_key).unwrap();
+        let identity_store = db.snapshot();
+
+        let other_store = Store::from_datoms(other_datoms);
+        let merged = merge(&identity_store.store(), &other_store).unwrap();
+
+        // Identity datom must survive merge
+        let pubkey_bytes = signing_key.verifying_key().as_bytes();
+        let store_entity = EntityId::from_content(pubkey_bytes);
+        let identity_value = merged.live_resolve(
+            &store_entity, &Attribute::from("store/public-key")
+        );
+        prop_assert!(identity_value.is_some(),
+            "INV-FERR-060: store identity must persist through merge");
+    }
+}
+```
+
+**Lean theorem**:
+```lean
+/-- Store identity persists through merge: the identity datom
+    is in S implies it is in S ∪ S' (by subset inclusion in union). -/
+theorem identity_persists_merge
+    (S S' : Finset Datom) (d : Datom) (h : d ∈ S) :
+    d ∈ S ∪ S' :=
+  Finset.mem_union_left S' h
+```
+
+---
+
+### INV-FERR-061: Causal Predecessor Completeness
+
+**Traces to**: ADR-FERR-016, INV-FERR-016 (HLC causality), INV-FERR-051
+**Verification**: `V:PROP`, `V:KANI`, `V:LEAN`, `V:INTEGRATION`
+**Stage**: 0
+
+#### Level 0 (Algebraic Law)
+```
+Let F be the Frontier (vector clock) at commit time for transaction T.
+Let predecessors(T) = { (tx_entity(f), T_entity) | f ∈ F.entries() }
+  where tx_entity(f) = EntityId of the transaction entity for TxId f.
+
+∀ transactions T committed via Database::transact():
+  1. Completeness: |predecessors(T)| = |F.entries()|
+     Every agent in the Frontier contributes exactly one predecessor.
+  2. Accuracy: ∀ (pred, T_entity) ∈ predecessors(T):
+     pred refers to the latest known transaction from that agent.
+  3. Inclusion in signing message: predecessors(T) are part of msg(T)
+     (INV-FERR-051). Omitting a predecessor invalidates the signature.
+  4. DAG property: the predecessor relation is acyclic.
+     Proof: TxId monotonicity (INV-FERR-015) guarantees
+     pred.tx_id < T.tx_id for all predecessors. Strict ordering
+     on a well-founded set is acyclic.
+
+The predecessor set forms a directed acyclic graph (DAG) over transactions:
+  G = (V, E) where V = transactions, E = predecessor edges.
+  G is a DAG by construction (TxId monotonicity).
+
+Merge of predecessor graphs: G₁ ∪ G₂ (union of edge sets).
+  Since predecessor datoms are datoms, merge is set union (INV-FERR-001).
+  The merged DAG is the union of both DAGs — still acyclic because
+  each edge respects TxId ordering.
+```
+
+#### Level 1 (State Invariant)
+Every signed transaction records the complete causal context at the moment of
+assertion — the full Frontier (vector clock) converted to predecessor datoms.
+No causal knowledge is omitted. The predecessor set answers: "what did this
+agent know when it made this assertion?"
+
+The predecessor datoms are `:tx/predecessor` (Ref, Many, MultiValue) on the
+transaction entity, pointing to the transaction entities of the latest known
+transactions from each other agent. MultiValue resolution ensures predecessors
+from different merge paths accumulate rather than overwrite.
+
+Predecessors enable conflict detection: two transactions are concurrent
+(potentially conflicting) iff neither is a causal ancestor of the other. This
+is a DAG reachability query, computable in O(V+E) where V=transactions and
+E=predecessor edges.
+
+Without predecessors, the only ordering available is HLC total order — which
+conflates "happened after" with "knew about." With predecessors, the partial
+order captures the actual causal relationship, enabling principled conflict
+resolution in Phase 4c.
+
+#### Level 2 (Implementation Contract)
+```rust
+/// Emit predecessor datoms from the current Frontier (INV-FERR-061).
+///
+/// Called during Database::transact() after TxId assignment.
+/// One predecessor datom per agent in the Frontier.
+fn emit_predecessors(
+    frontier: &Frontier,
+    tx_entity: EntityId,
+    tx_predecessor_attr: &Attribute,
+) -> Vec<Datom> {
+    frontier.iter()
+        .map(|(agent_id, latest_tx_id)| {
+            let pred_entity = EntityId::from_content(
+                &latest_tx_id.to_le_bytes()
+            );
+            Datom::new(
+                tx_entity,
+                tx_predecessor_attr.clone(),
+                Value::Ref(pred_entity),
+                TxId::default(), // placeholder, stamped later
+                Op::Assert,
+            )
+        })
+        .collect()
+}
+
+#[kani::proof]
+#[kani::unwind(5)]
+fn predecessor_count_matches_frontier() {
+    let frontier_size: usize = kani::any();
+    kani::assume(frontier_size <= 4);
+
+    let mut frontier = Frontier::new();
+    for i in 0..frontier_size {
+        let agent = AgentId::from_bytes([i as u8; 16]);
+        let tx_id = TxId::new(1, i as u32, i as u16);
+        frontier.advance(agent, tx_id);
+    }
+
+    let predecessors = emit_predecessors(
+        &frontier,
+        EntityId::from_content(b"test-tx"),
+        &Attribute::from("tx/predecessor"),
+    );
+
+    assert_eq!(predecessors.len(), frontier_size,
+        "INV-FERR-061: predecessor count must equal frontier size");
+}
+```
+
+**Falsification**: Any transaction T where `|predecessors(T)| ≠ |frontier.entries()|`
+at commit time, OR where a predecessor references a TxId not in the Frontier, OR
+where the predecessor DAG contains a cycle.
+
+**proptest strategy**:
+```rust
+proptest! {
+    #[test]
+    fn predecessors_complete_and_acyclic(
+        agents in prop::collection::vec(arb_agent_id(), 1..10),
+        tx_count in 1..20usize,
+    ) {
+        let mut db = Database::genesis();
+        for i in 0..tx_count {
+            let agent = agents[i % agents.len()];
+            let tx = Transaction::new(agent)
+                .assert_datom(
+                    EntityId::from_content(&[i as u8]),
+                    Attribute::from("db/doc"),
+                    Value::String(format!("tx-{i}").into()),
+                )
+                .commit(&db.schema())
+                .unwrap();
+            let receipt = db.transact(tx).unwrap();
+
+            // Verify predecessor count equals frontier size
+            let pred_datoms: Vec<_> = receipt.datoms().iter()
+                .filter(|d| d.attribute() == &Attribute::from("tx/predecessor"))
+                .collect();
+            // At least one predecessor (self, after first tx)
+            if i > 0 {
+                prop_assert!(!pred_datoms.is_empty(),
+                    "INV-FERR-061: transactions after first must have predecessors");
+            }
+        }
+    }
+}
+```
+
+**Lean theorem**:
+```lean
+/-- The predecessor relation on transactions forms a DAG:
+    if T₂ is a predecessor of T₁, then T₂.tx_id < T₁.tx_id. -/
+theorem predecessor_acyclic
+    (T₁ T₂ : Transaction) (h : T₂ ∈ predecessors T₁) :
+    T₂.tx_id < T₁.tx_id := by
+  -- By construction: predecessors are drawn from the Frontier,
+  -- which only contains TxIds strictly less than the new TxId
+  -- (INV-FERR-015 monotonicity guarantees this).
+  exact frontier_entries_lt_new_txid T₁ T₂ h
+```
+
+---
+
+### INV-FERR-062: Merge Receipt Completeness
+
+**Traces to**: ADR-FERR-019, INV-FERR-004 (monotonic growth)
+**Verification**: `V:PROP`, `V:INTEGRATION`
+**Stage**: 0
+
+#### Level 0 (Algebraic Law)
+```
+∀ selective_merge(local, remote, filter) operations producing result R:
+  ∃ receipt datoms D_receipt ⊂ R such that:
+    1. D_receipt contains (merge_entity, "merge/source", source_id)
+    2. D_receipt contains (merge_entity, "merge/filter", serialize(filter))
+    3. D_receipt contains (merge_entity, "merge/transferred", count)
+       where count = |{d ∈ remote | filter(d) ∧ d ∉ local}|
+    4. D_receipt contains (merge_entity, "merge/timestamp", now)
+
+Preservation: receipt datoms are ordinary datoms.
+  By INV-FERR-004 (monotonic growth), they persist through
+  all subsequent operations.
+```
+
+#### Level 1 (State Invariant)
+Every selective merge operation produces queryable receipt datoms that record
+what was merged, from where, with what filter, and how many datoms transferred.
+Federation history is queryable: "when did I last merge with store X? What
+filter did I use? How many datoms came across?"
+
+Receipt datoms participate in the causal chain — they have TxIds and
+predecessors. The merge event is part of the auditable history. For incremental
+federation ("only transfer what's new since my last merge"), the receipt's
+timestamp and source identity provide the synchronization point.
+
+Without merge receipts, federation is fire-and-forget: you know the current
+state but not how you got there. With receipts, the entire federation history
+is reconstructible from the store.
+
+#### Level 2 (Implementation Contract)
+```rust
+/// Perform selective merge and emit receipt datoms (INV-FERR-062).
+pub fn selective_merge(
+    local: &mut Store,
+    remote: &Store,
+    filter: &DatomFilter,
+) -> Result<MergeReceipt, FerraError> {
+    let remote_filtered: Vec<Datom> = remote.datoms()
+        .filter(|d| filter.matches(d))
+        .cloned()
+        .collect();
+
+    let already_present = remote_filtered.iter()
+        .filter(|d| local.datoms().contains(d))
+        .count();
+    let transferred = remote_filtered.len() - already_present;
+
+    // Apply filtered datoms to local store
+    for datom in &remote_filtered {
+        local.insert(datom.clone());
+    }
+
+    // Emit receipt datoms
+    let merge_entity = EntityId::from_content(
+        &format!("merge-{}", now_millis()).as_bytes()
+    );
+    local.insert(Datom::new(merge_entity, Attribute::from("merge/source"),
+        Value::String("remote".into()), current_tx_id, Op::Assert));
+    local.insert(Datom::new(merge_entity, Attribute::from("merge/transferred"),
+        Value::Long(transferred as i64), current_tx_id, Op::Assert));
+    local.insert(Datom::new(merge_entity, Attribute::from("merge/timestamp"),
+        Value::Instant(now_millis()), current_tx_id, Op::Assert));
+
+    Ok(MergeReceipt {
+        datoms_transferred: transferred,
+        datoms_already_present: already_present,
+        datoms_filtered_out: remote.datom_count() - remote_filtered.len(),
+    })
+}
+```
+
+**Falsification**: Any `selective_merge` operation after which no `:merge/source`
+datom exists in the result store, OR where `merge/transferred` count disagrees
+with the actual number of new datoms added.
+
+**proptest strategy**:
+```rust
+proptest! {
+    #[test]
+    fn merge_receipt_accurate(
+        local_datoms in prop::collection::btree_set(arb_datom(), 0..50),
+        remote_datoms in prop::collection::btree_set(arb_datom(), 0..50),
+        filter_prefix in "[a-z]{1,5}/",
+    ) {
+        let mut local = Store::from_datoms(local_datoms);
+        let remote = Store::from_datoms(remote_datoms.clone());
+        let filter = DatomFilter::AttributeNamespace(vec![filter_prefix.clone()]);
+
+        let receipt = selective_merge(&mut local, &remote, &filter).unwrap();
+
+        // Receipt datoms must exist
+        let merge_datoms: Vec<_> = local.datoms()
+            .filter(|d| d.attribute().as_str().starts_with("merge/"))
+            .collect();
+        prop_assert!(!merge_datoms.is_empty(),
+            "INV-FERR-062: merge receipt datoms must be present");
+
+        // Transferred count must be accurate
+        let expected = remote_datoms.iter()
+            .filter(|d| filter.matches(d))
+            .filter(|d| !local_datoms.contains(d))
+            .count();
+        prop_assert_eq!(receipt.datoms_transferred, expected,
+            "INV-FERR-062: transferred count must match actual new datoms");
+    }
+}
+```
+
+**Lean theorem**:
+```lean
+/-- Merge receipts are monotonic: receipt datoms persist through
+    subsequent merges (they are ordinary datoms in the store). -/
+theorem merge_receipt_persists
+    (S : Finset Datom) (receipt : Datom) (h : receipt ∈ S)
+    (S' : Finset Datom) :
+    receipt ∈ S ∪ S' :=
+  Finset.mem_union_left S' h
+```
+
+---
+

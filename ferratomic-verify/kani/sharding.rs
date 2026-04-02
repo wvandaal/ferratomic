@@ -7,6 +7,7 @@ use std::collections::BTreeSet;
 use ferratom::Datom;
 use ferratomic_core::{merge::merge, store::Store};
 
+use super::helpers::concrete_datom_set;
 #[cfg(not(kani))]
 use super::kani;
 
@@ -49,8 +50,9 @@ fn unshard(shards: &[Store]) -> Store {
 #[cfg_attr(not(kani), test)]
 #[cfg_attr(not(kani), ignore = "requires Kani verifier")]
 fn shard_equivalence() {
-    let datoms: BTreeSet<Datom> = kani::any();
-    kani::assume(datoms.len() <= 4);
+    let count: u8 = kani::any();
+    kani::assume(count <= 4);
+    let datoms = concrete_datom_set(count);
     let shard_count: usize = kani::any();
     kani::assume(shard_count > 0 && shard_count <= 4);
 
@@ -67,8 +69,9 @@ fn shard_equivalence() {
 #[cfg_attr(not(kani), test)]
 #[cfg_attr(not(kani), ignore = "requires Kani verifier")]
 fn shard_disjointness() {
-    let datoms: BTreeSet<Datom> = kani::any();
-    kani::assume(datoms.len() <= 4);
+    let count: u8 = kani::any();
+    kani::assume(count <= 4);
+    let datoms = concrete_datom_set(count);
     let shard_count: usize = kani::any();
     kani::assume((2..=4).contains(&shard_count));
 

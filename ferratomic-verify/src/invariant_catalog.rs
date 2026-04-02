@@ -41,6 +41,11 @@ pub struct Invariant {
     pub stateright_model: Option<&'static str>,
     /// Integration test name in `ferratomic-verify/integration/`, if exists.
     pub integration_test: Option<&'static str>,
+    /// Type-level enforcement in production crates, if applicable.
+    ///
+    /// Examples: `#![forbid(unsafe_code)]`, newtype wrappers, typestate,
+    /// data structure choice (e.g. `im::OrdMap` enforces O(log n)).
+    pub type_level: Option<&'static str>,
 }
 
 impl Invariant {
@@ -52,6 +57,32 @@ impl Invariant {
             || self.kani_harness.is_some()
             || self.stateright_model.is_some()
             || self.integration_test.is_some()
+            || self.type_level.is_some()
+    }
+
+    /// Count the number of populated verification layers for this invariant.
+    #[must_use]
+    pub const fn layer_count(&self) -> u8 {
+        let mut count = 0;
+        if self.lean_theorem.is_some() {
+            count += 1;
+        }
+        if self.proptest_fn.is_some() {
+            count += 1;
+        }
+        if self.kani_harness.is_some() {
+            count += 1;
+        }
+        if self.stateright_model.is_some() {
+            count += 1;
+        }
+        if self.integration_test.is_some() {
+            count += 1;
+        }
+        if self.type_level.is_some() {
+            count += 1;
+        }
+        count
     }
 }
 
@@ -72,6 +103,7 @@ pub const CATALOG: &[Invariant] = &[
         kani_harness: Some("merge_commutativity"),
         stateright_model: Some("inv_ferr_001_merge_commutativity_model"),
         integration_test: Some("inv_ferr_001_merge_commutes_concrete"),
+        type_level: None,
     },
     Invariant {
         id: "INV-FERR-002",
@@ -82,6 +114,7 @@ pub const CATALOG: &[Invariant] = &[
         kani_harness: Some("merge_associativity"),
         stateright_model: Some("inv_ferr_002_merge_associativity_model"),
         integration_test: Some("inv_ferr_002_merge_associates_concrete"),
+        type_level: None,
     },
     Invariant {
         id: "INV-FERR-003",
@@ -92,6 +125,7 @@ pub const CATALOG: &[Invariant] = &[
         kani_harness: Some("merge_idempotency"),
         stateright_model: Some("inv_ferr_003_merge_idempotency_model"),
         integration_test: Some("inv_ferr_003_merge_idempotent_concrete"),
+        type_level: None,
     },
     Invariant {
         id: "INV-FERR-004",
@@ -102,6 +136,7 @@ pub const CATALOG: &[Invariant] = &[
         kani_harness: Some("monotonic_growth"),
         stateright_model: None,
         integration_test: Some("inv_ferr_004_transact_grows_store"),
+        type_level: Some("OrdSet is append-only by API — no remove method exposed"),
     },
     Invariant {
         id: "INV-FERR-005",
@@ -112,6 +147,7 @@ pub const CATALOG: &[Invariant] = &[
         kani_harness: Some("index_bijection"),
         stateright_model: None,
         integration_test: Some("test_inv_ferr_005_bijection_after_transact"),
+        type_level: None,
     },
     Invariant {
         id: "INV-FERR-006",
@@ -122,6 +158,7 @@ pub const CATALOG: &[Invariant] = &[
         kani_harness: Some("snapshot_isolation"),
         stateright_model: Some("test_inv_ferr_006_visible_datoms_at_epoch_single_commit"),
         integration_test: Some("inv_ferr_006_snapshot_stability"),
+        type_level: None,
     },
     Invariant {
         id: "INV-FERR-007",
@@ -132,6 +169,7 @@ pub const CATALOG: &[Invariant] = &[
         kani_harness: Some("write_linearizability"),
         stateright_model: Some("test_inv_ferr_007_single_write_commits"),
         integration_test: Some("inv_ferr_007_epoch_ordering"),
+        type_level: None,
     },
     Invariant {
         id: "INV-FERR-008",
@@ -142,6 +180,7 @@ pub const CATALOG: &[Invariant] = &[
         kani_harness: Some("kani_inv_ferr_008_wal_fsync_ordering"),
         stateright_model: None,
         integration_test: Some("inv_ferr_008_wal_write_and_recover"),
+        type_level: None,
     },
     Invariant {
         id: "INV-FERR-009",
@@ -152,6 +191,9 @@ pub const CATALOG: &[Invariant] = &[
         kani_harness: Some("schema_rejects_unknown_attr"),
         stateright_model: None,
         integration_test: Some("inv_ferr_009_genesis_schema"),
+        type_level: Some(
+            "Schema newtype + AttributeDef::value_type enforce validation at type boundary",
+        ),
     },
     Invariant {
         id: "INV-FERR-010",
@@ -162,6 +204,7 @@ pub const CATALOG: &[Invariant] = &[
         kani_harness: Some("convergence_two_replicas"),
         stateright_model: Some("inv_ferr_010_model_checker_finds_a_converged_state"),
         integration_test: Some("inv_ferr_010_convergence_three_replicas"),
+        type_level: None,
     },
     Invariant {
         id: "INV-FERR-011",
@@ -172,6 +215,7 @@ pub const CATALOG: &[Invariant] = &[
         kani_harness: Some("observer_monotonicity"),
         stateright_model: None,
         integration_test: Some("inv_ferr_011_observer_epoch_monotonic"),
+        type_level: None,
     },
     Invariant {
         id: "INV-FERR-012",
@@ -182,6 +226,9 @@ pub const CATALOG: &[Invariant] = &[
         kani_harness: Some("content_identity"),
         stateright_model: None,
         integration_test: Some("inv_ferr_012_same_content_same_id"),
+        type_level: Some(
+            "EntityId([u8;32]) newtype — from_content() is only production constructor",
+        ),
     },
     // -----------------------------------------------------------------------
     // 02-concurrency.md: INV-FERR-013..024 (Stage 0)
@@ -195,6 +242,7 @@ pub const CATALOG: &[Invariant] = &[
         kani_harness: Some("checkpoint_roundtrip"),
         stateright_model: None,
         integration_test: Some("test_inv_ferr_013_checkpoint_corruption"),
+        type_level: None,
     },
     Invariant {
         id: "INV-FERR-014",
@@ -205,6 +253,7 @@ pub const CATALOG: &[Invariant] = &[
         kani_harness: Some("recovery_superset"),
         stateright_model: Some("inv_ferr_014_committed_data_survives_crash"),
         integration_test: Some("test_inv_ferr_014_crash_then_transact"),
+        type_level: None,
     },
     Invariant {
         id: "INV-FERR-015",
@@ -215,6 +264,7 @@ pub const CATALOG: &[Invariant] = &[
         kani_harness: Some("hlc_monotonicity"),
         stateright_model: None,
         integration_test: Some("inv_ferr_015_hlc_tick_monotonic"),
+        type_level: Some("HybridClock::tick() returns TxId — checked_add overflow backpressure"),
     },
     Invariant {
         id: "INV-FERR-016",
@@ -225,6 +275,7 @@ pub const CATALOG: &[Invariant] = &[
         kani_harness: Some("hlc_causality"),
         stateright_model: None,
         integration_test: Some("inv_ferr_016_hlc_causality_two_agents"),
+        type_level: Some("HybridClock::receive() merges remote clock via ordered max"),
     },
     Invariant {
         id: "INV-FERR-017",
@@ -235,6 +286,7 @@ pub const CATALOG: &[Invariant] = &[
         kani_harness: Some("shard_equivalence"),
         stateright_model: None,
         integration_test: Some("inv_ferr_017_shard_equivalence_concrete"),
+        type_level: None,
     },
     Invariant {
         id: "INV-FERR-018",
@@ -245,6 +297,9 @@ pub const CATALOG: &[Invariant] = &[
         kani_harness: Some("append_only"),
         stateright_model: None,
         integration_test: Some("inv_ferr_018_retract_adds_datom"),
+        type_level: Some(
+            "Datom has private fields and no mutation methods — immutable by construction",
+        ),
     },
     Invariant {
         id: "INV-FERR-019",
@@ -255,6 +310,7 @@ pub const CATALOG: &[Invariant] = &[
         kani_harness: Some("error_display_non_empty"),
         stateright_model: None,
         integration_test: Some("test_inv_ferr_019_error_exhaustiveness"),
+        type_level: Some("FerraError enum with exhaustive match — no wildcard variants"),
     },
     Invariant {
         id: "INV-FERR-020",
@@ -265,6 +321,7 @@ pub const CATALOG: &[Invariant] = &[
         kani_harness: Some("transaction_atomicity"),
         stateright_model: Some("inv_ferr_020_commit_assigns_single_epoch"),
         integration_test: Some("inv_ferr_020_transaction_epoch_atomicity"),
+        type_level: None,
     },
     Invariant {
         id: "INV-FERR-021",
@@ -275,6 +332,7 @@ pub const CATALOG: &[Invariant] = &[
         kani_harness: Some("write_limiter_capacity_enforcement"),
         stateright_model: Some("inv_ferr_021_submit_to_empty_queue_accepted"),
         integration_test: Some("inv_ferr_021_backpressure_integration"),
+        type_level: Some("WriteLimiter RAII guard — slot released on drop"),
     },
     Invariant {
         id: "INV-FERR-022",
@@ -285,6 +343,7 @@ pub const CATALOG: &[Invariant] = &[
         kani_harness: None,
         stateright_model: None,
         integration_test: Some("test_inv_ferr_022_anti_entropy_trait"),
+        type_level: None,
     },
     Invariant {
         id: "INV-FERR-023",
@@ -295,6 +354,7 @@ pub const CATALOG: &[Invariant] = &[
         kani_harness: None,
         stateright_model: None,
         integration_test: Some("test_inv_ferr_023_forbid_unsafe_code"),
+        type_level: Some("forbid(unsafe_code) in all 5 crates — compiler-enforced"),
     },
     Invariant {
         id: "INV-FERR-024",
@@ -305,6 +365,7 @@ pub const CATALOG: &[Invariant] = &[
         kani_harness: None,
         stateright_model: None,
         integration_test: Some("test_inv_ferr_024_in_memory_backend"),
+        type_level: Some("StorageBackend trait — backend selection is configuration, not code"),
     },
     // -----------------------------------------------------------------------
     // 03-performance.md: INV-FERR-025..032 (Stage 0)
@@ -318,6 +379,9 @@ pub const CATALOG: &[Invariant] = &[
         kani_harness: None,
         stateright_model: None,
         integration_test: Some("test_inv_ferr_025_index_backend_trait"),
+        type_level: Some(
+            "IndexBackend trait — im::OrdMap provides O(log n) by data structure choice",
+        ),
     },
     Invariant {
         id: "INV-FERR-026",
@@ -328,6 +392,7 @@ pub const CATALOG: &[Invariant] = &[
         kani_harness: None,
         stateright_model: None,
         integration_test: Some("threshold_inv_ferr_026_write_amplification"),
+        type_level: Some("Attribute interned Arc<str> — O(1) clone, bounded serialization size"),
     },
     Invariant {
         id: "INV-FERR-027",
@@ -338,6 +403,9 @@ pub const CATALOG: &[Invariant] = &[
         kani_harness: None,
         stateright_model: None,
         integration_test: Some("threshold_inv_ferr_027_read_latency"),
+        type_level: Some(
+            "im::OrdMap enforces O(log n) lookup by balanced tree structure (ADR-FERR-001)",
+        ),
     },
     Invariant {
         id: "INV-FERR-028",
@@ -348,6 +416,9 @@ pub const CATALOG: &[Invariant] = &[
         kani_harness: None,
         stateright_model: None,
         integration_test: Some("threshold_inv_ferr_028_cold_start"),
+        type_level: Some(
+            "Checkpoint uses BLAKE3 integrity + bincode compact format by construction",
+        ),
     },
     Invariant {
         id: "INV-FERR-029",
@@ -358,6 +429,7 @@ pub const CATALOG: &[Invariant] = &[
         kani_harness: Some("retraction_removes_from_live_view"),
         stateright_model: None,
         integration_test: Some("test_inv_ferr_029_live_resolution"),
+        type_level: None,
     },
     Invariant {
         id: "INV-FERR-030",
@@ -368,6 +440,9 @@ pub const CATALOG: &[Invariant] = &[
         kani_harness: None,
         stateright_model: None,
         integration_test: Some("test_inv_ferr_030_replica_filter"),
+        type_level: Some(
+            "ReplicaFilter trait — AcceptAll is the default, type-safe filter composition",
+        ),
     },
     Invariant {
         id: "INV-FERR-031",
@@ -378,6 +453,7 @@ pub const CATALOG: &[Invariant] = &[
         kani_harness: Some("genesis_determinism"),
         stateright_model: None,
         integration_test: Some("test_inv_ferr_031_genesis_determinism"),
+        type_level: Some("Schema::genesis() returns deterministic 19-attribute fixed set"),
     },
     Invariant {
         id: "INV-FERR-032",
@@ -388,6 +464,7 @@ pub const CATALOG: &[Invariant] = &[
         kani_harness: Some("live_view_contains_only_asserted"),
         stateright_model: None,
         integration_test: Some("test_inv_ferr_032_live_correctness"),
+        type_level: None,
     },
     // -----------------------------------------------------------------------
     // 04-decisions-and-constraints.md: INV-FERR-033..036 (Stage 0)
@@ -401,6 +478,7 @@ pub const CATALOG: &[Invariant] = &[
         kani_harness: None,
         stateright_model: None,
         integration_test: None,
+        type_level: None,
     },
     Invariant {
         id: "INV-FERR-034",
@@ -411,6 +489,7 @@ pub const CATALOG: &[Invariant] = &[
         kani_harness: None,
         stateright_model: None,
         integration_test: None,
+        type_level: None,
     },
     Invariant {
         id: "INV-FERR-035",
@@ -421,6 +500,7 @@ pub const CATALOG: &[Invariant] = &[
         kani_harness: None,
         stateright_model: None,
         integration_test: None,
+        type_level: None,
     },
     Invariant {
         id: "INV-FERR-036",
@@ -431,6 +511,7 @@ pub const CATALOG: &[Invariant] = &[
         kani_harness: None,
         stateright_model: None,
         integration_test: None,
+        type_level: None,
     },
     // -----------------------------------------------------------------------
     // 05-federation.md: INV-FERR-037..044 (mixed stages 0/1)
@@ -444,6 +525,7 @@ pub const CATALOG: &[Invariant] = &[
         kani_harness: None,
         stateright_model: None,
         integration_test: None,
+        type_level: None,
     },
     Invariant {
         id: "INV-FERR-038",
@@ -454,6 +536,7 @@ pub const CATALOG: &[Invariant] = &[
         kani_harness: None,
         stateright_model: None,
         integration_test: None,
+        type_level: None,
     },
     Invariant {
         id: "INV-FERR-039",
@@ -464,6 +547,7 @@ pub const CATALOG: &[Invariant] = &[
         kani_harness: None,
         stateright_model: None,
         integration_test: None,
+        type_level: None,
     },
     Invariant {
         id: "INV-FERR-040",
@@ -474,6 +558,7 @@ pub const CATALOG: &[Invariant] = &[
         kani_harness: None,
         stateright_model: None,
         integration_test: None,
+        type_level: None,
     },
     Invariant {
         id: "INV-FERR-041",
@@ -484,6 +569,7 @@ pub const CATALOG: &[Invariant] = &[
         kani_harness: None,
         stateright_model: None,
         integration_test: None,
+        type_level: None,
     },
     Invariant {
         id: "INV-FERR-042",
@@ -494,6 +580,7 @@ pub const CATALOG: &[Invariant] = &[
         kani_harness: None,
         stateright_model: None,
         integration_test: None,
+        type_level: None,
     },
     Invariant {
         id: "INV-FERR-043",
@@ -504,6 +591,7 @@ pub const CATALOG: &[Invariant] = &[
         kani_harness: None,
         stateright_model: None,
         integration_test: None,
+        type_level: None,
     },
     Invariant {
         id: "INV-FERR-044",
@@ -514,6 +602,7 @@ pub const CATALOG: &[Invariant] = &[
         kani_harness: None,
         stateright_model: None,
         integration_test: None,
+        type_level: None,
     },
     // -----------------------------------------------------------------------
     // 06-prolly-tree.md: INV-FERR-045..050 (Stage 1)
@@ -527,6 +616,7 @@ pub const CATALOG: &[Invariant] = &[
         kani_harness: None,
         stateright_model: None,
         integration_test: None,
+        type_level: None,
     },
     Invariant {
         id: "INV-FERR-046",
@@ -537,6 +627,7 @@ pub const CATALOG: &[Invariant] = &[
         kani_harness: None,
         stateright_model: None,
         integration_test: None,
+        type_level: None,
     },
     Invariant {
         id: "INV-FERR-047",
@@ -547,6 +638,7 @@ pub const CATALOG: &[Invariant] = &[
         kani_harness: None,
         stateright_model: None,
         integration_test: None,
+        type_level: None,
     },
     Invariant {
         id: "INV-FERR-048",
@@ -557,6 +649,7 @@ pub const CATALOG: &[Invariant] = &[
         kani_harness: None,
         stateright_model: None,
         integration_test: None,
+        type_level: None,
     },
     Invariant {
         id: "INV-FERR-049",
@@ -567,6 +660,7 @@ pub const CATALOG: &[Invariant] = &[
         kani_harness: None,
         stateright_model: None,
         integration_test: None,
+        type_level: None,
     },
     Invariant {
         id: "INV-FERR-050",
@@ -577,6 +671,7 @@ pub const CATALOG: &[Invariant] = &[
         kani_harness: None,
         stateright_model: None,
         integration_test: None,
+        type_level: None,
     },
     // -----------------------------------------------------------------------
     // 05-federation.md (VKN section): INV-FERR-051..055 (Stage 1)
@@ -590,6 +685,7 @@ pub const CATALOG: &[Invariant] = &[
         kani_harness: None,
         stateright_model: None,
         integration_test: None,
+        type_level: None,
     },
     Invariant {
         id: "INV-FERR-052",
@@ -600,6 +696,7 @@ pub const CATALOG: &[Invariant] = &[
         kani_harness: None,
         stateright_model: None,
         integration_test: None,
+        type_level: None,
     },
     Invariant {
         id: "INV-FERR-053",
@@ -610,6 +707,7 @@ pub const CATALOG: &[Invariant] = &[
         kani_harness: None,
         stateright_model: None,
         integration_test: None,
+        type_level: None,
     },
     Invariant {
         id: "INV-FERR-054",
@@ -620,6 +718,7 @@ pub const CATALOG: &[Invariant] = &[
         kani_harness: None,
         stateright_model: None,
         integration_test: None,
+        type_level: None,
     },
     Invariant {
         id: "INV-FERR-055",
@@ -630,6 +729,7 @@ pub const CATALOG: &[Invariant] = &[
         kani_harness: None,
         stateright_model: None,
         integration_test: None,
+        type_level: None,
     },
     // -----------------------------------------------------------------------
     // 08-verification-infrastructure.md: INV-FERR-056..059 (mixed stages 0/1/2)
@@ -643,6 +743,7 @@ pub const CATALOG: &[Invariant] = &[
         kani_harness: None,
         stateright_model: None,
         integration_test: None,
+        type_level: None,
     },
     Invariant {
         id: "INV-FERR-057",
@@ -653,6 +754,7 @@ pub const CATALOG: &[Invariant] = &[
         kani_harness: None,
         stateright_model: None,
         integration_test: None,
+        type_level: None,
     },
     Invariant {
         id: "INV-FERR-058",
@@ -663,6 +765,7 @@ pub const CATALOG: &[Invariant] = &[
         kani_harness: None,
         stateright_model: None,
         integration_test: None,
+        type_level: None,
     },
     Invariant {
         id: "INV-FERR-059",
@@ -673,6 +776,7 @@ pub const CATALOG: &[Invariant] = &[
         kani_harness: None,
         stateright_model: None,
         integration_test: None,
+        type_level: None,
     },
     // -----------------------------------------------------------------------
     // 07-refinement.md: CI-FERR-001..002 (Stage 0 -- foundational coupling)
@@ -686,6 +790,7 @@ pub const CATALOG: &[Invariant] = &[
         kani_harness: None,
         stateright_model: None,
         integration_test: None,
+        type_level: None,
     },
     Invariant {
         id: "CI-FERR-002",
@@ -696,6 +801,7 @@ pub const CATALOG: &[Invariant] = &[
         kani_harness: None,
         stateright_model: None,
         integration_test: None,
+        type_level: None,
     },
 ];
 
