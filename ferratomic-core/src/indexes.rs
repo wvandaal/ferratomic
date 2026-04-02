@@ -90,6 +90,106 @@ impl<K: Ord + Clone + std::fmt::Debug, V: Clone + std::fmt::Debug> IndexBackend<
 }
 
 // ---------------------------------------------------------------------------
+// SortedVecBackend (INV-FERR-071)
+// ---------------------------------------------------------------------------
+
+/// Sorted-array index backend (INV-FERR-071).
+///
+/// `Vec<(K, V)>` with deferred sort. Binary search on contiguous memory
+/// achieves ~4 L1 cache misses per lookup vs ~18 for tree-based backends.
+///
+/// INV-FERR-025: behavioral equivalence with `im::OrdMap` for all operations.
+/// INV-FERR-027: O(log n) lookups with cache-optimal memory layout.
+#[derive(Clone, Debug)]
+pub struct SortedVecBackend<K: Ord, V> {
+    entries: Vec<(K, V)>,
+    sorted: bool,
+}
+
+impl<K: Ord, V> Default for SortedVecBackend<K, V> {
+    fn default() -> Self {
+        Self {
+            entries: Vec::new(),
+            sorted: true,
+        }
+    }
+}
+
+impl<K: Ord + Clone + std::fmt::Debug, V: Clone + std::fmt::Debug> IndexBackend<K, V>
+    for SortedVecBackend<K, V>
+{
+    fn backend_insert(&mut self, key: K, value: V) {
+        self.entries.push((key, value));
+        self.sorted = false;
+    }
+
+    fn backend_get(&self, key: &K) -> Option<&V> {
+        debug_assert!(self.sorted, "INV-FERR-071: lookup on unsorted backend");
+        self.entries
+            .binary_search_by(|(k, _)| k.cmp(key))
+            .ok()
+            .map(|i| &self.entries[i].1)
+    }
+
+    fn backend_len(&self) -> usize {
+        self.entries.len()
+    }
+
+    fn backend_values(&self) -> Box<dyn Iterator<Item = &V> + '_> {
+        Box::new(self.entries.iter().map(|(_, v)| v))
+    }
+}
+
+impl<K: Ord, V> SortedVecBackend<K, V> {
+    /// Construct from a pre-sorted, deduplicated vector (INV-FERR-071).
+    ///
+    /// The caller guarantees entries are sorted by key with no duplicate
+    /// keys. This is the O(1) construction path for checkpoint loading.
+    #[must_use]
+    pub fn from_sorted(entries: Vec<(K, V)>) -> Self {
+        debug_assert!(
+            entries.windows(2).all(|w| w[0].0 < w[1].0),
+            "INV-FERR-071: from_sorted requires sorted, deduplicated input"
+        );
+        Self {
+            entries,
+            sorted: true,
+        }
+    }
+
+    /// Sort the backing array into key order (INV-FERR-071).
+    ///
+    /// Callers MUST NOT insert duplicate keys. Index keys contain all 5
+    /// datom fields — two datoms with the same key ARE the same datom
+    /// (INV-FERR-012) — so the primary datom set's uniqueness guarantee
+    /// propagates to all index backends. No dedup is performed; a
+    /// a `debug_assert` verifies uniqueness.
+    ///
+    /// Uses `sort_unstable_by` — O(n log n) time, O(1) auxiliary memory.
+    /// Stable sort would allocate O(n) auxiliary (~20GB at 100M datoms),
+    /// directly undermining positional content addressing targets
+    /// (INV-FERR-076). This matches `PositionalStore::from_datoms` which
+    /// uses `sort_unstable()` for the same reason.
+    pub fn sort(&mut self) {
+        if !self.sorted {
+            self.entries.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
+            debug_assert!(
+                self.entries.windows(2).all(|w| w[0].0 != w[1].0),
+                "INV-FERR-071: duplicate keys in SortedVecBackend — \
+                 index keys must be unique (derived from deduplicated datom set)"
+            );
+            self.sorted = true;
+        }
+    }
+
+    /// Whether the array is in sorted, deduplicated order (INV-FERR-071).
+    #[must_use]
+    pub fn is_sorted(&self) -> bool {
+        self.sorted
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Index key types — Ord derives produce the correct sort order
 // ---------------------------------------------------------------------------
 
@@ -242,6 +342,38 @@ pub type Indexes = GenericIndexes<
     OrdMap<VaetKey, Datom>,
     OrdMap<AvetKey, Datom>,
 >;
+
+/// Index type using [`SortedVecBackend`] for cache-optimal reads (INV-FERR-071).
+///
+/// INV-FERR-025: produces identical query results to [`Indexes`] (`OrdMap`
+/// backend). Use for cold-start-loaded stores and read-heavy workloads.
+/// Requires [`sort_all`](GenericIndexes::sort_all) after bulk insertion.
+pub type SortedVecIndexes = GenericIndexes<
+    SortedVecBackend<EavtKey, Datom>,
+    SortedVecBackend<AevtKey, Datom>,
+    SortedVecBackend<VaetKey, Datom>,
+    SortedVecBackend<AvetKey, Datom>,
+>;
+
+impl
+    GenericIndexes<
+        SortedVecBackend<EavtKey, Datom>,
+        SortedVecBackend<AevtKey, Datom>,
+        SortedVecBackend<VaetKey, Datom>,
+        SortedVecBackend<AvetKey, Datom>,
+    >
+{
+    /// Sort all four index backends after bulk insertion (INV-FERR-071).
+    ///
+    /// Must be called after [`from_datoms`](GenericIndexes::from_datoms)
+    /// to enable binary-search lookups. O(n log n) for n datoms.
+    pub fn sort_all(&mut self) {
+        self.eavt.sort();
+        self.aevt.sort();
+        self.vaet.sort();
+        self.avet.sort();
+    }
+}
 
 impl<BE, BA, BV, BAV> GenericIndexes<BE, BA, BV, BAV>
 where

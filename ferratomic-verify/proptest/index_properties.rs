@@ -2,7 +2,8 @@
 //!
 //! Tests INV-FERR-005 (index bijection), INV-FERR-006 (snapshot isolation),
 //! INV-FERR-007 (write linearizability), INV-FERR-017 (shard equivalence),
-//! INV-FERR-025 (index backend interchangeability), INV-FERR-027 (read latency).
+//! INV-FERR-025 (index backend interchangeability), INV-FERR-027 (read latency),
+//! INV-FERR-071 (sorted-array index backend).
 //!
 //! Phase 4a: all tests passing against ferratomic-core implementation.
 
@@ -10,7 +11,7 @@ use std::collections::BTreeSet;
 
 use ferratom::Datom;
 use ferratomic_core::{
-    indexes::{EavtKey, IndexBackend},
+    indexes::{EavtKey, IndexBackend, SortedVecBackend, SortedVecIndexes},
     merge::merge,
     store::Store,
 };
@@ -363,4 +364,93 @@ proptest! {
             );
         }
     }
+
+    /// INV-FERR-071: SortedVecBackend produces identical results to OrdMap.
+    ///
+    /// For any sequence of datoms, both backends return the same values for
+    /// get, len, and values iteration order after sort.
+    ///
+    /// Falsification: any operation returns different results between backends.
+    #[test]
+    fn inv_ferr_071_sorted_vec_equiv_ordmap(
+        datoms in prop::collection::vec(arb_datom(), 1..200),
+    ) {
+        let mut svb: SortedVecBackend<EavtKey, Datom> = SortedVecBackend::default();
+        let mut om: OrdMap<EavtKey, Datom> = OrdMap::new();
+
+        for d in &datoms {
+            let key = EavtKey::from_datom(d);
+            svb.backend_insert(key, d.clone());
+            om.backend_insert(EavtKey::from_datom(d), d.clone());
+        }
+        svb.sort();
+
+        // Same length (unique key count).
+        prop_assert_eq!(
+            svb.backend_len(), om.backend_len(),
+            "INV-FERR-071: backend_len differs. SortedVec={}, OrdMap={}",
+            svb.backend_len(), om.backend_len()
+        );
+
+        // Same get results for every inserted key.
+        for d in &datoms {
+            let key = EavtKey::from_datom(d);
+            prop_assert_eq!(
+                svb.backend_get(&key), om.backend_get(&key),
+                "INV-FERR-071: backend_get differs for datom {:?}",
+                d.entity()
+            );
+        }
+
+        // Same values in iteration order (both sorted by key).
+        let svb_vals: Vec<&Datom> = svb.backend_values().collect();
+        let om_vals: Vec<&Datom> = om.backend_values().collect();
+        prop_assert_eq!(
+            svb_vals, om_vals,
+            "INV-FERR-071: backend_values iteration order differs"
+        );
+    }
+
+    /// INV-FERR-071: SortedVecIndexes full pipeline matches OrdMap Indexes.
+    ///
+    /// Build both index types from the same datom set and verify bijection,
+    /// cardinality, datom set equality, and iteration ORDER across indexes.
+    ///
+    /// Falsification: any index differs between SortedVec and OrdMap backends.
+    #[test]
+    fn inv_ferr_071_sorted_vec_indexes_full_pipeline(
+        store in arb_store(50),
+    ) {
+        let mut sv: SortedVecIndexes = SortedVecIndexes::from_datoms(store.datoms());
+        sv.sort_all();
+
+        prop_assert_eq!(
+            sv.len(), store.indexes().len(),
+            "INV-FERR-071: SortedVecIndexes len != OrdMap Indexes len"
+        );
+        prop_assert!(
+            sv.verify_bijection(),
+            "INV-FERR-071: SortedVecIndexes bijection violated"
+        );
+
+        // EAVT: ordered iteration must match (catches sort-order bugs).
+        let sv_eavt: Vec<_> = sv.eavt_datoms().collect();
+        let om_eavt: Vec<_> = store.indexes().eavt_datoms().collect();
+        prop_assert_eq!(sv_eavt, om_eavt,
+            "INV-FERR-071: EAVT iteration order differs");
+
+        // Remaining indexes: set equality (ordering is Ord-derived, same argument).
+        let sv_aevt: BTreeSet<_> = sv.aevt_datoms().collect();
+        let om_aevt: BTreeSet<_> = store.indexes().aevt_datoms().collect();
+        prop_assert_eq!(sv_aevt, om_aevt, "INV-FERR-071: AEVT datom sets differ");
+
+        let sv_vaet: BTreeSet<_> = sv.vaet_datoms().collect();
+        let om_vaet: BTreeSet<_> = store.indexes().vaet_datoms().collect();
+        prop_assert_eq!(sv_vaet, om_vaet, "INV-FERR-071: VAET datom sets differ");
+
+        let sv_avet: BTreeSet<_> = sv.avet_datoms().collect();
+        let om_avet: BTreeSet<_> = store.indexes().avet_datoms().collect();
+        prop_assert_eq!(sv_avet, om_avet, "INV-FERR-071: AVET datom sets differ");
+    }
+
 }
