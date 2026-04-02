@@ -14,6 +14,53 @@
 6. `ferratomic-core/src/store/query.rs` — LIVE view + snapshot (must stay working)
 7. `ferratomic-core/src/indexes.rs` — SortedVecBackend + SortedVecIndexes
 
+## Recover Design Context from Prior Sessions
+
+The performance architecture was designed in Session 006 (CASS session
+`97a9dbc5`). That session contains the deep reasoning behind every design
+choice — why arrays replace trees, why positions replace hashes, why the
+bitvector replaces nested OrdMap, and the full "alien artifacts" analysis.
+
+**Run these CASS searches before writing any code.** The design rationale
+will prevent you from making incorrect assumptions about why things are
+structured the way they are.
+
+```bash
+# The session where the entire performance architecture was designed.
+# Contains: 89s cold start root-cause analysis, "alien artifacts" ranking,
+# positional content addressing invention, memory/latency/merge analysis,
+# and the "faithful functor from datom semilattice to natural number ordering" insight.
+cass export "/home/ubuntu/.claude/projects/-data-projects-ddis-ferratomic/97a9dbc5-6bf9-43ac-976e-7eb36fe1dfca.jsonl" --format markdown 2>/dev/null | head -500
+
+# Key sections in that session (search for these anchors):
+# - "89s" — cold start root cause (OrdMap bulk construction bottleneck)
+# - "Alien Artifact" — the full ranked optimization candidates
+# - "Positional Content Addressing" — the core invention
+# - "faithful functor" — why this is algebraically sound
+# - "arrays ARE the index" — the checkpoint-IS-runtime insight
+# - "bitvector" — why BitVec replaces nested OrdMap for LIVE
+# - "merge-sort" — why CRDT merge reduces to merge-sort on arrays
+
+# The spec authoring subagent that wrote INV-FERR-076 Level 0/1/2:
+cass search "sort_unstable" --robot --fields minimal --limit 10 --workspace /data/projects/ddis/ferratomic
+
+# The performance architecture discussion that produced the build order:
+cass search "performance architecture" --robot --fields minimal --limit 10 --workspace /data/projects/ddis/ferratomic
+
+# The cold start bottleneck analysis (OrdMap is the problem, not the threshold):
+cass search "OrdMap cold start 89" --robot --fields minimal --limit 5
+
+# The zero-copy mmap design discussion:
+cass search "zero-copy mmap checkpoint" --robot --fields minimal --limit 5 --workspace /data/projects/ddis/ferratomic
+```
+
+**Why this matters for THIS session:** Steps 3-5 are surgery on Store
+internals. The design rationale explains WHY PositionalStore is a frozen
+snapshot representation (not a mutable store), WHY transact must keep
+OrdMap (positions shift on insert), and WHY the lazy promotion pattern
+exists. Without this context, you will likely try to make PositionalStore
+mutable — which contradicts the architecture.
+
 ## Session 007-008 Summary
 
 ### Completed
