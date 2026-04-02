@@ -30,7 +30,7 @@ Every invariant follows the Level 0/1/2 format:
 | [06-prolly-tree.md](06-prolly-tree.md) | §23.9 | 045-050 | Chunk addressing, history independence, O(d) diff, block store, substrate independence |
 | [07-refinement.md](07-refinement.md) | §23.11 | CI-FERR-001..002 | Lean-Rust coupling invariant, refinement tower |
 | [08-verification-infrastructure.md](08-verification-infrastructure.md) | §23.12 | 056-059 | Fault injection, soak testing, metamorphic testing, optimization preservation |
-| [09-performance-architecture.md](09-performance-architecture.md) | §23.13 | 060-065 | Zero-copy cold start, sorted-array backend, Yoneda index fusion, homomorphic fingerprint, LIVE-first checkpoint |
+| [09-performance-architecture.md](09-performance-architecture.md) | §23.13 | 070-075 | Zero-copy cold start, sorted-array backend, permutation index fusion, homomorphic fingerprint, LIVE-first checkpoint |
 
 ## Reading Order for Implementing Agents
 

@@ -45,14 +45,14 @@ physical representation)
 
 ---
 
-### ADR-FERR-016: Localized Unsafe for Performance-Critical Cold Start
+### ADR-FERR-020: Localized Unsafe for Performance-Critical Cold Start
 
 **Traces to**: INV-FERR-023 (No Unsafe Code), INV-FERR-028 (Cold Start Latency),
 INV-FERR-013 (Checkpoint Equivalence)
 **Stage**: 0
 
 **Problem**: INV-FERR-023 mandates `#![forbid(unsafe_code)]` in all crates. The
-zero-copy memory-mapped cold start path (INV-FERR-060) requires casting validated
+zero-copy memory-mapped cold start path (INV-FERR-070) requires casting validated
 bytes to typed references — an inherently unsafe operation. The 11,000x gap between
 current cold start time (89s at 200K datoms) and the I/O-theoretic minimum (8ms)
 is dominated by safe-but-slow tree construction. Closing this gap requires an
@@ -106,10 +106,10 @@ BLAKE3 guard property. A proptest verifies round-trip through the mmap path.
 
 ---
 
-### INV-FERR-060: Zero-Copy Cold Start via Memory-Mapped Checkpoint
+### INV-FERR-070: Zero-Copy Cold Start via Memory-Mapped Checkpoint
 
 **Traces to**: INV-FERR-028 (Cold Start Latency), INV-FERR-013 (Checkpoint Equivalence),
-ADR-FERR-016 (Localized Unsafe), C2 (Content-Addressed Identity)
+ADR-FERR-020 (Localized Unsafe), C2 (Content-Addressed Identity)
 **Verification**: `V:PROP`, `V:KANI`, `V:LEAN`, `V:TYPE`
 **Stage**: 0
 
@@ -147,7 +147,7 @@ starting from GENESIS: writing a checkpoint and memory-mapping the resulting fil
 a queryable store view that is IDENTICAL to the original store. "Identical" means: the
 same set of datoms, the same index ordering, the same LIVE view, the same epoch. The
 memory-mapped view is read-only — mutation requires promoting to a mutable representation
-(INV-FERR-062).
+(INV-FERR-072).
 
 Cold start time is bounded by I/O bandwidth, not by CPU processing. At 200K datoms
 (~24MB file), cold start on NVMe (3 GB/s) is ~8ms. At 100M datoms (~12GB file), cold
@@ -164,14 +164,14 @@ storage corruption.
 ```rust
 /// Memory-map a checkpoint file and return a queryable store view.
 ///
-/// INV-FERR-060: The returned view is identical to the store that wrote
+/// INV-FERR-070: The returned view is identical to the store that wrote
 /// the checkpoint. No index construction occurs — indexes are pre-built
 /// in the file. Time complexity: O(1) for mapping, O(|file|/bandwidth)
 /// for first full scan.
 ///
 /// # Safety
 ///
-/// Uses `unsafe` in `validate_and_cast` (ADR-FERR-016) to convert
+/// Uses `unsafe` in `validate_and_cast` (ADR-FERR-020) to convert
 /// BLAKE3-verified bytes to typed references. The unsafe boundary is
 /// guarded by 128-bit collision-resistant integrity verification.
 ///
@@ -192,7 +192,7 @@ fn mmap_roundtrip_identity() {
     kani::assume(s.len() <= 4);
     let bytes = s.to_archived_bytes();
     let archived = validate_and_cast::<ArchivedStore>(&bytes)
-        .expect("INV-FERR-060: valid bytes must validate");
+        .expect("INV-FERR-070: valid bytes must validate");
     assert_eq!(archived.datom_count(), s.len());
     assert_eq!(archived.epoch(), s.epoch());
 }
@@ -223,7 +223,7 @@ proptest! {
 
 **Lean theorem**:
 ```lean
-/-- INV-FERR-060: mmap round-trip is identity on the datom set.
+/-- INV-FERR-070: mmap round-trip is identity on the datom set.
     Modeled as: serialize then deserialize preserves the abstract store. -/
 theorem mmap_roundtrip (s : DatomStore) :
     mmap_project (mmap_serialize s) = s :=
@@ -235,7 +235,7 @@ theorem mmap_roundtrip (s : DatomStore) :
 
 ---
 
-### INV-FERR-061: Sorted-Array Index Backend (Cache-Optimal Representation)
+### INV-FERR-071: Sorted-Array Index Backend (Cache-Optimal Representation)
 
 **Traces to**: INV-FERR-025 (Index Backend Interchangeability), INV-FERR-027
 (Read P99.99 Latency), INV-FERR-005 (Index Bijection)
@@ -248,7 +248,8 @@ Let SortedVec<K, V> be a sorted array of (key, value) pairs where key order
 is the total order on K.
 
 Define the operations:
-  insert(arr, k, v) = sort(arr ++ [(k, v)])
+  insert(arr, k, v) = sort(filter(arr, key ≠ k) ++ [(k, v)])
+    -- Remove existing entry for k before inserting (map semantics, not multimap).
   lookup(arr, k) = binary_search(arr, k)
   range(arr, lo, hi) = slice(arr, binary_search_lo(arr, lo), binary_search_hi(arr, hi))
   values(arr) = map(snd, arr)
@@ -285,7 +286,7 @@ sequential OrdMap insertion because it avoids per-element tree rebalancing and a
 The tradeoff: snapshot isolation (INV-FERR-006) requires O(1) clone for MVCC. SortedVec
 clone is O(n). This is acceptable for cold-start-loaded stores (which are read-only until
 the first transaction) and for short-lived query snapshots. For mutable stores with
-frequent snapshots, the OrdMap backend remains appropriate. INV-FERR-062 (lazy promotion)
+frequent snapshots, the OrdMap backend remains appropriate. INV-FERR-072 (lazy promotion)
 handles the transition.
 
 The sorted array is the in-memory analogue of a prolly tree leaf chunk (section 23.9).
@@ -295,7 +296,7 @@ replaced in later phases, only chunked.
 
 #### Level 2 (Implementation Contract)
 ```rust
-/// Sorted-array index backend (INV-FERR-061).
+/// Sorted-array index backend (INV-FERR-071).
 ///
 /// Implements `IndexBackend<K, V>` using a `Vec<(K, V)>` maintained in
 /// sorted order. Bulk construction via `from_sorted` is O(n). Single
@@ -321,7 +322,7 @@ impl<K: Ord + Clone + Debug, V: Clone + Debug> IndexBackend<K, V>
     }
 
     fn backend_get(&self, key: &K) -> Option<&V> {
-        debug_assert!(self.sorted, "INV-FERR-061: lookup on unsorted backend");
+        debug_assert!(self.sorted, "INV-FERR-071: lookup on unsorted backend");
         self.entries
             .binary_search_by(|(k, _)| k.cmp(key))
             .ok()
@@ -389,7 +390,7 @@ proptest! {
             prop_assert_eq!(
                 sv.backend_get(key).cloned(),
                 om.get(key).cloned(),
-                "INV-FERR-061: SortedVec and OrdMap must return identical results"
+                "INV-FERR-071: SortedVec and OrdMap must return identical results"
             );
         }
         prop_assert_eq!(sv.backend_len(), om.len());
@@ -399,7 +400,7 @@ proptest! {
 
 **Lean theorem**:
 ```lean
-/-- INV-FERR-061: A sorted array and an ordered map produce identical lookup
+/-- INV-FERR-071: A sorted array and an ordered map produce identical lookup
     results for the same key, given the same set of inserted pairs. -/
 theorem sorted_array_lookup_equiv (entries : List (Nat × Nat)) (key : Nat) :
     sorted_lookup (entries.toFinset) key = ordmap_lookup (entries.toFinset) key := by
@@ -411,9 +412,9 @@ theorem sorted_array_lookup_equiv (entries : List (Nat × Nat)) (key : Nat) :
 
 ---
 
-### INV-FERR-062: Lazy Representation Promotion (SortedVec → OrdMap)
+### INV-FERR-072: Lazy Representation Promotion (SortedVec → OrdMap)
 
-**Traces to**: INV-FERR-061 (Sorted-Array Backend), INV-FERR-006 (Snapshot Isolation),
+**Traces to**: INV-FERR-071 (Sorted-Array Backend), INV-FERR-006 (Snapshot Isolation),
 INV-FERR-025 (Index Backend Interchangeability)
 **Verification**: `V:PROP`, `V:TYPE`
 **Stage**: 0
@@ -461,7 +462,7 @@ programming — defer computation until the result is needed.
 #### Level 2 (Implementation Contract)
 ```rust
 /// A store that uses SortedVec indexes for reads and promotes to OrdMap
-/// on first write (INV-FERR-062).
+/// on first write (INV-FERR-072).
 ///
 /// INV-FERR-006: After promotion, snapshot isolation uses OrdMap structural
 /// sharing. Before promotion, snapshots clone the SortedVec (O(n) but
@@ -507,7 +508,7 @@ proptest! {
             let sv_result: Vec<_> = store_sv.datoms_for_entity(entity).collect();
             let om_result: Vec<_> = store_om.datoms_for_entity(entity).collect();
             prop_assert_eq!(sv_result, om_result,
-                "INV-FERR-062: query results must be identical before and after promotion");
+                "INV-FERR-072: query results must be identical before and after promotion");
         }
         prop_assert_eq!(store_sv.len(), store_om.len());
     }
@@ -516,7 +517,7 @@ proptest! {
 
 **Lean theorem**:
 ```lean
-/-- INV-FERR-062: Promotion preserves the abstract datom set.
+/-- INV-FERR-072: Promotion preserves the abstract datom set.
     Converting between representations does not change content. -/
 theorem promote_preserves_content (s : DatomStore) :
     promote (sorted_vec_of s) = s := by
@@ -527,10 +528,10 @@ theorem promote_preserves_content (s : DatomStore) :
 
 ---
 
-### INV-FERR-063: Yoneda Index Fusion (Single Store, Permutation Indexes)
+### INV-FERR-073: Yoneda Index Fusion (Single Store, Permutation Indexes)
 
 **Traces to**: INV-FERR-005 (Index Bijection), INV-FERR-025 (Index Backend
-Interchangeability), INV-FERR-061 (Sorted-Array Backend)
+Interchangeability), INV-FERR-071 (Sorted-Array Backend)
 **Verification**: `V:PROP`, `V:KANI`, `V:LEAN`
 **Stage**: 1
 
@@ -549,16 +550,20 @@ Theorem (Yoneda representation):
   The four materialized indexes are equivalent to one sorted array
   plus three permutation arrays.
 
-Proof (sketch via Yoneda lemma):
-  Each index I_X is a functor from the store category to the category of
-  ordered sequences. By the Yoneda lemma, this functor is represented by
-  its action on the identity morphism — which is the permutation that maps
-  positions in the canonical (EAVT) order to positions in the X order.
+Proof (permutation equivalence):
+  Each permutation π_X is constructed by sorting indices [0, n) by the
+  X-order key extractor applied to the canonical array. Therefore, the
+  sequence A[π_X[0]], A[π_X[1]], ..., A[π_X[n-1]] is sorted in X order
+  by construction.
 
-  Concretely: to look up key k in the AEVT index, binary search the
-  permuted view A[π_AEVT[0]], A[π_AEVT[1]], ..., A[π_AEVT[n-1]] for k.
-  This produces the same result as binary search on a materialized AEVT
-  sorted array because the permuted view IS the AEVT sorted sequence.
+  Binary search on this permuted view produces the same result as binary
+  search on a separately materialized X-sorted array because:
+  (1) Both contain the same multiset of elements (permutation preserves
+      the element set — Lean theorem `permuted_lookup_equiv`).
+  (2) Both are sorted in X order (the permuted view by construction,
+      the materialized array by explicit sort).
+  (3) Binary search on two arrays with identical elements in identical
+      order returns identical results.
 
 Space:
   4 materialized OrdMaps: ~4 × n × sizeof(Key + Datom) ≈ 4 × n × 150 bytes
@@ -590,7 +595,7 @@ array, and each permutation is a bijection on `[0, n)`.
 
 #### Level 2 (Implementation Contract)
 ```rust
-/// Yoneda-fused index representation (INV-FERR-063).
+/// Yoneda-fused index representation (INV-FERR-073).
 ///
 /// One sorted datom array + three permutation arrays.
 /// 78% memory savings vs four materialized OrdMaps.
@@ -665,7 +670,7 @@ proptest! {
             prop_assert_eq!(
                 yoneda.aevt_get(&aevt_key).map(|d| d.entity()),
                 materialized.aevt().get(&aevt_key).map(|d| d.entity()),
-                "INV-FERR-063: Yoneda AEVT lookup must match materialized"
+                "INV-FERR-073: Yoneda AEVT lookup must match materialized"
             );
         }
     }
@@ -674,7 +679,7 @@ proptest! {
 
 **Lean theorem**:
 ```lean
-/-- INV-FERR-063: A permutation of a finite set produces the same multiset
+/-- INV-FERR-073: A permutation of a finite set produces the same multiset
     of elements. Lookup on a permuted array is equivalent to lookup on the
     original array under the permuted ordering. -/
 theorem permuted_lookup_equiv (arr : Fin n → α) (π : Equiv.Perm (Fin n))
@@ -689,7 +694,7 @@ theorem permuted_lookup_equiv (arr : Fin n → α) (π : Equiv.Perm (Fin n))
 
 ---
 
-### INV-FERR-064: Homomorphic Store Fingerprint
+### INV-FERR-074: Homomorphic Store Fingerprint
 
 **Traces to**: INV-FERR-010 (Merge Convergence), INV-FERR-013 (Checkpoint
 Equivalence), C4 (CRDT Merge = Set Union), C2 (Content-Addressed Identity)
@@ -731,16 +736,21 @@ Corollary (O(1) merge verification):
   of the merged store is needed.
 
 Corollary (O(1) convergence check):
-  Two stores A and B have converged (contain identical datom sets) iff
-  H(A) = H(B). Comparing 32-byte fingerprints replaces comparing
-  potentially gigabyte-scale datom sets.
+  H(A) = H(B) is a NECESSARY condition for A = B and SUFFICIENT with
+  overwhelming probability (collision probability ≤ 2^{-128} per store
+  pair under BLAKE3's security model). Comparing 32-byte fingerprints
+  replaces comparing potentially gigabyte-scale datom sets. A mismatch
+  H(A) ≠ H(B) GUARANTEES the stores differ. A match H(A) = H(B)
+  indicates convergence with negligible false-positive probability.
 ```
 
 #### Level 1 (State Invariant)
-Every store maintains a 32-byte fingerprint that is the group-sum of per-datom hashes.
-The fingerprint is updated incrementally: each TRANSACT adds `h(d)` for each new datom
-d. Each MERGE combines fingerprints via group addition (after accounting for shared
-datoms via the intersection fingerprint).
+Every store maintains a 32-byte fingerprint that is the XOR-sum of per-datom hashes.
+The fingerprint is updated incrementally: each TRANSACT XORs `h(d)` for each new datom
+d. For MERGE of disjoint stores: `H(A ∪ B) = H(A) ⊕ H(B)`. For non-disjoint stores,
+the intersection must be accounted for: `H(A ∪ B) = H(A) ⊕ H(B) ⊕ H(A ∩ B)`, since
+shared elements cancel under XOR and must be re-added once. The intersection fingerprint
+is computed during merge by tracking which datoms appear in both stores.
 
 The fingerprint enables O(1) convergence detection between federated stores: two stores
 have identical datom sets if and only if their fingerprints match (with negligible
@@ -760,7 +770,7 @@ where elements are never removed, this is correct by construction.
 
 #### Level 2 (Implementation Contract)
 ```rust
-/// Homomorphic store fingerprint (INV-FERR-064).
+/// Homomorphic store fingerprint (INV-FERR-074).
 ///
 /// H(S) = XOR_{d ∈ S} BLAKE3(serialize(d))
 ///
@@ -774,11 +784,21 @@ impl StoreFingerprint {
     pub const ZERO: Self = Self([0u8; 32]);
 
     /// Add one datom's contribution to the fingerprint.
-    pub fn insert(&mut self, datom: &Datom) {
-        let hash = blake3::hash(&bincode::serialize(datom).unwrap());
+    /// # Errors
+    ///
+    /// Returns `FerraError` if datom serialization fails (should not happen
+    /// for well-formed datoms, but NEG-FERR-001 forbids unwrap).
+    pub fn insert(&mut self, datom: &Datom) -> Result<(), FerraError> {
+        let serialized = bincode::serialize(datom)
+            .map_err(|e| FerraError::InvariantViolation {
+                invariant: "INV-FERR-074".to_string(),
+                details: format!("datom serialization failed: {e}"),
+            })?;
+        let hash = blake3::hash(&serialized);
         for (a, b) in self.0.iter_mut().zip(hash.as_bytes()) {
             *a ^= b;
         }
+        Ok(())
     }
 
     /// Combine two fingerprints (for merge verification).
@@ -812,14 +832,14 @@ proptest! {
         // H(A ∪ B_only) = H(A) XOR H(B_only) since A ∩ B_only = ∅
         let fp_combined = StoreFingerprint::merge(&fp_a, &fp_b_only);
         prop_assert_eq!(fp_combined, fp_merged,
-            "INV-FERR-064: fingerprint must be homomorphic over disjoint union");
+            "INV-FERR-074: fingerprint must be homomorphic over disjoint union");
     }
 }
 ```
 
 **Lean theorem**:
 ```lean
-/-- INV-FERR-064: XOR fingerprint is homomorphic over disjoint union. -/
+/-- INV-FERR-074: XOR fingerprint is homomorphic over disjoint union. -/
 theorem fingerprint_merge (A B : Finset Datom) (h : Disjoint A B)
     (fp : Datom → BitVec 256) :
     xor_fold fp (A ∪ B) = xor_fold fp A ^^^ xor_fold fp B := by
@@ -829,7 +849,7 @@ theorem fingerprint_merge (A B : Finset Datom) (h : Disjoint A B)
 
 ---
 
-### INV-FERR-065: LIVE-First Lattice Reduction Checkpoint
+### INV-FERR-075: LIVE-First Lattice Reduction Checkpoint
 
 **Traces to**: INV-FERR-029 (LIVE View Resolution), INV-FERR-032 (LIVE Resolution
 Correctness), INV-FERR-028 (Cold Start Latency), INV-FERR-013 (Checkpoint Equivalence)
@@ -881,16 +901,18 @@ For a 200K-datom store where 50K values are currently live: cold start loads 50K
 (~1.2 GB) instead of 100M (~12 GB). The LIVE-first layout achieves 2-10x cold start
 reduction depending on the retraction ratio.
 
-The mathematical foundation is that LIVE is a RETRACTION in the category of semilattices
-— it is a semilattice homomorphism that is also idempotent. This means:
-`merge(LIVE(A), LIVE(B)) = LIVE(merge(A, B))` — LIVE views can be merged directly
-without needing the full history. This property is the algebraic foundation for efficient
-federation: the initial sync between two stores can exchange LIVE views only, with
-historical datoms synced in the background.
+The mathematical foundation is that LIVE is an IDEMPOTENT PROJECTION on the datom set:
+`LIVE(LIVE(S)) = LIVE(S)`. Note that LIVE does NOT distribute over merge in general:
+`merge(LIVE(A), LIVE(B)) ≠ LIVE(merge(A, B))` when A and B contain cross-store
+retractions (a retraction in B at timestamp t₂ > t₁ supersedes an assertion in A at t₁,
+but `LIVE(A)` alone cannot see B's retraction). Federation sync therefore requires
+exchanging full datom sets to correctly resolve cross-store retractions. The LIVE-first
+layout optimizes cold start for the common case (current-state queries on a single store),
+not the federation merge path.
 
 #### Level 2 (Implementation Contract)
 ```rust
-/// LIVE-first checkpoint layout (INV-FERR-065).
+/// LIVE-first checkpoint layout (INV-FERR-075).
 ///
 /// Section 1: LIVE datoms (current state — loaded at cold start)
 /// Section 2: Historical datoms (past state — loaded on demand)
@@ -932,7 +954,7 @@ proptest! {
         prop_assert_eq!(
             store_full.live_view(),
             store_live.live_view(),
-            "INV-FERR-065: LIVE view must be fully determined by LIVE datoms"
+            "INV-FERR-075: LIVE view must be fully determined by LIVE datoms"
         );
     }
 }
@@ -940,7 +962,7 @@ proptest! {
 
 **Lean theorem**:
 ```lean
-/-- INV-FERR-065: The LIVE projection is idempotent — applying it twice
+/-- INV-FERR-075: The LIVE projection is idempotent — applying it twice
     produces the same result as applying it once. This is the retraction
     property that enables LIVE-first checkpointing. -/
 theorem live_idempotent (S : DatomStore) :
