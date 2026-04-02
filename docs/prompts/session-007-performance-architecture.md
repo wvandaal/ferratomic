@@ -1,124 +1,214 @@
-# Ferratomic Continuation — Session 007
+# Ferratomic Continuation — Session 007: Performance Architecture Implementation
 
 > Generated: 2026-04-02
-> Last commit: 3c5b289 "chore: close 3 more completed beads from Phase 4a audit"
+> Last commit: (see git log — multiple commits this session)
 > Branch: main
 
 ## Read First
 
 1. `QUICKSTART.md` — project orientation
 2. `AGENTS.md` — guidelines and constraints
-3. `spec/09-performance-architecture.md` — the spec you are implementing (INV-FERR-070-075, ADR-FERR-020)
+3. `spec/09-performance-architecture.md` — **THE spec for this session** (INV-FERR-070-076, ADR-FERR-020)
 4. `spec/01-core-invariants.md` — INV-FERR-005 (index bijection), INV-FERR-006 (snapshot isolation)
 5. `spec/03-performance.md` — INV-FERR-025 (index backend interchangeability)
 
-## Session Summary
+## The Big Idea: Positional Content Addressing
 
-### Completed (Session 006)
-- Deep progress review: composite 8.84 → ~9.1 after fixes
-- Zero lint escape hatches enforced everywhere (CLAUDE.md hard constraint, pre-commit hook)
-- Kani harnesses compile under normal cargo (7 API drift bugs found and fixed)
-- 6 Kani harnesses verified by CBMC (WAL ordering, 3x backpressure, 2x error)
-- Kani toolchain installed (cargo-kani 0.67.0 + CBMC)
-- FerraError::Io now preserves ErrorKind (struct variant with kind + message)
-- 200K scale benchmarks: WA<5x PASS, P99<100us PASS in release mode
-- Cold start at 200K: 89s (im::OrdMap index rebuild bottleneck — the problem we're solving)
-- benches/common.rs eliminated (inlined into each bench file)
-- New spec section: `spec/09-performance-architecture.md` (INV-FERR-070-075, ADR-FERR-020)
-- Spec audited twice, all findings fixed (4 CRITICAL including false LIVE homomorphism, ID collision, multimap/map confusion, false iff)
+This session implements a fundamental architectural change. Read INV-FERR-076 in
+`spec/09-performance-architecture.md` completely before writing any code.
+
+**Core insight**: Every datom in a sorted canonical array has a unique position
+`p : u32` in `[0, n)`. That position is deterministic (same datom set = same positions),
+content-derived (sort order is defined by datom fields), and 4 bytes instead of 32.
+This position replaces EntityId hashes for ALL internal references:
+
+- **Index entries**: 4-byte position offsets instead of 32-byte hash keys
+- **LIVE view**: bitvector `live_bits[p]` instead of nested OrdMap
+- **Merge**: merge-sort on contiguous arrays instead of tree insertion
+- **Cold start**: read file = done (arrays ARE the runtime structures)
+
+Current state at 200K datoms:
+```
+OrdSet + 4 OrdMaps + LIVE OrdMap = 159 MB, 89s cold start
+```
+
+Target state at 200K datoms:
+```
+Vec<Datom> + 3 Vec<u32> + BitVec + [u8;32] = 26 MB, <5ms cold start
+```
+
+## Session 006 Summary
+
+### Completed
+- Deep progress review: 8.84 → ~9.1
+- Zero lint escape hatches enforced everywhere (pre-commit hook)
+- Kani harnesses compile under normal cargo (7 API drift bugs fixed)
+- 6 Kani harnesses verified by CBMC
+- Kani toolchain installed (cargo-kani 0.67.0)
+- FerraError::Io preserves ErrorKind
+- 200K scale benchmarks passing (WA<5x, P99<100us in release)
+- spec/09-performance-architecture.md authored + audited twice (0 findings remaining)
+- INV-FERR-076 (Positional Content Addressing) specified with full Level 0/1/2
+- 12 beads closed, 6 phantom edges removed, bead audit completed
 - Cross-cutting longitudinal audit: 0 contradictions across full spec surface
-- Lean proofs for INV-FERR-022/024/025/030 added (0 sorry)
-- Invariant catalog: type_level field + layer_count() method added
-- Back-references added to upstream specs (01, 02, 03)
-- 12 beads closed (completed work formally verified and closed)
-- Bead audit: 6 phantom edges removed, 1 duplicate closed, 1 factual error fixed
 
 ### Decisions Made
-- ALL ALIEN-* performance beads are Phase 4a gate requirements — the architecture refactor happens now, not Phase 4b
-- ADR-FERR-020: Localized unsafe permitted for mmap cold start (one function, one module, BLAKE3-guarded)
-- INV-FERR-060-065 renumbered to 070-075 (collision with federation spec)
-- Zero `#[allow(...)]` anywhere — pre-commit hook enforces this
-
-### Bugs Found
-- 7 Kani harness API drift bugs (fixed: transact/transact_test, HLC type mismatch, Store::empty, OrdSet::intersection, temporary borrow, datoms().cloned(), missing Debug derive)
-- False LIVE homomorphism claim in spec (LIVE does NOT distribute over merge — fixed)
-- Multimap/map semantic confusion in SortedVec spec Level 0 (fixed)
-- XOR fingerprint "iff" convergence claim mathematically false (fixed to probabilistic)
+- ALL performance beads are Phase 4a gate requirements
+- ADR-FERR-020: Localized unsafe for mmap (one function, BLAKE3-guarded)
+- Positional content addressing is the architectural foundation for everything
 
 ### Stopping Point
-All spec, audit, and bead work is done. Zero implementation of the new performance architecture exists. The next session is pure implementation, starting with SortedVecBackend.
+All spec and bead work done. Zero implementation exists. This session is pure
+implementation.
 
-## Next Execution Scope
+## Execution Plan
 
-### Primary Task
-**Implement SortedVecBackend** (bd-1c5r) — the cache-optimal sorted-array IndexBackend that unblocks 5 downstream beads.
+### Build Order (strict — each step depends on the previous)
 
-This is ~150 LOC in `ferratomic-core/src/indexes.rs`. The `IndexBackend` trait already exists with `backend_insert`, `backend_get`, `backend_len`, `backend_values`. You are adding a second implementation alongside the existing `im::OrdMap` implementation.
+```
+Step 1: bd-1c5r  SortedVecBackend
+        ~150 LOC in ferratomic-core/src/indexes.rs
+        Implements IndexBackend<K,V> with Vec<(K,V)> + binary search
 
-**Acceptance criteria** (from INV-FERR-071 in `spec/09-performance-architecture.md`):
-1. `SortedVecBackend<K, V>` implements `IndexBackend<K, V>` for all `K: Ord + Clone + Debug, V: Clone + Debug`
-2. `backend_insert` appends to unsorted buffer (O(1) amortized)
-3. `backend_get` uses binary search on sorted array (O(log n), ~4 cache misses)
-4. `sort()` method sorts + deduplicates (map semantics: last-write-wins for duplicate keys)
-5. `backend_values` iterates contiguously (cache-optimal sequential access)
-6. Proptest: `SortedVecBackend` and `OrdMap` return identical results for all operations
-7. All existing tests pass unchanged
-8. `cargo clippy --workspace --all-targets -- -D warnings` passes with zero warnings
+Step 2: bd-vpca  PositionalStore (INV-FERR-076)
+        ~300 LOC new file: ferratomic-core/src/positional.rs
+        Vec<Datom> + BitVec + 3x Vec<u32> + fingerprint
+        Replaces Store as the primary store representation
 
-**After SortedVecBackend**, the next beads in order:
-- bd-h2fz: Eliminate redundant primary OrdSet (EAVT index IS the store)
-- bd-erfj: ADR-FERR-020 decision (localized unsafe boundary for mmap)
-- bd-bkff: Lazy OrdMap promotion (SortedVec on cold start, OrdMap on first write)
-- bd-5zc4: Yoneda index fusion (1 sorted array + 3 permutation arrays)
-- bd-ndok: ClockSource trait injection for Kani-compatible HLC
+Step 3: bd-h2fz  Eliminate redundant primary OrdSet
+        EAVT index IS the canonical array — remove OrdSet<Datom>
+        Wire existing Store API to delegate to PositionalStore
 
-### Ready Queue
-```bash
-br ready          # Show unblocked issues
-bv --robot-next   # Top pick with reasoning
+Step 4: bd-bkff  Lazy OrdMap promotion (INV-FERR-072)
+        AdaptiveIndexes enum: Positional | OrdMap
+        Cold-loaded stores use Positional; first write promotes
+
+Step 5: bd-5zc4  Yoneda fusion (INV-FERR-073)
+        Remove materialized AEVT/VAET/AVET OrdMaps
+        Replace with permutation arrays (already in PositionalStore)
+
+Step 6: bd-ndok  ClockSource trait injection
+        Make HybridClock generic over clock source
+        Enables Kani verification of HLC harnesses
+
+Step 7: bd-erfj  ADR-FERR-020 localized unsafe boundary
+        Create ferratomic-core/src/mmap.rs with validate_and_cast
+
+Step 8: bd-a2vf  Checkpoint V3 (pre-sorted arrays)
+        Serialize PositionalStore directly — arrays ARE the format
+
+Step 9: bd-ta8c  mmap zero-copy cold start (INV-FERR-070)
+        Memory-map V3 checkpoint — zero construction
 ```
 
-Ready beads (no blockers):
-- **bd-1c5r** [P0]: SortedVecBackend — THE critical path
-- **bd-h2fz** [P0]: Eliminate redundant primary OrdSet
-- **bd-erfj** [P0]: ADR-FERR-020 localized unsafe decision
-- **bd-ndok** [P1]: ClockSource trait injection
-- **bd-7fub.22.10** [P0]: Final re-review (run lifecycle/13 deep mode)
-- **bd-y1w5** [P0]: Tag and document gate closure
+### Step 1 Detail: SortedVecBackend (bd-1c5r)
 
-### Dependency Context
+**File**: `ferratomic-core/src/indexes.rs`
+
+Add alongside existing `impl IndexBackend<K,V> for OrdMap<K,V>`:
+
+```rust
+#[derive(Clone, Debug)]
+pub struct SortedVecBackend<K: Ord, V> {
+    entries: Vec<(K, V)>,
+    sorted: bool,
+}
+
+impl<K: Ord + Clone + Debug, V: Clone + Debug> IndexBackend<K, V>
+    for SortedVecBackend<K, V>
+{
+    fn backend_insert(&mut self, key: K, value: V) {
+        self.entries.push((key, value));
+        self.sorted = false;
+    }
+
+    fn backend_get(&self, key: &K) -> Option<&V> {
+        debug_assert!(self.sorted, "INV-FERR-071: lookup on unsorted backend");
+        self.entries
+            .binary_search_by(|(k, _)| k.cmp(key))
+            .ok()
+            .map(|i| &self.entries[i].1)
+    }
+
+    fn backend_len(&self) -> usize { self.entries.len() }
+
+    fn backend_values(&self) -> Box<dyn Iterator<Item = &V> + '_> {
+        Box::new(self.entries.iter().map(|(_, v)| v))
+    }
+}
 ```
-bd-1c5r (SortedVecBackend)          <- IMPLEMENT FIRST
-    |
-bd-5zc4 (Yoneda fusion)            <- needs bd-1c5r
-bd-bkff (Lazy OrdMap promotion)     <- needs bd-1c5r
-bd-a2vf (Checkpoint V3)            <- needs bd-1c5r
-bd-218b (Cuckoo filter)            <- needs bd-1c5r
-    |
-bd-erfj (ADR-FERR-020)             <- independent, but gates mmap
-    |
-bd-ta8c (mmap zero-copy)           <- needs bd-erfj + bd-1c5r
-    |
-bd-wa5p (MPH)                      <- needs bd-ta8c
-```
+
+Plus `sort()` with dedup (map semantics) and `Default` impl.
+
+**Acceptance criteria**:
+1. Proptest: SortedVecBackend and OrdMap identical for all operations
+2. All existing tests pass (SortedVecBackend doesn't replace OrdMap yet)
+3. `cargo clippy --workspace --all-targets -- -D warnings` zero warnings
+
+### Step 2 Detail: PositionalStore (bd-vpca)
+
+**File**: NEW `ferratomic-core/src/positional.rs`
+
+This is the core data structure. Everything else wraps or delegates to it.
+
+Key methods:
+- `from_datoms(iter)` — sort + dedup + build permutations + build live bitvector
+- `position_of(datom)` — binary search, returns `Option<u32>`
+- `is_live(position)` — bit test, O(1)
+- `eavt_get(key)` — binary search on canonical array
+- `aevt_get(key)` — binary search on permuted view
+- `merge_positional(a, b)` — merge-sort + rebuild
+
+**Acceptance criteria**:
+1. Proptest: PositionalStore.datoms() == Store.datoms() for same input
+2. Proptest: PositionalStore.live_view() == Store.live_view() for same input
+3. Proptest: merge_positional(a,b).datoms() == merge(a,b).datoms()
+4. LIVE bitvector length == canonical array length
+5. All permutation arrays are valid permutations of [0, n)
 
 ## Hard Constraints
 
-- Zero `#[allow(...)]` anywhere — pre-commit hook enforces scan
-- `#![forbid(unsafe_code)]` in all crates (until ADR-FERR-020 is implemented)
-- No `unwrap()` or `expect()` in production code (NEG-FERR-001)
-- `CARGO_TARGET_DIR=/data/cargo-target` — always
-- Phase 4b cannot start until Phase 4a passes gate at 10.0
-- Every function must reference an INV-FERR in its doc comment
+- Zero `#[allow(...)]` anywhere — pre-commit hook enforces
+- `#![forbid(unsafe_code)]` in all crates until Step 7 (ADR-FERR-020)
+- No `unwrap()` or `expect()` in production code
+- `CARGO_TARGET_DIR=/data/cargo-target`
+- Every public function references an INV-FERR in its doc comment
 - All functions under 50 lines, all files under 500 LOC
-- `cargo clippy --workspace --all-targets -- -D warnings` must pass
+- Pre-commit hook runs: fmt + clippy --all-targets + strict gate + zero-allow scan
 
 ## Stop Conditions
 
 Stop and escalate to the user if:
-- SortedVecBackend would require changing the `IndexBackend` trait signature (this affects all existing code)
-- The `sort()` deduplication strategy (last-write-wins) conflicts with how `Store::transact` uses indexes
-- Any existing test fails after adding SortedVecBackend (indicates a behavioral difference)
-- The sorted-vec `Clone` being O(n) creates issues for snapshot isolation paths you didn't anticipate
-- You discover that eliminating the primary OrdSet (bd-h2fz) requires changes outside `ferratomic-core/src/store/`
-- You need to add a new dependency to any Cargo.toml
+- SortedVecBackend requires changing the `IndexBackend` trait signature
+- The `sort()` dedup strategy conflicts with `Store::transact` semantics
+- Any existing test fails after changes
+- The LIVE bitvector construction requires information not available in EAVT order
+  (e.g., needs to see all datoms for an (e,a) pair before determining liveness,
+  but EAVT groups by entity then attribute — this SHOULD work but verify)
+- PositionalStore `merge_positional` produces different results from `Store::merge`
+  for any input
+- You need to add a new crate dependency
+- Any file exceeds 500 LOC
+
+## Key Files
+
+```
+ferratomic-core/src/indexes.rs       — SortedVecBackend (Step 1)
+ferratomic-core/src/positional.rs    — PositionalStore (Step 2, NEW)
+ferratomic-core/src/store/mod.rs     — Wire delegation (Steps 3-5)
+ferratomic-core/src/store/query.rs   — LIVE bitvector integration
+ferratomic-core/src/store/merge.rs   — merge-sort path
+ferratomic-verify/proptest/          — New proptest suites for 076
+ferratomic-verify/kani/              — Kani harnesses for 076
+```
+
+## Performance Targets (verify with benchmarks after implementation)
+
+| Metric | Current (im::OrdMap) | Target (Positional) | Improvement |
+|--------|---------------------|---------------------|-------------|
+| Memory at 200K | 159 MB | 26 MB | 6x |
+| Cold start 200K | 89s | <5ms (sort) | 17,800x |
+| Point lookup | 300ns | 15-20ns | 15-20x |
+| LIVE query | 200ns | 1ns | 200x |
+| Merge 200K+200K | 89s | 50ms | 1,780x |
+| LIVE merge | seconds | 1 microsecond | 1,000,000x |
