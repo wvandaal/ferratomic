@@ -8,7 +8,7 @@ use std::collections::BTreeSet;
 
 use ferratom::Datom;
 use ferratomic_core::{
-    indexes::EavtKey,
+    indexes::{AevtKey, AvetKey, EavtKey, VaetKey},
     merge::merge,
     positional::{merge_positional, PositionalStore},
     store::Store,
@@ -112,6 +112,13 @@ proptest! {
              store={}, positional={}",
             store_merged.len(), ps_merged.len()
         );
+
+        // INV-FERR-001: merge commutativity — direct test on PositionalStore.
+        let ps_ba = merge_positional(&ps_b, &ps_a);
+        prop_assert_eq!(
+            ps_merged.datoms(), ps_ba.datoms(),
+            "INV-FERR-001: merge_positional(a,b) != merge_positional(b,a)"
+        );
     }
 
     /// INV-FERR-076 acceptance #4: LIVE bitvector length == canonical length.
@@ -192,27 +199,42 @@ proptest! {
         }
     }
 
-    /// INV-FERR-076: EAVT lookup matches Store index.
+    /// INV-FERR-076: all four index lookups find every datom.
     ///
-    /// Every datom findable via Store's EAVT index is also findable
-    /// via `PositionalStore.eavt_get`.
+    /// Every datom must be findable via EAVT (canonical binary search)
+    /// and AEVT, VAET, AVET (permuted binary search).
+    ///
+    /// Falsification: any lookup returns None or wrong datom.
     #[test]
-    fn inv_ferr_076_eavt_lookup_matches(
+    fn inv_ferr_076_all_index_lookups(
         datoms in prop::collection::btree_set(arb_datom(), 1..100),
     ) {
-        let store = Store::from_datoms(datoms.clone());
         let ps = PositionalStore::from_datoms(datoms.into_iter());
 
-        for d in store.datoms() {
-            let key = EavtKey::from_datom(d);
-            let result = ps.eavt_get(&key);
-            prop_assert!(
-                result.is_some(),
-                "INV-FERR-076: datom not found via eavt_get"
-            );
+        for d in ps.datoms() {
+            // EAVT: canonical binary search.
+            let eavt = ps.eavt_get(&EavtKey::from_datom(d));
             prop_assert_eq!(
-                result.expect("checked above"), d,
-                "INV-FERR-076: eavt_get returned wrong datom"
+                eavt, Some(d),
+                "INV-FERR-076: eavt_get failed for datom {:?}", d.entity()
+            );
+            // AEVT: permuted binary search.
+            let aevt = ps.aevt_get(&AevtKey::from_datom(d));
+            prop_assert_eq!(
+                aevt, Some(d),
+                "INV-FERR-076: aevt_get failed for datom {:?}", d.entity()
+            );
+            // VAET: permuted binary search.
+            let vaet = ps.vaet_get(&VaetKey::from_datom(d));
+            prop_assert_eq!(
+                vaet, Some(d),
+                "INV-FERR-076: vaet_get failed for datom {:?}", d.entity()
+            );
+            // AVET: permuted binary search.
+            let avet = ps.avet_get(&AvetKey::from_datom(d));
+            prop_assert_eq!(
+                avet, Some(d),
+                "INV-FERR-076: avet_get failed for datom {:?}", d.entity()
             );
         }
     }
