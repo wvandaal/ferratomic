@@ -368,9 +368,50 @@ Verdicts:
 **Objective**: For each SOUND bead from Phase 1, assess whether it meets the
 lab-grade standard. For each NEEDS WORK bead, diagnose what's wrong.
 
-### The 7 Audit Lenses
+### The 8 Audit Lenses
 
 Apply each lens to each bead. Record pass/fail per lens.
+
+#### Lens 0: Epistemic Fit
+
+**Before checking completeness, ask: is this the RIGHT verification method for
+this invariant?** A bead that prescribes the wrong method will produce work that
+compiles but verifies nothing. This lens catches that BEFORE an agent wastes
+time writing vacuous proofs or redundant tests.
+
+For each verification method the bead prescribes, check whether the invariant's
+algebraic structure matches the method's domain of validity:
+
+| Method | Domain of validity | NOT valid for |
+|--------|-------------------|---------------|
+| **Lean** | Algebraic properties of Finset/set operations: commutativity, monotonicity, subset, cardinality preservation, homomorphism. Properties expressible as equalities or inclusions on the abstract `DatomStore := Finset Datom` model. | Type system properties (unsafe, Result), performance thresholds (latency, write amplification), crash non-determinism (which WAL entries survive), rate limiting (backpressure), architecture properties (substrate agnosticism). |
+| **Stateright** | Properties under concurrent/crash interleavings: convergence under message reordering, recovery correctness under crash timing, state machine safety and liveness. Properties that require exploring ALL action sequences. | Algebraic identities provable by Finset rewriting (use Lean). Properties of a single deterministic computation (use proptest). |
+| **Kani** | Bounded model checking of Rust code paths: exhaustive verification of small input spaces, path coverage for error handling, contract verification with `kani::any()`. | Properties that require unbounded inputs, real I/O, or timing. Properties already provable by Lean at the algebraic level (Kani adds implementation-level confidence, not algebraic proof). |
+| **Proptest** | Statistical confidence on concrete Rust implementations: 10K+ random inputs verify the implementation matches the spec's algebraic law. The conformance bridge between Lean model and Rust code. | Universal proofs (use Lean). Properties expressible as `A ∪ B = B ∪ A` where Finset.union_comm is a one-liner — don't spend 10K random cases on a rewriting identity. |
+| **V:TYPE** | Rust compiler enforces it: trait bounds, `Result<T,E>` totality, `#![forbid(unsafe_code)]`, type-state patterns. Zero runtime verification needed — the compiler IS the verifier. | Runtime behavior, algebraic properties, performance characteristics. |
+
+**A bead FAILS epistemic fit if:**
+- It prescribes Lean for a property the Finset model cannot encode (rate limiting,
+  crash timing, type system enforcement). The resulting theorem would be vacuously
+  true or trivially `rfl` on identity functions.
+- It prescribes Stateright for a pure algebraic identity (merge commutativity).
+  The model checker would explore millions of states to verify what `Finset.union_comm`
+  proves in one line.
+- It prescribes proptest for a property already proven universally by Lean.
+  Statistical confidence is weaker than a proof — use proptest for the
+  **conformance bridge** (Lean predicts, Rust confirms), not as a substitute.
+- It prescribes Kani for a property that requires unbounded reasoning or real I/O.
+- It prescribes V:TYPE for a runtime behavioral property that the compiler cannot check.
+
+**Evidence from this project**: Session 011 audited 9 "Lean proof" beads and found
+7 were epistemically wrong. They would have produced compilable-but-vacuous theorems:
+- INV-FERR-019 (error exhaustiveness): Lean can't verify Rust's type system
+- INV-FERR-021 (backpressure): Lean has no concept of rate or time
+- INV-FERR-023 (no unsafe): Lean can't verify `#![forbid(unsafe_code)]`
+- INV-FERR-024 (substrate agnosticism): vacuously true — Finset IS substrate-agnostic
+
+The correct action for a mismatched bead: reclassify it to the RIGHT method,
+or close it if the property is already verified by the correct method elsewhere.
 
 #### Lens 1: Structural Completeness
 
@@ -522,22 +563,23 @@ Does this bead serve True North?
 - Does the work directly advance the current phase?
 - Is there a credible path from this bead to a user-visible capability?
 
-A bead that passes all 7 lenses is lab-grade. Record the lens results.
+A bead that passes all 8 lenses is lab-grade. Record the lens results.
 
 ### Output: Quality Register
 
 Extend the Phase 1 table with lens results:
 
-| Bead | Verdict | L1 | L2 | L3 | L4 | L5 | L6 | L7 | Gap Count | Action |
-|------|---------|----|----|----|----|----|----|----|----|---------|--------|
-| bd-xxx | SOUND | P | P | P | P | P | P | P | 0 | NONE |
-| bd-yyy | NEEDS WORK | F | P | F | P | F | F | P | 4 | REWRITE |
-| bd-zzz | CLOSE | — | — | — | — | — | — | — | — | CLOSE |
+| Bead | Verdict | L0 | L1 | L2 | L3 | L4 | L5 | L6 | L7 | Gap Count | Action |
+|------|---------|----|----|----|----|----|----|----|----|---------|--------|--------|
+| bd-xxx | SOUND | P | P | P | P | P | P | P | P | 0 | NONE |
+| bd-yyy | NEEDS WORK | **F** | F | P | F | P | F | F | P | 5 | RECLASSIFY |
+| bd-zzz | CLOSE | — | — | — | — | — | — | — | — | — | CLOSE |
 
 Action categories:
 - **NONE**: Lab-grade. No changes needed.
 - **EDIT**: 1-2 lens failures. Add missing fields.
 - **REWRITE**: 3+ lens failures. Rebuild from the lab-grade template.
+- **RECLASSIFY**: Lens 0 failure. The bead prescribes the wrong verification method. Change the method to match the invariant's epistemic domain, or close if the property is already verified elsewhere by the correct method.
 - **SPLIT**: Lens 4 failure. Decompose into atomic sub-beads.
 - **MERGE**: Overlapping with another bead. Consolidate.
 - **CLOSE**: Work done, invalid, or duplicate.
@@ -1069,7 +1111,7 @@ exact callers affected by the `indexes()` removal.
   Code changes happen in subsequent execution sessions.
 - Do not batch changes mentally. Update each bead immediately after completing
   its assessment. This prevents drift between your findings and the bead state.
-- Do not skip beads because they "look fine." Apply all 7 lenses to every bead.
+- Do not skip beads because they "look fine." Apply all 8 lenses to every bead.
   The purpose of a systematic protocol is to catch what quick judgment misses.
 - Do not close beads that represent real spec gaps just because the current code
   works. If INV-FERR-NNN requires X and the bead tracks X, the bead stays open
