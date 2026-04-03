@@ -18,6 +18,9 @@ serde = { workspace = true }
 asupersync = { workspace = true }
 # tokio: optional, for asupersync-tokio-compat adapter modules only
 tokio = { workspace = true, optional = true }
+# mmap zero-copy cold start (INV-FERR-070, bd-ta8c)
+memmap2 = { version = "0.9", optional = true }
+rkyv = { version = "0.8", optional = true, features = ["bytecheck"] }
 
 [features]
 ## Enable release-mode index bijection sampling (INV-FERR-005).
@@ -26,6 +29,9 @@ release_bijection_check = []
 ## HI-005: Expose commit_unchecked and other testing-only APIs.
 ## Production builds must NOT enable this feature.
 test-utils = []
+## ALIEN-S1: mmap zero-copy cold start (INV-FERR-070, bd-ta8c).
+## Enables MappedStore, mmap_cold_start, promote_to_positional.
+mmap = ["dep:memmap2", "dep:rkyv"]
 
 [dev-dependencies]
 ferratom = { path = "../ferratom", features = ["test-utils"] }
