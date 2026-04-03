@@ -11,8 +11,12 @@ use std::{collections::BTreeSet, time::Instant};
 
 use ferratom::{AgentId, Attribute, Datom, EntityId, Op, TxId, Value};
 use ferratomic_core::{
-    checkpoint::write_checkpoint, db::Database, indexes::EavtKey, storage::cold_start,
-    store::Store, writer::Transaction,
+    checkpoint::write_checkpoint,
+    db::Database,
+    indexes::{EavtKey, IndexBackend},
+    storage::cold_start,
+    store::Store,
+    writer::Transaction,
 };
 
 // ---------------------------------------------------------------------------
@@ -138,7 +142,7 @@ fn measure_p99_read_latency_ns(
         .map(|i| EntityId::from_content(format!("entity-{}", i % datom_count).as_bytes()))
         .collect();
 
-    let eavt = store.indexes().unwrap().eavt();
+    let indexes = store.indexes().unwrap();
 
     // Warm up: fault in pages / warm caches.
     let warmup_key = EavtKey::from_datom(&ferratom::Datom::new(
@@ -148,7 +152,7 @@ fn measure_p99_read_latency_ns(
         ferratom::TxId::new(0, 0, 0),
         ferratom::Op::Assert,
     ));
-    let _ = eavt.get_prev(&warmup_key);
+    let _ = indexes.eavt().backend_get(&warmup_key);
 
     let mut latencies_ns: Vec<u128> = Vec::with_capacity(lookup_count);
 
@@ -162,7 +166,7 @@ fn measure_p99_read_latency_ns(
         ));
 
         let start = Instant::now();
-        let result = eavt.get_prev(&key);
+        let result = indexes.eavt().backend_get(&key);
         let elapsed = start.elapsed();
 
         std::hint::black_box(result);

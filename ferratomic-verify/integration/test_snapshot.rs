@@ -134,10 +134,10 @@ fn test_inv_ferr_005_bijection_after_transact() {
 
     // Final explicit 4-index cardinality check.
     let primary_count = store.len();
-    let eavt_count = store.indexes().unwrap().eavt().len();
-    let aevt_count = store.indexes().unwrap().aevt().len();
-    let vaet_count = store.indexes().unwrap().vaet().len();
-    let avet_count = store.indexes().unwrap().avet().len();
+    let eavt_count = store.indexes().unwrap().eavt_datoms().count();
+    let aevt_count = store.indexes().unwrap().aevt_datoms().count();
+    let vaet_count = store.indexes().unwrap().vaet_datoms().count();
+    let avet_count = store.indexes().unwrap().avet_datoms().count();
 
     assert_eq!(
         eavt_count, primary_count,

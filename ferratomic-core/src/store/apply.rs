@@ -248,6 +248,8 @@ mod tests {
     fn test_inv_ferr_005_index_bijection_after_insert() {
         let mut store = Store::from_datoms(BTreeSet::new());
         store.insert(&sample_datom("inserted"));
+        // bd-5zc4: SortedVecBackend defers sorting; sort before querying.
+        store.ensure_indexes_sorted();
 
         let primary: BTreeSet<&Datom> = store.datoms().collect();
         let eavt: BTreeSet<&Datom> = store.indexes().unwrap().eavt_datoms().collect();

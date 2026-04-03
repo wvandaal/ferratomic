@@ -10,6 +10,8 @@
 //! INV-FERR-076: positional determinism, stability under append,
 //! LIVE as bitvector, merge as merge-sort.
 
+use std::sync::OnceLock;
+
 use bitvec::prelude::{BitVec, Lsb0};
 use ferratom::{Datom, Op};
 
@@ -21,16 +23,16 @@ use crate::indexes::{AevtKey, AvetKey, EavtKey, VaetKey};
 
 /// Positional content addressing store (INV-FERR-076).
 ///
-/// Replaces `OrdSet<Datom>` + 4×`OrdMap` with contiguous arrays:
+/// Replaces `OrdSet<Datom>` + 4x`OrdMap` with contiguous arrays:
 /// - `canonical`: sorted `Vec<Datom>` (EAVT order). Position = index.
 /// - `live_bits`: `BitVec` where `live_bits[p]` = datom p is live.
-/// - `perm_aevt/vaet/avet`: permutation arrays mapping alternate sort
-///   orders to canonical positions.
+/// - `perm_aevt/vaet/avet`: lazily-built permutation arrays mapping alternate
+///   sort orders to canonical positions (`OnceLock` for deferred construction).
 /// - `fingerprint`: XOR-sum placeholder for INV-FERR-074 (Stage 1).
 ///
 /// Memory at 200K datoms: ~26 MB vs ~159 MB with `im::OrdMap`.
 /// Cold start: O(n log n) sort vs O(n) tree insertions with pointer chasing.
-#[derive(Clone, Debug)]
+/// Permutations are built on first access, not at construction time.
 pub struct PositionalStore {
     /// Datoms in canonical (EAVT) sorted order (INV-FERR-076).
     canonical: Vec<Datom>,
@@ -39,19 +41,61 @@ pub struct PositionalStore {
     /// (INV-FERR-029). 1 bit per datom — 25 KB at 200K datoms.
     live_bits: BitVec<u64, Lsb0>,
     /// Permutation: AEVT-order index → canonical position (INV-FERR-005).
-    perm_aevt: Vec<u32>,
+    /// Lazily built on first access via `OnceLock`.
+    perm_aevt: OnceLock<Vec<u32>>,
     /// Permutation: VAET-order index → canonical position (INV-FERR-005).
-    perm_vaet: Vec<u32>,
+    /// Lazily built on first access via `OnceLock`.
+    perm_vaet: OnceLock<Vec<u32>>,
     /// Permutation: AVET-order index → canonical position (INV-FERR-005).
-    perm_avet: Vec<u32>,
+    /// Lazily built on first access via `OnceLock`.
+    perm_avet: OnceLock<Vec<u32>>,
     /// Homomorphic fingerprint placeholder (INV-FERR-074, Stage 1).
     fingerprint: [u8; 32],
+}
+
+impl Clone for PositionalStore {
+    fn clone(&self) -> Self {
+        Self {
+            canonical: self.canonical.clone(),
+            live_bits: self.live_bits.clone(),
+            perm_aevt: self.perm_aevt.get().map_or_else(OnceLock::new, |v| {
+                let lock = OnceLock::new();
+                let _ = lock.set(v.clone());
+                lock
+            }),
+            perm_vaet: self.perm_vaet.get().map_or_else(OnceLock::new, |v| {
+                let lock = OnceLock::new();
+                let _ = lock.set(v.clone());
+                lock
+            }),
+            perm_avet: self.perm_avet.get().map_or_else(OnceLock::new, |v| {
+                let lock = OnceLock::new();
+                let _ = lock.set(v.clone());
+                lock
+            }),
+            fingerprint: self.fingerprint,
+        }
+    }
+}
+
+impl std::fmt::Debug for PositionalStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PositionalStore")
+            .field("canonical_len", &self.canonical.len())
+            .field("live_bits_len", &self.live_bits.len())
+            .field("perm_aevt_init", &self.perm_aevt.get().is_some())
+            .field("perm_vaet_init", &self.perm_vaet.get().is_some())
+            .field("perm_avet_init", &self.perm_avet.get().is_some())
+            .field("fingerprint", &self.fingerprint)
+            .finish()
+    }
 }
 
 impl PositionalStore {
     /// Build from an unsorted datom iterator (INV-FERR-076).
     ///
-    /// O(n log n) for sort + 3 permutation sorts + O(n) for LIVE scan.
+    /// O(n log n) for sort + O(n) for LIVE scan. Permutation arrays are
+    /// deferred to first access via `OnceLock` (lazy construction).
     /// Uses `sort_unstable` — O(1) auxiliary memory, matching the
     /// performance architecture targets (INV-FERR-076).
     #[must_use]
@@ -65,16 +109,13 @@ impl PositionalStore {
         );
 
         let live_bits = build_live_bitvector(&canonical);
-        let perm_aevt = build_permutation(&canonical, AevtKey::from_datom);
-        let perm_vaet = build_permutation(&canonical, VaetKey::from_datom);
-        let perm_avet = build_permutation(&canonical, AvetKey::from_datom);
 
         Self {
             canonical,
             live_bits,
-            perm_aevt,
-            perm_vaet,
-            perm_avet,
+            perm_aevt: OnceLock::new(),
+            perm_vaet: OnceLock::new(),
+            perm_avet: OnceLock::new(),
             fingerprint: [0u8; 32],
         }
     }
@@ -140,45 +181,63 @@ impl PositionalStore {
     }
 
     /// AEVT lookup: O(log n) binary search on permuted view (INV-FERR-027).
+    ///
+    /// Lazily builds the AEVT permutation on first access.
     #[must_use]
     pub fn aevt_get(&self, key: &AevtKey) -> Option<&Datom> {
-        permuted_binary_search(&self.perm_aevt, &self.canonical, |d| {
-            AevtKey::from_datom(d).cmp(key)
-        })
+        let perm = self
+            .perm_aevt
+            .get_or_init(|| build_permutation(&self.canonical, AevtKey::from_datom));
+        permuted_binary_search(perm, &self.canonical, |d| AevtKey::from_datom(d).cmp(key))
     }
 
     /// VAET lookup: O(log n) binary search on permuted view (INV-FERR-027).
+    ///
+    /// Lazily builds the VAET permutation on first access.
     #[must_use]
     pub fn vaet_get(&self, key: &VaetKey) -> Option<&Datom> {
-        permuted_binary_search(&self.perm_vaet, &self.canonical, |d| {
-            VaetKey::from_datom(d).cmp(key)
-        })
+        let perm = self
+            .perm_vaet
+            .get_or_init(|| build_permutation(&self.canonical, VaetKey::from_datom));
+        permuted_binary_search(perm, &self.canonical, |d| VaetKey::from_datom(d).cmp(key))
     }
 
     /// AVET lookup: O(log n) binary search on permuted view (INV-FERR-027).
+    ///
+    /// Lazily builds the AVET permutation on first access.
     #[must_use]
     pub fn avet_get(&self, key: &AvetKey) -> Option<&Datom> {
-        permuted_binary_search(&self.perm_avet, &self.canonical, |d| {
-            AvetKey::from_datom(d).cmp(key)
-        })
+        let perm = self
+            .perm_avet
+            .get_or_init(|| build_permutation(&self.canonical, AvetKey::from_datom));
+        permuted_binary_search(perm, &self.canonical, |d| AvetKey::from_datom(d).cmp(key))
     }
 
     /// Access the AEVT permutation array (INV-FERR-076).
+    ///
+    /// Lazily builds the permutation on first access.
     #[must_use]
     pub fn perm_aevt(&self) -> &[u32] {
-        &self.perm_aevt
+        self.perm_aevt
+            .get_or_init(|| build_permutation(&self.canonical, AevtKey::from_datom))
     }
 
     /// Access the VAET permutation array (INV-FERR-076).
+    ///
+    /// Lazily builds the permutation on first access.
     #[must_use]
     pub fn perm_vaet(&self) -> &[u32] {
-        &self.perm_vaet
+        self.perm_vaet
+            .get_or_init(|| build_permutation(&self.canonical, VaetKey::from_datom))
     }
 
     /// Access the AVET permutation array (INV-FERR-076).
+    ///
+    /// Lazily builds the permutation on first access.
     #[must_use]
     pub fn perm_avet(&self) -> &[u32] {
-        &self.perm_avet
+        self.perm_avet
+            .get_or_init(|| build_permutation(&self.canonical, AvetKey::from_datom))
     }
 
     /// Length of the LIVE bitvector (INV-FERR-076: equals `len()`).
@@ -208,11 +267,19 @@ impl PositionalStore {
 ///
 /// INV-FERR-001: commutativity — `merge(a,b) = merge(b,a)` because
 /// merge-sort of two sorted arrays is commutative on set semantics.
-/// O(n + m) merge-sort + O(n log n) permutation rebuild + O(n) LIVE.
+/// O(n + m) merge-sort + O(n) LIVE. Permutations are deferred (lazy).
 #[must_use]
 pub fn merge_positional(a: &PositionalStore, b: &PositionalStore) -> PositionalStore {
     let merged = merge_sort_dedup(&a.canonical, &b.canonical);
-    PositionalStore::from_datoms(merged.into_iter())
+    let live_bits = build_live_bitvector(&merged);
+    PositionalStore {
+        canonical: merged,
+        live_bits,
+        perm_aevt: OnceLock::new(),
+        perm_vaet: OnceLock::new(),
+        perm_avet: OnceLock::new(),
+        fingerprint: [0u8; 32],
+    }
 }
 
 // ---------------------------------------------------------------------------

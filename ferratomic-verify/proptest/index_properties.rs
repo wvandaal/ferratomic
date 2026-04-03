@@ -97,10 +97,10 @@ proptest! {
         // (b) Explicit 4-index cardinality check against primary.
         let primary_count = store.len();
         let indexes = store.indexes().unwrap();
-        let eavt_count = indexes.eavt().len();
-        let aevt_count = indexes.aevt().len();
-        let vaet_count = indexes.vaet().len();
-        let avet_count = indexes.avet().len();
+        let eavt_count = indexes.eavt_datoms().count();
+        let aevt_count = indexes.aevt_datoms().count();
+        let vaet_count = indexes.vaet_datoms().count();
+        let avet_count = indexes.avet_datoms().count();
 
         prop_assert_eq!(
             eavt_count, primary_count,

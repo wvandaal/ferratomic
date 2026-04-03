@@ -20,7 +20,7 @@
 //! The primary store uses `im::OrdSet<Datom>` (ADR-FERR-001). Snapshots
 //! are O(1) via structural sharing -- `clone()` shares the tree spine.
 //! Four secondary indexes (EAVT, AEVT, VAET, AVET) are maintained in
-//! bijection with the primary set via [`Indexes`](crate::indexes::Indexes).
+//! bijection with the primary set via [`SortedVecIndexes`](crate::indexes::SortedVecIndexes).
 //! INV-FERR-005 is satisfied by updating all indexes on every insert.
 //!
 //! ## Module layout
@@ -48,7 +48,7 @@ pub use self::{
     iter::{DatomIter, DatomSetView, SnapshotDatoms},
     merge::SchemaConflict,
 };
-use crate::{indexes::Indexes, positional::PositionalStore};
+use crate::{indexes::SortedVecIndexes, positional::PositionalStore};
 
 // ---------------------------------------------------------------------------
 // StoreRepr — dual representation (bd-h2fz)
@@ -67,12 +67,12 @@ pub(crate) enum StoreRepr {
     /// Cold-start representation: contiguous arrays with permutation indexes.
     /// Wrapped in `Arc` for O(1) clone (snapshot creation, merge input).
     Positional(Arc<PositionalStore>),
-    /// Write-active representation: persistent balanced tree with `OrdMap` indexes.
+    /// Write-active representation: persistent balanced tree with `SortedVec` indexes.
     OrdMap {
         /// Primary datom set (ADR-FERR-001).
         datoms: OrdSet<Datom>,
         /// Secondary indexes maintained in bijection with primary set.
-        indexes: Indexes,
+        indexes: SortedVecIndexes,
     },
 }
 
@@ -318,10 +318,13 @@ impl Store {
     /// INV-FERR-005: all four indexes are bijective with the primary set.
     ///
     /// bd-h2fz: returns `None` for `Positional` stores (indexes are
-    /// encoded as permutation arrays, not `Indexes`). Returns `Some`
-    /// for `OrdMap` stores.
+    /// encoded as permutation arrays, not `SortedVecIndexes`). Returns
+    /// `Some` for `OrdMap` stores.
+    ///
+    /// bd-5zc4: Yoneda index fusion — returns `SortedVecIndexes` instead
+    /// of `Indexes` (`OrdMap` backend).
     #[must_use]
-    pub fn indexes(&self) -> Option<&Indexes> {
+    pub fn indexes(&self) -> Option<&SortedVecIndexes> {
         match &self.repr {
             StoreRepr::Positional(_) => None,
             StoreRepr::OrdMap { indexes, .. } => Some(indexes),
@@ -343,19 +346,36 @@ impl Store {
     /// Promote from `Positional` to `OrdMap` representation.
     ///
     /// Called automatically on first write (`insert`, `transact`). May also
-    /// be called explicitly when the `Indexes` API is needed (e.g., in tests
-    /// or callers that require `store.indexes()` to return `Some`).
-    /// No-op if already `OrdMap`.
+    /// be called explicitly when the `SortedVecIndexes` API is needed
+    /// (e.g., in tests or callers that require `store.indexes()` to return
+    /// `Some`). No-op if already `OrdMap`.
     ///
-    /// O(n log n) for `OrdSet` construction + O(n log n) for `Indexes`.
+    /// O(n log n) for `OrdSet` construction + O(n log n) for `SortedVecIndexes`.
+    /// bd-5zc4: Yoneda index fusion — uses `SortedVecIndexes` instead of
+    /// `Indexes` (`OrdMap` backend). `sort_all()` is called here to ensure
+    /// the indexes are query-ready immediately after promotion.
     pub fn promote(&mut self) {
         if let StoreRepr::Positional(ps) = &self.repr {
             let ord_set: OrdSet<Datom> = ps.datoms().iter().cloned().collect();
-            let indexes = Indexes::from_datoms(ord_set.iter());
+            let mut indexes = SortedVecIndexes::from_datoms(ord_set.iter());
+            indexes.sort_all();
             self.repr = StoreRepr::OrdMap {
                 datoms: ord_set,
                 indexes,
             };
+        }
+    }
+
+    /// Sort the `SortedVecIndexes` after incremental insertions (test only).
+    ///
+    /// bd-5zc4: `SortedVecBackend` defers sorting until query time.
+    /// After calling `insert()` in tests that then query indexes, call
+    /// this method to ensure all four backends are in sorted order for
+    /// binary-search lookups. No-op for `Positional` stores.
+    #[cfg(test)]
+    pub fn ensure_indexes_sorted(&mut self) {
+        if let StoreRepr::OrdMap { indexes, .. } = &mut self.repr {
+            indexes.sort_all();
         }
     }
 

@@ -2,7 +2,10 @@ use std::{collections::BTreeSet, sync::Arc};
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use ferratom::{Attribute, Datom, EntityId, Op, TxId, Value};
-use ferratomic_core::{indexes::EavtKey, store::Store};
+use ferratomic_core::{
+    indexes::{EavtKey, IndexBackend},
+    store::Store,
+};
 
 const SCALE_INPUT_SIZES: [usize; 3] = [1_000, 10_000, 100_000];
 
@@ -57,7 +60,7 @@ fn bench_read_latency(c: &mut Criterion) {
             &datom_count,
             |b, &_datom_count| {
                 b.iter(|| {
-                    let datom = store.indexes().unwrap().eavt().get(black_box(&key));
+                    let datom = store.indexes().unwrap().eavt().backend_get(black_box(&key));
                     assert!(
                         datom.is_some(),
                         "INV-FERR-027: benchmark lookup key must exist"
