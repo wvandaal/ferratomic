@@ -242,6 +242,8 @@ theorem merge_idem (a : DatomStore) : merge a a = a := by
 ### INV-FERR-004: Monotonic Growth
 
 **Traces to**: SEED.md 4 Axiom 2 (Store), C1, L4, L5, INV-STORE-001, INV-STORE-002
+**Referenced by**: INV-FERR-062 (merge receipt datoms persist through monotonic growth),
+ADR-FERR-029 (merge receipts as datoms)
 **Verification**: `V:PROP`, `V:KANI`, `V:LEAN`
 **Stage**: 0
 

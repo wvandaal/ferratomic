@@ -275,6 +275,7 @@ writer task context.
 
 **Traces to**: SEED.md §5 (Harvest/Seed Lifecycle — durability), C1, INV-STORE-009,
 INV-FERR-008 (WAL Fsync Ordering), INV-FERR-013 (Checkpoint Equivalence)
+**Referenced by**: INV-FERR-060 (store identity persists through recovery)
 **Verification**: `V:PROP`, `V:KANI`, `V:MODEL`
 **Stage**: 0
 
@@ -733,6 +734,8 @@ theorem hlc_tick_monotone (prev : HlcModel) (wall_clock : Nat) :
 
 **Traces to**: SEED.md §4 (Core Abstraction: Temporal Ordering), INV-STORE-011,
 ADR-FERR-005 (Clock Model)
+**Referenced by**: INV-FERR-061 (causal predecessors — Frontier drawn from HLC ordering),
+ADR-FERR-026 (causal predecessors as datoms)
 **Verification**: `V:PROP`, `V:KANI`, `V:LEAN`, `V:MODEL`
 **Stage**: 0
 
