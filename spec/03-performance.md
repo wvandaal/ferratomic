@@ -1007,8 +1007,19 @@ theorem replica_subset (leader_txns replica_txns : List DatomStore)
 ### INV-FERR-031: Genesis Determinism
 
 **Traces to**: SEED.md §4, C7 (Self-bootstrap), INV-STORE-003
+**Referenced by**: INV-FERR-060 (store identity bootstrap), ADR-FERR-027 (store
+identity), ADR-FERR-028 (provenance lattice)
 **Verification**: `V:PROP`, `V:KANI`, `V:LEAN`
 **Stage**: 0
+
+> **Phase 4a.5 amendment**: Genesis schema extended from 19 to 23 axiomatic
+> attributes. Four new transaction-metadata attributes added:
+> `:tx/signature` (Bytes, One, LWW), `:tx/signer` (Bytes, One, LWW),
+> `:tx/predecessor` (Ref, Many, MultiValue), `:tx/provenance` (Keyword, One, LWW).
+> The invariant asserts DETERMINISM (every call produces identical output),
+> not a specific CARDINALITY. The attribute count is computed dynamically
+> at test time, not hardcoded as a constant (braid pattern: prevents
+> derived-quantity staleness when attributes are added in future phases).
 
 #### Level 0 (Algebraic Law)
 ```
@@ -1020,9 +1031,18 @@ Let genesis() : DatomStore be the genesis function.
 The genesis function is deterministic: every call produces the exact
 same store with the exact same datoms, the exact same schema, and
 the exact same epoch (0). The genesis store contains:
-  1. Schema attribute definitions (:db/ident, :db/valueType, :db/cardinality, etc.)
-  2. Genesis transaction metadata.
-  3. No user data.
+  1. Meta-schema attributes (:db/ident, :db/valueType, :db/cardinality, etc.)
+  2. Lattice definition attributes (:lattice/ident, :lattice/elements, etc.)
+  3. Transaction metadata attributes (:tx/time, :tx/agent, :tx/provenance,
+     :tx/rationale, :tx/coherence-override, :tx/signature, :tx/signer,
+     :tx/predecessor)
+  4. Genesis transaction metadata.
+  5. No user data.
+
+The attribute count is an implementation detail, not a spec claim. Tests
+assert genesis_schema().len() == genesis_schema().len() (determinism),
+not genesis_schema().len() == N (cardinality). The count may increase
+across Ferratomic versions as new phases add axiomatic attributes.
 
 Genesis is the fixed point from which all stores diverge. Every store
 in the system is a descendant of the genesis store via TRANSACT and
@@ -1040,10 +1060,17 @@ Every call to `genesis()` produces a bitwise-identical store. This is critical f
   comparison) must be identical across invocations. If genesis produces different datoms,
   the identity hashes differ, and self-merge detection (INV-FERR-003 fast path) fails.
 
-The genesis store contains only schema-definition datoms (`:db/ident`, `:db/valueType`,
-`:db/cardinality`, `:db/unique`, `:db/isComponent`, `:db/doc`). These are the minimum
-set required to bootstrap the schema-as-data system (C3). The genesis transaction
+The genesis store contains schema-definition datoms across four categories:
+meta-schema (`:db/*`), lattice definitions (`:lattice/*`), and transaction metadata
+(`:tx/*`). These are the minimum set required to bootstrap the schema-as-data system
+(C3) and the transaction signing infrastructure (INV-FERR-051). The genesis transaction
 has epoch 0 and a deterministic transaction entity ID.
+
+Phase 4a.5 adds four transaction-metadata attributes to genesis: `:tx/signature`,
+`:tx/signer`, `:tx/predecessor`, and `:tx/provenance`. These are axiomatic because
+they define HOW TRANSACTIONS WORK (system mechanics), not what entities exist in the
+world (domain data). Store identity (`:store/public-key`) and agent identity
+(`:agent/*`) are conventional — installed by transactions, not genesis (ADR-FERR-027).
 
 No randomness, no timestamps, no system-specific information enters the genesis store.
 The genesis function is a pure function of the Ferratomic version (schema set is

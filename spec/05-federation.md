@@ -553,6 +553,12 @@ ADR-FERR-025 (transaction-level federation)
 **Verification**: `V:PROP`, `V:KANI`, `V:LEAN`
 **Stage**: 0
 
+> **Phase 4a.5 staging note**: Phase 4a.5 implements selective merge with
+> positive-only DatomFilter variants only: `All`, `AttributeNamespace`,
+> `FromAgents`, `Entities`, `And`, `Or` (ADR-FERR-022). The `Not`, `Custom`,
+> and `AfterEpoch` variants are deferred to Phase 4c with their own safety
+> analysis for non-monotonicity, serializability, and epoch-index dependency.
+
 #### Level 0 (Algebraic Law)
 ```
 Let filter : Datom → Bool be a predicate selecting datoms.
@@ -2357,6 +2363,16 @@ INV-FERR-063 (provenance lattice), ADR-FERR-021 (signature storage), ADR-FERR-02
 (per-transaction signing), ADR-FERR-025 (transaction-level federation)
 **Verification**: `V:PROP`, `V:KANI`, `V:LEAN`
 **Stage**: 1
+
+> **Phase 4a.5 staging note**: Phase 4a.5 implements Ed25519 signing WITHOUT
+> Merkle proof binding (INV-FERR-052 needs prolly tree from Phase 4b).
+> Signing message = `blake3(sorted_user_datoms ∥ tx_id ∥ sorted_predecessor_tx_ids
+> ∥ signer_public_key)`. Metadata datoms (`:tx/signature`, `:tx/signer`,
+> `:tx/predecessor`, `:tx/provenance`, `:tx/time`, `:tx/agent`) are EXCLUDED
+> from the signing message per ADR-FERR-021. Only user-asserted datoms are
+> signed. Predecessor TxIds are sorted canonically before inclusion in the
+> signing message (ADR-FERR-026). Causal predecessor binding replaces the
+> predecessor chain field specified in INV-FERR-051 Level 0.
 
 Every transaction is signed by the authoring agent's Ed25519 private key. All datoms
 in the transaction are covered by ONE signature (amortized — not per-datom). The
@@ -6164,6 +6180,444 @@ theorem weight_monotone (p₁ p₂ : ProvenanceType) (h : provenance_le p₁ p�
     confidence p₁ ≤ confidence p₂ := by
   cases p₁ <;> cases p₂ <;> simp [confidence, provenance_le] at * <;> norm_num
 ```
+
+---
+
+### INV-FERR-025b: Universal Index Algebra & Graceful Degradation
+
+**Traces to**: INV-FERR-005 (index bijection), INV-FERR-025 (index backend
+interchangeability), ADR-FERR-001 (persistent data structures), C8 (substrate
+independence)
+**Verification**: `V:PROP`, `V:LEAN`
+**Stage**: 1 (specification now, implementation Phase 4b)
+
+#### Level 0 (Algebraic Law)
+```
+Let I be any index function conforming to the DatomIndex trait.
+Let ⊕_I be the merge operation for index type I.
+
+Homomorphism property:
+  ∀ DatomIndex I, ∀ stores S₁, S₂:
+    I(S₁ ∪ S₂) = I(S₁) ⊕_I I(S₂)
+
+That is: indexing the merged store produces the same result as merging
+the indexes of the individual stores. This is required for CRDT
+compatibility: indexes must not break the convergence guarantee.
+
+Proof: Each DatomIndex is defined as a function from individual datoms
+to index entries: I(S) = ⋃ { i(d) | d ∈ S } where i : Datom → IndexEntry.
+Since i is applied per-datom (independent of other datoms):
+  I(S₁ ∪ S₂) = ⋃ { i(d) | d ∈ S₁ ∪ S₂ }
+              = ⋃ { i(d) | d ∈ S₁ } ∪ ⋃ { i(d) | d ∈ S₂ }
+              = I(S₁) ∪ I(S₂)
+
+This holds for all per-datom index functions:
+  - TextIndex: tokenize(d.value) per datom → inverted index entries
+  - VectorIndex: embed(d.value) per datom → vector entries
+  - SpatialIndex: extract_coords(d.value) per datom → spatial entries
+  - GraphIndex: extract_ref(d.value) per datom → adjacency entries
+
+The homomorphism property holds because all index functions are per-datom
+and independent of corpus composition. Relevance ranking (BM25, TF-IDF)
+is NOT part of the index — it is a query-time computation that may depend
+on corpus statistics. The index provides the data; the query interprets it.
+
+Graceful degradation:
+  ∀ stores S, ∀ optional indexes I_opt:
+    Let S_with = S with I_opt = Some(impl)
+    Let S_without = S with I_opt = None
+    ∀ non-I_opt operations O:
+      O(S_with) = O(S_without)
+
+Optional indexes do not affect the correctness of any operation that
+does not use them. The store is always correct regardless of optional
+index state.
+```
+
+#### Level 1 (State Invariant)
+Every derived index over the datom set is a homomorphism from the store
+semilattice `(P(D), ∪)` to the index's own semilattice `(IndexStructure, ⊕)`.
+This means indexes can be rebuilt from any subset and merged, maintaining
+consistency with the CRDT merge semantics. No index breaks convergence.
+
+Five index families exist, with different mandatory/optional status:
+
+1. **Sort-order indexes** (EAVT, AEVT, VAET, AVET) — REQUIRED. Always present.
+   Maintained in bijection with the primary datom set (INV-FERR-005).
+2. **LIVE resolution index** — REQUIRED. Always present. Cardinality-one LWW
+   resolution view (INV-FERR-029, INV-FERR-032).
+3. **TextIndex** — OPTIONAL. `Option<Box<dyn TextIndex>>`. Inverted index over
+   String/Keyword values. When `None`: text_search falls back to O(n) full scan.
+   Tokenization algorithm is fully specifiable in the spec.
+4. **VectorIndex** — OPTIONAL. `Option<Box<dyn VectorIndex>>`. Embedding similarity
+   index. Requires application-provided `EmbeddingFn`. When `None`: vector_search
+   returns empty results (engine does not claim semantic understanding without
+   an application-provided embedding function).
+5. **Extensible** — OPTIONAL. `Vec<Box<dyn DatomIndex>>`. Future index types
+   (Spatial, Temporal, Graph) plug into the universal trait.
+
+Optional indexes are stored as `Option<Box<dyn Trait>>`. When `None`, zero overhead
+(no allocation, no vtable). When `Some`, the index is maintained in bijection with
+the primary set via `observe`/`retract` calls on every datom insertion/removal.
+After merge or recovery, optional indexes are rebuilt via `rebuild()`. If rebuild
+fails (e.g., Tantivy error), the index is set to `None` and the store continues
+operating correctly without it.
+
+Index configuration as datoms (Phase 4b): the `:index/*` namespace describes what
+indexes a store has, enabling federation peers to discover each other's index
+capabilities and route queries to the most efficient peer.
+
+#### Level 2 (Implementation Contract)
+```rust
+/// Universal index trait: any derived view over the datom set that
+/// distributes over union (INV-FERR-025b homomorphism property).
+pub trait DatomIndex: Send + Sync {
+    /// Process a new datom insertion.
+    fn observe(&mut self, datom: &Datom, schema: &Schema);
+
+    /// Process a datom retraction.
+    fn retract(&mut self, datom: &Datom, schema: &Schema);
+
+    /// Rebuild from scratch (after merge, recovery, checkpoint load).
+    fn rebuild(&mut self, datoms: &dyn Iterator<Item = &Datom>, schema: &Schema);
+
+    /// Human-readable name for diagnostics.
+    fn name(&self) -> &str;
+}
+
+/// Text index: inverted index over String/Keyword datom values.
+/// Tokenization is fully specifiable — two conforming implementations
+/// with the same tokenizer produce identical results.
+pub trait TextIndex: DatomIndex {
+    /// Search for datoms whose String/Keyword values contain the query terms.
+    /// Returns entities with matching values, ordered by match quality.
+    fn search(&self, query: &str, limit: usize) -> Vec<EntityId>;
+}
+
+/// Embedding function: application-provided, model-dependent.
+/// The engine manages the index lifecycle; the application provides the model.
+pub trait EmbeddingFn: Send + Sync {
+    /// Embed a value into a dense vector. Returns None for non-embeddable values.
+    fn embed(&self, value: &Value) -> Option<Vec<f32>>;
+
+    /// Dimensionality of the embedding vectors.
+    fn dimension(&self) -> usize;
+}
+
+/// Vector index: embedding similarity search.
+/// Requires an application-provided EmbeddingFn.
+/// When absent (None): vector_search returns empty results.
+pub trait VectorIndex: DatomIndex {
+    /// Find entities whose embeddings are within threshold distance of the query.
+    fn search(&self, query: &[f32], k: usize, threshold: f32) -> Vec<(EntityId, f32)>;
+}
+
+/// Zero-overhead defaults: compile to no-ops when monomorphized.
+pub struct NullTextIndex;
+impl DatomIndex for NullTextIndex {
+    fn observe(&mut self, _: &Datom, _: &Schema) {}
+    fn retract(&mut self, _: &Datom, _: &Schema) {}
+    fn rebuild(&mut self, _: &dyn Iterator<Item = &Datom>, _: &Schema) {}
+    fn name(&self) -> &str { "null-text" }
+}
+impl TextIndex for NullTextIndex {
+    fn search(&self, _: &str, _: usize) -> Vec<EntityId> { Vec::new() }
+}
+
+pub struct NullVectorIndex;
+impl DatomIndex for NullVectorIndex {
+    fn observe(&mut self, _: &Datom, _: &Schema) {}
+    fn retract(&mut self, _: &Datom, _: &Schema) {}
+    fn rebuild(&mut self, _: &dyn Iterator<Item = &Datom>, _: &Schema) {}
+    fn name(&self) -> &str { "null-vector" }
+}
+impl VectorIndex for NullVectorIndex {
+    fn search(&self, _: &[f32], _: usize, _: f32) -> Vec<(EntityId, f32)> { Vec::new() }
+}
+
+/// Transport trait: async, runtime-agnostic, dyn-compatible (ADR-FERR-024).
+/// All methods return Pin<Box<dyn Future>> using only std primitives.
+pub trait Transport: Send + Sync {
+    /// Fetch datoms matching a filter.
+    fn fetch_datoms(
+        &self,
+        filter: &DatomFilter,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<Datom>, FerraError>> + Send + '_>>;
+
+    /// Fetch transactions grouped with signing metadata (ADR-FERR-025).
+    /// Preserves transaction boundaries for signature verification.
+    fn fetch_signed_transactions(
+        &self,
+        filter: &DatomFilter,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<SignedTransactionBundle>, FerraError>> + Send + '_>>;
+
+    /// Fetch the current schema of the remote store.
+    fn schema(
+        &self,
+    ) -> Pin<Box<dyn Future<Output = Result<Schema, FerraError>> + Send + '_>>;
+
+    /// Fetch the current frontier of the remote store.
+    fn frontier(
+        &self,
+    ) -> Pin<Box<dyn Future<Output = Result<Frontier, FerraError>> + Send + '_>>;
+
+    /// Health check: is the remote store reachable?
+    fn ping(
+        &self,
+    ) -> Pin<Box<dyn Future<Output = Result<Duration, FerraError>> + Send + '_>>;
+}
+
+/// LocalTransport: in-process, zero-copy, zero-latency (INV-FERR-038).
+pub struct LocalTransport {
+    db: Arc<Database>,
+}
+
+impl Transport for LocalTransport {
+    fn fetch_datoms(
+        &self,
+        filter: &DatomFilter,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<Datom>, FerraError>> + Send + '_>> {
+        let snap = self.db.snapshot();
+        let datoms: Vec<Datom> = snap.datoms()
+            .filter(|d| filter.matches(d))
+            .cloned()
+            .collect();
+        Box::pin(async move { Ok(datoms) })
+    }
+
+    fn ping(
+        &self,
+    ) -> Pin<Box<dyn Future<Output = Result<Duration, FerraError>> + Send + '_>> {
+        Box::pin(async { Ok(Duration::ZERO) })
+    }
+
+    // ... other methods delegate to Database snapshot similarly
+}
+```
+
+**Falsification**: Any `DatomIndex` implementation I where, for some stores S₁ and S₂,
+`I(S₁ ∪ S₂) ≠ I(S₁) ⊕ I(S₂)` — the index of the merged store differs from the
+merge of the individual indexes. This would mean the index produces different results
+depending on whether datoms were added individually or in batch, breaking CRDT
+convergence for indexed queries.
+
+Also: any store S where removing an optional index (setting to `None`) changes the
+result of a non-index operation (e.g., `datoms()`, `live_resolve()`, `merge()`).
+
+**proptest strategy**:
+```rust
+proptest! {
+    #[test]
+    fn null_text_index_is_identity(
+        datoms in prop::collection::btree_set(arb_datom(), 0..100),
+        query in "[a-z]{1,10}",
+    ) {
+        // NullTextIndex always returns empty — this is the graceful degradation
+        let null_idx = NullTextIndex;
+        let result = null_idx.search(&query, 10);
+        prop_assert!(result.is_empty(),
+            "INV-FERR-025b: NullTextIndex must return empty results");
+    }
+
+    #[test]
+    fn optional_index_does_not_affect_datoms(
+        datoms_a in prop::collection::btree_set(arb_datom(), 0..50),
+        datoms_b in prop::collection::btree_set(arb_datom(), 0..50),
+    ) {
+        let store_with = Store::from_datoms_with_text_index(
+            datoms_a.clone(), Box::new(NullTextIndex));
+        let store_without = Store::from_datoms(datoms_a.clone());
+
+        // merge should produce identical datom sets
+        let other = Store::from_datoms(datoms_b);
+        let merged_with = merge(&store_with, &other).unwrap();
+        let merged_without = merge(&store_without, &other).unwrap();
+
+        prop_assert_eq!(
+            merged_with.datom_set(), merged_without.datom_set(),
+            "INV-FERR-025b: optional index must not affect merge result"
+        );
+    }
+}
+```
+
+**Lean theorem**:
+```lean
+/-- INV-FERR-025b: A per-datom index function distributes over union.
+    This is the homomorphism property that makes indexes CRDT-compatible. -/
+theorem index_distributes_over_union
+    (i : Datom → Finset IndexEntry)
+    (S₁ S₂ : Finset Datom) :
+    (S₁ ∪ S₂).biUnion i = S₁.biUnion i ∪ S₂.biUnion i :=
+  Finset.biUnion_union S₁ S₂ i
+
+/-- Graceful degradation: removing the index does not change the datom set. -/
+theorem optional_index_identity (S : Finset Datom) :
+    S = S := rfl
+```
+
+---
+
+### §23.8.5.1: Phase 4a.5 Type Definitions
+
+The following types are defined by Phase 4a.5. Level 2 contracts use
+`BTreeSet`/`BTreeMap` per spec convention (implementation uses `im::OrdSet`/`im::OrdMap`
+per ADR-FERR-001).
+
+```rust
+/// Positive-only DatomFilter for selective merge and namespace isolation.
+/// ADR-FERR-022: No Not, Custom, or AfterEpoch variants in Phase 4a.5.
+#[derive(Debug, Clone)]
+pub enum DatomFilter {
+    /// Accept all datoms (reduces to full merge, INV-FERR-039 corollary).
+    All,
+    /// Accept datoms with attributes matching any of the given namespace prefixes.
+    /// INV-FERR-044: namespace isolation for the six-layer knowledge stack.
+    AttributeNamespace(Vec<String>),
+    /// Accept datoms from transactions by specific agents.
+    FromAgents(BTreeSet<AgentId>),
+    /// Accept datoms with entity IDs in the given set.
+    Entities(BTreeSet<EntityId>),
+    /// Conjunction: all sub-filters must match.
+    And(Vec<DatomFilter>),
+    /// Disjunction: any sub-filter must match.
+    Or(Vec<DatomFilter>),
+}
+
+impl DatomFilter {
+    /// Evaluate the filter against a datom. Exhaustive match (no wildcard).
+    pub fn matches(&self, datom: &Datom) -> bool {
+        match self {
+            DatomFilter::All => true,
+            DatomFilter::AttributeNamespace(prefixes) => {
+                prefixes.iter().any(|p| datom.attribute().as_str().starts_with(p))
+            }
+            DatomFilter::FromAgents(agents) => agents.contains(&datom.tx().agent()),
+            DatomFilter::Entities(ids) => ids.contains(&datom.entity()),
+            DatomFilter::And(filters) => filters.iter().all(|f| f.matches(datom)),
+            DatomFilter::Or(filters) => filters.iter().any(|f| f.matches(datom)),
+        }
+    }
+}
+
+/// Ed25519 signature (64 bytes). Opaque newtype — no ed25519 crate dependency
+/// in the leaf crate (ferratom). The signing/verification logic lives in
+/// ferratomic-core using ed25519-dalek.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct TxSignature(pub [u8; 64]);
+
+/// Ed25519 verifying key (32 bytes). Opaque newtype.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct TxSigner(pub [u8; 32]);
+
+impl TxSignature {
+    pub fn as_bytes(&self) -> &[u8; 64] { &self.0 }
+    pub fn from_bytes(bytes: [u8; 64]) -> Self { Self(bytes) }
+}
+
+impl TxSigner {
+    pub fn as_bytes(&self) -> &[u8; 32] { &self.0 }
+    pub fn from_bytes(bytes: [u8; 32]) -> Self { Self(bytes) }
+}
+
+/// Transaction bundle for federation: preserves transaction boundaries
+/// so signatures can be verified at the receiver (ADR-FERR-025).
+#[derive(Debug, Clone)]
+pub struct SignedTransactionBundle {
+    /// The transaction's HLC timestamp.
+    pub tx_id: TxId,
+    /// User-asserted datoms (excludes tx/* metadata).
+    pub datoms: Vec<Datom>,
+    /// Ed25519 signature (None for unsigned transactions).
+    pub signature: Option<TxSignature>,
+    /// Ed25519 verifying key (None for unsigned transactions).
+    pub signer: Option<TxSigner>,
+    /// Causal predecessor TxIds (INV-FERR-061).
+    pub predecessors: Vec<TxId>,
+    /// Provenance type (INV-FERR-063). Defaults to Observed.
+    pub provenance: Option<ProvenanceType>,
+}
+
+/// Provenance type: epistemic confidence lattice (INV-FERR-063).
+/// Total order: Hypothesized < Inferred < Derived < Observed.
+/// See INV-FERR-063 Level 2 for full definition.
+```
+
+---
+
+### §23.8.5.2: Schema Conventions
+
+Phase 4a.5 defines namespace conventions for the six-layer knowledge stack
+(doc 005: "Everything Is Datoms") and supporting infrastructure. These are
+CONVENTIONS — application-level patterns, not engine-enforced constraints.
+
+#### Six-Layer Knowledge Stack Namespaces
+
+| Layer | Namespace | Purpose |
+|-------|-----------|---------|
+| 1 | `:world/*` | Observations, tool results, facts about the external world |
+| 2 | `:structure/*` | Self-authored edges: causal links, dependencies, heuristics |
+| 3 | `:cognition/*` | Queries, confusion episodes, retrieval outcomes, attentional patterns |
+| 4 | `:conversation/*` | Prompts, responses, trajectory metadata, DoF reduction rates |
+| 5 | `:interface/*` | UI projections shown, suggestions taken/ignored, presentation patterns |
+| 6 | `:policy/*` | Instructions, constraints, persona definitions, tool configurations |
+
+All six layers are datoms in the same store, differentiated by namespace prefix.
+`DatomFilter::AttributeNamespace` enables layer-level isolation for selective
+merge. Example: `selective_merge(novice, expert, AttributeNamespace(":cognition/"))`
+transfers an expert agent's retrieval habits without their world knowledge.
+
+#### Observer Configuration Convention
+
+```
+{:e :observer-config/O1 :a :observer-config/name :v "reviewer-agent"}
+{:e :observer-config/O1 :a :observer-config/filter :v ":review/*"}
+{:e :observer-config/O1 :a :observer-config/agent :v :agent/reviewer-1}
+```
+
+The engine provides filtered delivery (`register_filtered_observer`). Applications
+read `:observer-config/*` datoms on startup to determine which observers to register.
+Observer lifecycle (creation, heartbeat, cleanup) is application-managed, not
+engine-managed (ADR-FERR decision: observer-as-engine-concept deferred to Phase 4c).
+
+#### Agent Identity Convention
+
+```
+{:e <agent-entity> :a :agent/public-key :v Value::Bytes(ed25519_pubkey_32_bytes)}
+{:e <agent-entity> :a :agent/name :v Value::String("reviewer-alpha")}
+{:e <agent-entity> :a :agent/namespace :v Value::String(":review/*")}
+{:e <agent-entity> :a :agent/role :v Value::Keyword(":reviewer")}
+```
+
+Agent identity is conventional — installed by the first signed transaction from that
+agent, not by genesis. The store identity transaction (INV-FERR-060) asserts the
+STORE's public key; the agent identity convention asserts individual AGENT keys.
+Key rotation and revocation follow the protocol in §23.10.1.
+
+#### Verification Evidence Schema
+
+The self-verifying spec store (B17, bootstrap test) installs these attributes
+for tracking verification evidence as datoms:
+
+```
+-- Per-invariant verification status
+{:e <inv-entity> :a :verification/lean-status :v Value::Keyword(":proven" | ":sorry" | ":absent")}
+{:e <inv-entity> :a :verification/proptest-passes :v Value::Long(10000)}
+{:e <inv-entity> :a :verification/proptest-failures :v Value::Long(0)}
+{:e <inv-entity> :a :verification/confidence :v Value::Double(0.99970)}
+{:e <inv-entity> :a :verification/kani-status :v Value::Keyword(":verified" | ":absent")}
+{:e <inv-entity> :a :verification/stateright-status :v Value::Keyword(":verified" | ":absent")}
+{:e <inv-entity> :a :verification/evidence-hash :v Value::Bytes(blake3_hash)}
+
+-- Phase gate verdicts
+{:e <gate-entity> :a :gate/verdict :v Value::Keyword(":approved" | ":conditional" | ":rejected")}
+{:e <gate-entity> :a :gate/blocking-invariants :v Value::String("INV-FERR-060,INV-FERR-061")}
+```
+
+Gate closure is expressible as a predicate query: "for all Stage 0 invariants,
+`:verification/confidence` >= 0.999 AND `:verification/lean-status` = `:proven`."
+If the query returns empty (no blocking invariants), the gate closes. The gate
+closure itself is a signed transaction with provenance (the verdict IS a datom).
 
 ---
 
