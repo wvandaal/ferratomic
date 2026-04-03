@@ -63,6 +63,10 @@ path = "proptest/fault_recovery_properties.rs"
 name = "proptest_positional"
 path = "proptest/positional_properties.rs"
 
+[[test]]
+name = "proptest_conformance"
+path = "proptest/conformance.rs"
+
 # --- Integration test suites (integration/) ---
 
 [[test]]

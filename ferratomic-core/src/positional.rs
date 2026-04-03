@@ -171,13 +171,14 @@ impl PositionalStore {
             .filter_map(|(d, live)| if *live { Some(d) } else { None })
     }
 
-    /// EAVT lookup: O(log n) binary search on canonical array (INV-FERR-027).
+    /// EAVT lookup: O(log log n) interpolation search on canonical array (INV-FERR-027).
+    ///
+    /// `EntityId` is BLAKE3 (uniformly distributed), so interpolation search
+    /// achieves O(log log n) expected complexity. Falls back to midpoint
+    /// when the range has identical entity prefixes.
     #[must_use]
     pub fn eavt_get(&self, key: &EavtKey) -> Option<&Datom> {
-        self.canonical
-            .binary_search_by(|d| EavtKey::from_datom(d).cmp(key))
-            .ok()
-            .map(|i| &self.canonical[i])
+        interpolation_search(&self.canonical, key)
     }
 
     /// AEVT lookup: O(log n) cache-oblivious search on Eytzinger layout (INV-FERR-027, INV-FERR-071).
@@ -466,6 +467,75 @@ fn merge_sort_dedup(a: &[Datom], b: &[Datom]) -> Vec<Datom> {
         result.push(datom.clone());
     }
     result
+}
+
+// ---------------------------------------------------------------------------
+// Internal: interpolation search on EAVT canonical array (INV-FERR-027)
+// ---------------------------------------------------------------------------
+
+/// Interpolation search on EAVT-sorted canonical array (INV-FERR-027).
+///
+/// O(log log n) expected for uniformly distributed `EntityId` (BLAKE3).
+/// Uses the first 8 bytes of `EntityId` as a u64 interpolation key.
+/// Falls back to midpoint when all entities in the current range share
+/// the same 8-byte prefix (division-by-zero guard).
+fn interpolation_search<'a>(canonical: &'a [Datom], key: &EavtKey) -> Option<&'a Datom> {
+    if canonical.is_empty() {
+        return None;
+    }
+    let mut lo: usize = 0;
+    let mut hi: usize = canonical.len() - 1;
+
+    while lo <= hi {
+        let lo_val = entity_u64(&canonical[lo]);
+        let hi_val = entity_u64(&canonical[hi]);
+        let key_val = entity_key_u64(key);
+
+        // Guard: if all entities in range share the same prefix, midpoint fallback.
+        let pos = if hi_val == lo_val {
+            lo + (hi - lo) / 2
+        } else {
+            // Use u128 intermediate to prevent overflow on wide ranges.
+            let numerator =
+                u128::from(key_val.saturating_sub(lo_val)) * u128::from((hi - lo) as u64);
+            let denominator = u128::from(hi_val - lo_val);
+            let estimate = lo + (numerator / denominator) as usize;
+            estimate.clamp(lo, hi)
+        };
+
+        match EavtKey::from_datom(&canonical[pos]).cmp(key) {
+            std::cmp::Ordering::Equal => return Some(&canonical[pos]),
+            std::cmp::Ordering::Less => lo = pos + 1,
+            std::cmp::Ordering::Greater => {
+                if pos == 0 {
+                    return None;
+                }
+                hi = pos - 1;
+            }
+        }
+    }
+    None
+}
+
+/// Extract first 8 bytes of a `Datom`'s `EntityId` as big-endian u64.
+///
+/// Used as the interpolation key for O(log log n) search. BLAKE3 hashes
+/// are uniformly distributed, so the first 8 bytes provide excellent
+/// discrimination without needing the full 32-byte comparison.
+fn entity_u64(datom: &Datom) -> u64 {
+    let eid = datom.entity();
+    let b = eid.as_bytes();
+    u64::from_be_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]])
+}
+
+/// Extract first 8 bytes of an `EavtKey`'s entity as big-endian u64.
+///
+/// Mirrors `entity_u64` for search keys. Uses `pub(crate)` field access
+/// on the tuple struct.
+fn entity_key_u64(key: &EavtKey) -> u64 {
+    let eid = key.0;
+    let b = eid.as_bytes();
+    u64::from_be_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]])
 }
 
 // NOTE: permuted_binary_search was removed — replaced by

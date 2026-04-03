@@ -860,9 +860,7 @@ theorem selective_merge_idemp (local remote : DatomStore) (filter : Datom → Pr
     selective_merge (selective_merge local remote filter) remote filter
     = selective_merge local remote filter := by
   unfold selective_merge
-  rw [Finset.union_assoc]
-  rw [Finset.union_idempotent (remote.filter filter)]
-  sorry -- may need Finset.union_self for the filtered part
+  rw [Finset.union_assoc, Finset.union_self]
 
 -- filter = true reduces to full merge
 theorem selective_merge_all (local remote : DatomStore) :
@@ -6621,4 +6619,3 @@ If the query returns empty (no blocking invariants), the gate closes. The gate
 closure itself is a signed transaction with provenance (the verdict IS a datom).
 
 ---
-

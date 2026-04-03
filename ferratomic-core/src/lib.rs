@@ -163,8 +163,9 @@
 //! Core crate. ALGEBRAS — operations over types from ferratom.
 //! Implements the G-Set CRDT semilattice (INV-FERR-001..003).
 
-// INV-FERR-023: No unsafe code permitted. Compiler-enforced.
-#![forbid(unsafe_code)]
+// INV-FERR-023: No unsafe code in ferratomic-core except mmap.rs (ADR-FERR-020).
+// deny (not forbid) allows the single mmap module to #![allow(unsafe_code)].
+#![deny(unsafe_code)]
 #![deny(clippy::all, missing_docs)]
 // ME-016 / NEG-FERR-001: No panics in production code.
 // unwrap_used / expect_used / panic enforced via CI:
@@ -178,6 +179,7 @@ pub mod checkpoint;
 pub mod db;
 pub mod indexes;
 pub mod merge;
+pub(crate) mod mmap;
 pub mod observer;
 pub(crate) mod perm_layout;
 pub mod positional;

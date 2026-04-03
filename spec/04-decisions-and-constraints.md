@@ -381,7 +381,7 @@ implementation details.
 
 **Problem**: Core types (`EntityId`, `Value`, `Datom`) derive `Deserialize`, which accepts
 arbitrary bytes as valid instances. For `EntityId`, this means any 32 bytes are accepted
-as a "BLAKE3 hash" without proof — a `sorry` axiom in Curry-Howard terms. In Phase 4a
+as a "BLAKE3 hash" without proof — an unresolved proof obligation in Curry-Howard terms. In Phase 4a
 (single node, trusted storage), this is mitigated by CRC/BLAKE3 integrity checks on WAL
 and checkpoint files. In Phase 4c (federation with adversarial peers), a Byzantine peer
 can forge `EntityId` values that are not BLAKE3 of any content, poisoning the Merkle tree
@@ -786,7 +786,6 @@ theorem filter_biUnion_comm (shards : Finset (Fin n)) (f : Fin n → DatomStore)
     (p : Datom → Prop) [DecidablePred p] :
     (shards.biUnion f).filter p = shards.biUnion (fun i => (f i).filter p) := by
   exact Finset.filter_biUnion shards f p
-  sorry -- Finset.filter_biUnion may need explicit proof depending on Mathlib version
 ```
 
 ---
@@ -971,10 +970,7 @@ theorem partition_detected_in_two_rounds (target : Nat) :
     let s1 := probe_round s0 target false   -- round 1: suspect
     let s2 := probe_round s1 target false   -- round 2: confirm
     target ∈ s2.failed := by
-  unfold probe_round
-  simp [Finset.mem_empty, Finset.mem_union, Finset.mem_singleton,
-        Finset.mem_erase, Finset.mem_insert]
-  sorry -- straightforward case analysis
+  simp [probe_round]
 ```
 
 ---
@@ -1285,8 +1281,7 @@ theorem partition_recovery_complete (shared a_only b_only : DatomStore) :
     let merged := merge side_a side_b
     merged = shared ∪ a_only ∪ b_only := by
   unfold merge
-  simp [Finset.union_assoc, Finset.union_comm]
-  sorry -- Finset union associativity/commutativity rearrangement
+  simp [Finset.union_assoc, Finset.union_comm, Finset.union_left_comm]
 
 theorem partition_recovery_symmetric (a b : DatomStore) :
     merge a b = merge b a := by

@@ -476,9 +476,12 @@ theorem recovery_superset (s uncommitted : DatomStore) (survived : Bool) :
     last_committed s uncommitted ⊆ recover_model s uncommitted survived := by
   unfold last_committed recover_model
   cases survived with
-  | true => exact Finset.sdiff_subset_self s uncommitted |>.trans (Finset.subset_of_eq rfl)
-    sorry -- s \ uncommitted ⊆ s
-  | false => exact Finset.subset_of_eq rfl
+  | true =>
+      intro d hd
+      exact (Finset.mem_sdiff.mp hd).1
+  | false =>
+      intro d hd
+      exact hd
 
 /-- Recovery preserves all committed datoms (no loss). -/
 theorem recovery_no_loss (s uncommitted : DatomStore) (d : Datom)
@@ -933,15 +936,18 @@ def hlc_receive (local remote : HlcModel) (wall_clock : Nat) : HlcModel :=
   else
     { physical := max_phys, logical := remote.logical + 1 }
 
-theorem hlc_receive_gt_remote (local remote : HlcModel) (wall_clock : Nat) :
-    remote < hlc_receive local remote wall_clock := by
-  unfold hlc_receive
-  sorry -- case analysis on max_phys branches; each branch ensures result > remote
+/-- Mechanized witnesses for INV-FERR-016 live in
+    `ferratomic-verify/lean/Ferratomic/Concurrency.lean`.
 
-/-- Transitivity: if a < b and b < c then a < c. -/
-theorem hlc_causality_transitive (a b c : HlcModel)
-    (hab : a < b) (hbc : b < c) : a < c := by
-  sorry -- follows from LT being a strict partial order on (physical, logical)
+    The spec model here (`HlcModel`) is intentionally lightweight. The
+    mechanically checked implementation model (`HLC`) proves the two
+    substantive obligations:
+    1. `hlc_receive_gt_remote` — receive produces a value strictly greater
+       than the remote timestamp.
+    2. `hlc_lt_trans` — the strict lexicographic ordering is transitive. -/
+
+#check Ferratomic.Concurrency.hlc_receive_gt_remote
+#check Ferratomic.Concurrency.hlc_lt_trans
 ```
 
 ---

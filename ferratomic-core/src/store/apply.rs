@@ -138,10 +138,50 @@ impl Store {
             self.live_apply(datom);
         }
 
-        Ok(TxReceipt {
+        let receipt = TxReceipt {
             epoch: self.epoch,
             datoms: all_datoms,
-        })
+        };
+
+        // INV-FERR-072: rebuild Positional for ns-level reads after write.
+        self.demote();
+
+        Ok(receipt)
+    }
+
+    /// Batch WAL replay: promote once, replay all entries, demote once (INV-FERR-014).
+    ///
+    /// Replaces N individual `replay_entry()` calls in `Database::open` recovery.
+    /// Cost: 1 promote + N x insert + 1 demote, vs N x (promote + insert + demote).
+    ///
+    /// INV-FERR-009: schema evolution is applied per-entry to maintain
+    /// correct schema state at each epoch boundary.
+    ///
+    /// # Errors
+    ///
+    /// Returns `FerraError` if schema evolution fails for any entry.
+    pub fn batch_replay(&mut self, entries: &[(u64, Vec<Datom>)]) -> Result<(), FerraError> {
+        if entries.is_empty() {
+            return Ok(());
+        }
+        self.promote();
+        for (epoch, datoms) in entries {
+            for datom in datoms {
+                if let super::StoreRepr::OrdMap {
+                    datoms: d,
+                    indexes: idx,
+                } = &mut self.repr
+                {
+                    d.insert(datom.clone());
+                    idx.insert(datom);
+                }
+                self.live_apply(datom);
+            }
+            self.epoch = *epoch;
+            crate::schema_evolution::evolve_schema(&mut self.schema, datoms)?;
+        }
+        self.demote();
+        Ok(())
     }
 
     /// Test-only convenience: applies a transaction with a synthetic

@@ -786,7 +786,7 @@ pub const CATALOG: &[Invariant] = &[
         name: "Lean-Rust Coupling Invariant",
         stage: Stage::Stage0,
         lean_theorem: Some("ci_genesis"),
-        proptest_fn: None,
+        proptest_fn: Some("ci_ferr_001_merge_comm_conformance"),
         kani_harness: None,
         stateright_model: None,
         integration_test: None,

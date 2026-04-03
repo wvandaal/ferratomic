@@ -49,7 +49,7 @@ const V3_VERSION: u16 = 3;
 const V3_HEADER_SIZE: usize = 4 + 2 + 8 + 16;
 
 /// BLAKE3 hash size: 32 bytes.
-const HASH_SIZE: usize = 32;
+use crate::mmap::HASH_SIZE;
 
 /// Serialization payload (uses core `Datom` which has `Serialize`).
 ///
@@ -152,23 +152,9 @@ pub(crate) fn serialize_v3_bytes(store: &Store) -> Result<Vec<u8>, FerraError> {
 /// Returns `FerraError::CheckpointCorrupted` on checksum mismatch,
 /// truncation, or deserialization failure.
 /// Verify BLAKE3 checksum and return the content slice (without hash).
+/// Delegates to `mmap::verify_blake3` (shared BLAKE3 verification).
 fn verify_v3_checksum(data: &[u8]) -> Result<&[u8], FerraError> {
-    let min_size = V3_HEADER_SIZE + HASH_SIZE;
-    if data.len() < min_size {
-        return Err(FerraError::CheckpointCorrupted {
-            expected: format!("at least {min_size} bytes (V3)"),
-            actual: format!("{} bytes", data.len()),
-        });
-    }
-    let (content, hash_bytes) = data.split_at(data.len() - HASH_SIZE);
-    let computed = blake3::hash(content);
-    if computed.as_bytes() != hash_bytes {
-        return Err(FerraError::CheckpointCorrupted {
-            expected: super::hex_encode(computed.as_bytes()),
-            actual: super::hex_encode(hash_bytes),
-        });
-    }
-    Ok(content)
+    crate::mmap::verify_blake3(data, V3_HEADER_SIZE)
 }
 
 /// Parse the V3 fixed header: magic, version, epoch, `genesis_agent`.

@@ -181,6 +181,133 @@ fn test_parse_cardinality_variants() {
     assert_eq!(parse_cardinality("db.cardinality/unknown"), None);
 }
 
+/// INV-FERR-072: after transact, store is demoted back to Positional.
+#[test]
+fn test_inv_ferr_072_demote_after_transact() {
+    use ferratom::AgentId;
+
+    use crate::writer::Transaction;
+
+    let mut store = Store::genesis();
+    let agent = AgentId::from_bytes([1u8; 16]);
+    let tx = Transaction::new(agent)
+        .assert_datom(
+            EntityId::from_content(b"e1"),
+            Attribute::from("db/doc"),
+            Value::String(Arc::from("test-demote")),
+        )
+        .commit(store.schema())
+        .expect("valid tx");
+    store.transact_test(tx).expect("transact ok");
+
+    assert!(
+        store.positional().is_some(),
+        "INV-FERR-072: store must be Positional after transact (demoted)"
+    );
+}
+
+/// INV-FERR-072: demotion preserves the datom set exactly.
+#[test]
+fn test_inv_ferr_072_demote_preserves_datoms() {
+    use std::collections::BTreeSet;
+
+    let d1 = sample_datom("alpha");
+    let d2 = sample_datom("beta");
+    let d3 = sample_datom("gamma");
+
+    let mut store = Store::from_datoms(BTreeSet::new());
+    store.insert(&d1);
+    store.insert(&d2);
+    store.insert(&d3);
+
+    // Store is now OrdMap after inserts. Capture datom set.
+    let before: BTreeSet<Datom> = store.datoms().cloned().collect();
+    assert_eq!(before.len(), 3, "precondition: 3 datoms inserted");
+
+    // Demote to Positional.
+    store.demote();
+
+    assert!(
+        store.positional().is_some(),
+        "INV-FERR-072: store must be Positional after demote"
+    );
+
+    let after: BTreeSet<Datom> = store.datoms().cloned().collect();
+    assert_eq!(
+        before, after,
+        "INV-FERR-072: datom set must be identical after demotion cycle"
+    );
+}
+
+/// INV-FERR-072: demote is a no-op on an already-Positional store.
+#[test]
+fn test_inv_ferr_072_demote_noop_on_positional() {
+    let store_before = Store::genesis();
+    let mut store = store_before.clone();
+    store.demote();
+
+    assert!(
+        store.positional().is_some(),
+        "INV-FERR-072: demote on Positional must remain Positional"
+    );
+    assert_eq!(
+        store.len(),
+        0,
+        "genesis store remains empty after no-op demote"
+    );
+}
+
+/// INV-FERR-014: `batch_replay` promotes once, replays all, demotes once.
+#[test]
+fn test_inv_ferr_014_batch_replay() {
+    let d1 = Datom::new(
+        EntityId::from_content(b"e1"),
+        Attribute::from("test/name"),
+        Value::String(Arc::from("one")),
+        TxId::new(1, 0, 0),
+        Op::Assert,
+    );
+    let d2 = Datom::new(
+        EntityId::from_content(b"e2"),
+        Attribute::from("test/name"),
+        Value::String(Arc::from("two")),
+        TxId::new(2, 0, 0),
+        Op::Assert,
+    );
+
+    let mut store = Store::genesis();
+    let entries = vec![(1_u64, vec![d1.clone()]), (2_u64, vec![d2.clone()])];
+    store.batch_replay(&entries).expect("batch_replay ok");
+
+    assert_eq!(
+        store.epoch(),
+        2,
+        "INV-FERR-014: epoch must be 2 after two entries"
+    );
+    assert_eq!(store.len(), 2, "INV-FERR-014: two datoms replayed");
+    assert!(
+        store.positional().is_some(),
+        "INV-FERR-072: store must be Positional after batch_replay"
+    );
+    assert!(
+        store.datom_set().contains(&d1),
+        "INV-FERR-014: first datom present"
+    );
+    assert!(
+        store.datom_set().contains(&d2),
+        "INV-FERR-014: second datom present"
+    );
+}
+
+/// INV-FERR-014: `batch_replay` with empty entries is a no-op.
+#[test]
+fn test_inv_ferr_014_batch_replay_empty() {
+    let mut store = Store::genesis();
+    store.batch_replay(&[]).expect("empty batch_replay ok");
+    assert_eq!(store.epoch(), 0, "epoch unchanged for empty batch");
+    assert!(store.positional().is_some(), "still Positional");
+}
+
 /// bd-20j: Semilattice trait is usable via generic bounds.
 #[test]
 fn test_semilattice_trait_bound() {

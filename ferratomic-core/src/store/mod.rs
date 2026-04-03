@@ -400,6 +400,23 @@ impl Store {
         }
     }
 
+    /// Demote from `OrdMap` back to `Positional` representation (INV-FERR-072).
+    ///
+    /// Rebuilds `PositionalStore` from the `OrdMap`'s `OrdSet`. O(n) because:
+    /// - `OrdSet` iteration is EAVT-sorted, so `sort_unstable` detects the
+    ///   sorted run in O(n).
+    /// - `build_live_bitvector` is O(n).
+    /// - Permutation arrays are `OnceLock::new()` (lazy, deferred to first access).
+    ///
+    /// No-op if already `Positional`. Called after `transact` to restore
+    /// ns-level read performance via contiguous arrays.
+    pub(crate) fn demote(&mut self) {
+        if let StoreRepr::OrdMap { datoms, .. } = &self.repr {
+            let positional = PositionalStore::from_datoms(datoms.iter().cloned());
+            self.repr = StoreRepr::Positional(Arc::new(positional));
+        }
+    }
+
     /// Sort the `SortedVecIndexes` after incremental insertions (test only).
     ///
     /// bd-5zc4: `SortedVecBackend` defers sorting until query time.

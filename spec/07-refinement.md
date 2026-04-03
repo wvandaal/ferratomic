@@ -119,37 +119,53 @@ The coupling invariant is currently enforced by three mechanisms:
 
 **proptest bridge (runtime, probabilistic)**:
 ```rust
-// ferratomic-verify/proptest/crdt_properties.rs
-// Every proptest implicitly checks CI by performing the same operation
-// on both a BTreeSet (proxy for Finset) and a Store (concrete).
+// ferratomic-verify/proptest/conformance.rs
+// Every conformance property names the Lean theorem it is checking and
+// compares the Rust result against an abstract BTreeSet prediction.
 proptest! {
-    fn inv_ferr_001_merge_commutativity(
-        a in arb_store(50), b in arb_store(50)
+    fn ci_ferr_001_merge_comm_conformance(
+        a in arb_store(32), b in arb_store(32)
     ) {
-        let ab = merge(&a, &b);
-        let ba = merge(&b, &a);
-        prop_assert_eq!(ab.datom_set(), ba.datom_set());
-        // Implicit CI check: Store::from_datoms builds from BTreeSet
-        // (abstract), and the result is checked via datom_set() which
-        // returns the OrdSet contents (concrete). Agreement = CI holds.
+        let expected_ab = abstract_merge(&abstract_datoms(&a), &abstract_datoms(&b));
+        let rust_ab = merge(&a, &b)
+            .expect("CI-FERR-001 / merge_comm: merge(A,B) must succeed");
+        prop_assert_eq!(
+            abstract_datoms(&rust_ab),
+            expected_ab,
+            "CI-FERR-001 violated: Rust merge diverged from Lean theorem merge_comm",
+        );
     }
 }
 ```
 
 **Lean proofs (abstract, mechanized)**:
 ```lean
--- ferratomic-verify/lean/Ferratomic/Store.lean
--- All theorems operate on Finset Datom (the abstract model).
--- CI_lean_rust would formalize the bridge:
---
--- theorem ci_transact_preserved (L : DatomStore) (d : Datom)
---     (R : RustStore) (h : CI L R) :
---     CI (apply L d) (rust_apply R d) := by
---   -- Proof: apply = Finset.insert, rust_apply = OrdSet.insert
---   -- Both add d to their respective sets.
---   -- to_finset(OrdSet.insert(R.datoms, d)) = Finset.insert(L, d)
---   -- follows from the representation invariant of OrdSet.
---   sorry  -- TODO: mechanize when OrdSet model is defined in Lean
+-- ferratomic-verify/lean/Ferratomic/Refinement.lean
+structure ConcreteModel where
+  datoms : DatomStore
+  epoch : Nat
+
+def cm_genesis : ConcreteModel :=
+  { datoms := ∅, epoch := 0 }
+
+def cm_transact (model : ConcreteModel) (d : Datom) : ConcreteModel :=
+  { datoms := apply_tx model.datoms d, epoch := model.epoch + 1 }
+
+def cm_merge (left right : ConcreteModel) : ConcreteModel :=
+  { datoms := merge left.datoms right.datoms, epoch := max left.epoch right.epoch }
+
+theorem ci_genesis : cm_genesis.epoch = 0 ∧ cm_genesis.datoms = ∅ := by
+  exact ⟨rfl, rfl⟩
+
+theorem ci_transact (model : ConcreteModel) (d : Datom) :
+    (cm_transact model d).epoch = model.epoch + 1 ∧
+      model.datoms ⊆ (cm_transact model d).datoms := by
+  exact ⟨rfl, apply_superset model.datoms d⟩
+
+theorem ci_merge_epoch (left right : ConcreteModel) :
+    (cm_merge left right).epoch = max left.epoch right.epoch ∧
+      (cm_merge left right).datoms = merge left.datoms right.datoms := by
+  exact ⟨rfl, rfl⟩
 ```
 
 **Target state**: Mechanized Lean proof of CI preservation for all operations,
