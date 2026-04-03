@@ -180,64 +180,112 @@ impl PositionalStore {
             .map(|i| &self.canonical[i])
     }
 
-    /// AEVT lookup: O(log n) binary search on permuted view (INV-FERR-027).
+    /// AEVT lookup: O(log n) cache-oblivious search on Eytzinger layout (INV-FERR-027, INV-FERR-071).
     ///
-    /// Lazily builds the AEVT permutation on first access.
+    /// Lazily builds the AEVT permutation in Eytzinger (BFS) order on first access.
     #[must_use]
     pub fn aevt_get(&self, key: &AevtKey) -> Option<&Datom> {
-        let perm = self
-            .perm_aevt
-            .get_or_init(|| build_permutation(&self.canonical, AevtKey::from_datom));
-        permuted_binary_search(perm, &self.canonical, |d| AevtKey::from_datom(d).cmp(key))
+        let perm = self.perm_aevt.get_or_init(|| {
+            let sorted = build_permutation(&self.canonical, AevtKey::from_datom);
+            crate::perm_layout::layout_permutation(&sorted)
+        });
+        crate::perm_layout::layout_search(perm, &self.canonical, |d| {
+            AevtKey::from_datom(d).cmp(key)
+        })
     }
 
-    /// VAET lookup: O(log n) binary search on permuted view (INV-FERR-027).
+    /// VAET lookup: O(log n) cache-oblivious search on Eytzinger layout (INV-FERR-027, INV-FERR-071).
     ///
-    /// Lazily builds the VAET permutation on first access.
+    /// Lazily builds the VAET permutation in Eytzinger (BFS) order on first access.
     #[must_use]
     pub fn vaet_get(&self, key: &VaetKey) -> Option<&Datom> {
-        let perm = self
-            .perm_vaet
-            .get_or_init(|| build_permutation(&self.canonical, VaetKey::from_datom));
-        permuted_binary_search(perm, &self.canonical, |d| VaetKey::from_datom(d).cmp(key))
+        let perm = self.perm_vaet.get_or_init(|| {
+            let sorted = build_permutation(&self.canonical, VaetKey::from_datom);
+            crate::perm_layout::layout_permutation(&sorted)
+        });
+        crate::perm_layout::layout_search(perm, &self.canonical, |d| {
+            VaetKey::from_datom(d).cmp(key)
+        })
     }
 
-    /// AVET lookup: O(log n) binary search on permuted view (INV-FERR-027).
+    /// AVET lookup: O(log n) cache-oblivious search on Eytzinger layout (INV-FERR-027, INV-FERR-071).
     ///
-    /// Lazily builds the AVET permutation on first access.
+    /// Lazily builds the AVET permutation in Eytzinger (BFS) order on first access.
     #[must_use]
     pub fn avet_get(&self, key: &AvetKey) -> Option<&Datom> {
-        let perm = self
-            .perm_avet
-            .get_or_init(|| build_permutation(&self.canonical, AvetKey::from_datom));
-        permuted_binary_search(perm, &self.canonical, |d| AvetKey::from_datom(d).cmp(key))
+        let perm = self.perm_avet.get_or_init(|| {
+            let sorted = build_permutation(&self.canonical, AvetKey::from_datom);
+            crate::perm_layout::layout_permutation(&sorted)
+        });
+        crate::perm_layout::layout_search(perm, &self.canonical, |d| {
+            AvetKey::from_datom(d).cmp(key)
+        })
     }
 
-    /// Access the AEVT permutation array (INV-FERR-076).
+    /// Access the AEVT permutation array in Eytzinger (BFS) order (INV-FERR-071, INV-FERR-076).
     ///
-    /// Lazily builds the permutation on first access.
+    /// Lazily builds the permutation on first access. The returned slice
+    /// has `n + 1` elements: index 0 is a sentinel (`u32::MAX`), root at index 1.
+    /// Use `perm_aevt_sorted()` for the original sorted permutation.
     #[must_use]
     pub fn perm_aevt(&self) -> &[u32] {
-        self.perm_aevt
-            .get_or_init(|| build_permutation(&self.canonical, AevtKey::from_datom))
+        self.perm_aevt.get_or_init(|| {
+            let sorted = build_permutation(&self.canonical, AevtKey::from_datom);
+            crate::perm_layout::layout_permutation(&sorted)
+        })
     }
 
-    /// Access the VAET permutation array (INV-FERR-076).
+    /// Access the VAET permutation array in Eytzinger (BFS) order (INV-FERR-071, INV-FERR-076).
     ///
-    /// Lazily builds the permutation on first access.
+    /// Lazily builds the permutation on first access. The returned slice
+    /// has `n + 1` elements: index 0 is a sentinel (`u32::MAX`), root at index 1.
+    /// Use `perm_vaet_sorted()` for the original sorted permutation.
     #[must_use]
     pub fn perm_vaet(&self) -> &[u32] {
-        self.perm_vaet
-            .get_or_init(|| build_permutation(&self.canonical, VaetKey::from_datom))
+        self.perm_vaet.get_or_init(|| {
+            let sorted = build_permutation(&self.canonical, VaetKey::from_datom);
+            crate::perm_layout::layout_permutation(&sorted)
+        })
     }
 
-    /// Access the AVET permutation array (INV-FERR-076).
+    /// Access the AVET permutation array in Eytzinger (BFS) order (INV-FERR-071, INV-FERR-076).
     ///
-    /// Lazily builds the permutation on first access.
+    /// Lazily builds the permutation on first access. The returned slice
+    /// has `n + 1` elements: index 0 is a sentinel (`u32::MAX`), root at index 1.
+    /// Use `perm_avet_sorted()` for the original sorted permutation.
     #[must_use]
     pub fn perm_avet(&self) -> &[u32] {
-        self.perm_avet
-            .get_or_init(|| build_permutation(&self.canonical, AvetKey::from_datom))
+        self.perm_avet.get_or_init(|| {
+            let sorted = build_permutation(&self.canonical, AvetKey::from_datom);
+            crate::perm_layout::layout_permutation(&sorted)
+        })
+    }
+
+    /// Recover the sorted AEVT permutation from Eytzinger layout (INV-FERR-071).
+    ///
+    /// O(n) in-order traversal. Used for checkpoint serialization where
+    /// the original sorted permutation order is required.
+    #[must_use]
+    pub fn perm_aevt_sorted(&self) -> Vec<u32> {
+        crate::perm_layout::layout_to_sorted(self.perm_aevt())
+    }
+
+    /// Recover the sorted VAET permutation from Eytzinger layout (INV-FERR-071).
+    ///
+    /// O(n) in-order traversal. Used for checkpoint serialization where
+    /// the original sorted permutation order is required.
+    #[must_use]
+    pub fn perm_vaet_sorted(&self) -> Vec<u32> {
+        crate::perm_layout::layout_to_sorted(self.perm_vaet())
+    }
+
+    /// Recover the sorted AVET permutation from Eytzinger layout (INV-FERR-071).
+    ///
+    /// O(n) in-order traversal. Used for checkpoint serialization where
+    /// the original sorted permutation order is required.
+    #[must_use]
+    pub fn perm_avet_sorted(&self) -> Vec<u32> {
+        crate::perm_layout::layout_to_sorted(self.perm_avet())
     }
 
     /// Length of the LIVE bitvector (INV-FERR-076: equals `len()`).
@@ -420,23 +468,5 @@ fn merge_sort_dedup(a: &[Datom], b: &[Datom]) -> Vec<Datom> {
     result
 }
 
-// ---------------------------------------------------------------------------
-// Internal: permuted binary search
-// ---------------------------------------------------------------------------
-
-/// Binary search on a permuted view of the canonical array.
-///
-/// The permutation array maps alternate-order positions to canonical
-/// positions. The comparator operates on datoms at canonical positions.
-fn permuted_binary_search<'a, F>(
-    perm: &[u32],
-    canonical: &'a [Datom],
-    cmp_fn: F,
-) -> Option<&'a Datom>
-where
-    F: Fn(&Datom) -> std::cmp::Ordering,
-{
-    perm.binary_search_by(|&pos| cmp_fn(&canonical[pos as usize]))
-        .ok()
-        .map(|i| &canonical[perm[i] as usize])
-}
+// NOTE: permuted_binary_search was removed — replaced by
+// crate::perm_layout::layout_search (INV-FERR-071, Eytzinger layout).

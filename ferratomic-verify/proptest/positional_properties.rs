@@ -148,23 +148,26 @@ proptest! {
         let ps = PositionalStore::from_datoms(datoms.into_iter());
         let n = ps.len();
 
-        for (name, perm) in [
-            ("AEVT", ps.perm_aevt()),
-            ("VAET", ps.perm_vaet()),
-            ("AVET", ps.perm_avet()),
+        // bd-j7qk: perm_*() returns Eytzinger (BFS) layout with n+1 elements
+        // (sentinel at index 0). Use perm_*_sorted() to recover the original
+        // sorted permutation for validation.
+        for (name, sorted_perm) in [
+            ("AEVT", ps.perm_aevt_sorted()),
+            ("VAET", ps.perm_vaet_sorted()),
+            ("AVET", ps.perm_avet_sorted()),
         ] {
             prop_assert_eq!(
-                perm.len(), n,
-                "INV-FERR-076: {} permutation length {} != canonical length {}",
-                name, perm.len(), n
+                sorted_perm.len(), n,
+                "INV-FERR-076: {} sorted permutation length {} != canonical length {}",
+                name, sorted_perm.len(), n
             );
-            let mut sorted: Vec<u32> = perm.to_vec();
-            sorted.sort_unstable();
+            let mut check: Vec<u32> = sorted_perm;
+            check.sort_unstable();
             let expected: Vec<u32> = (0..n)
                 .map(|i| u32::try_from(i).unwrap_or(u32::MAX))
                 .collect();
             prop_assert_eq!(
-                sorted, expected,
+                check, expected,
                 "INV-FERR-076: {} permutation is not a valid permutation of [0, {})",
                 name, n
             );
