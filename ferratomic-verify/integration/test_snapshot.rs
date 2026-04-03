@@ -126,6 +126,10 @@ fn test_inv_ferr_005_bijection_after_transact() {
         store.transact_test(tx).expect("transact failed");
 
         // Verify bijection after every transaction.
+        // bd-nwva: transact() demotes to Positional, so indexes() returns None.
+        // Promote temporarily to check bijection, then the next transact will re-promote.
+        store.promote();
+        store.ensure_indexes_sorted();
         assert!(
             store.indexes().unwrap().verify_bijection(),
             "INV-FERR-005: index bijection violated after transact"
@@ -133,6 +137,9 @@ fn test_inv_ferr_005_bijection_after_transact() {
     }
 
     // Final explicit 4-index cardinality check.
+    // bd-nwva: promote to OrdMap for index access (transact demotes to Positional).
+    store.promote();
+    store.ensure_indexes_sorted();
     let primary_count = store.len();
     let eavt_count = store.indexes().unwrap().eavt_datoms().count();
     let aevt_count = store.indexes().unwrap().aevt_datoms().count();
@@ -839,6 +846,9 @@ fn test_inv_ferr_025_index_backend_trait() {
         store.transact_test(tx).expect("INV-FERR-025: transact ok");
     }
 
+    // bd-nwva: transact demotes to Positional. Promote for index access.
+    store.promote();
+    store.ensure_indexes_sorted();
     assert!(
         store.indexes().unwrap().verify_bijection(),
         "INV-FERR-025: index bijection violated after 5 transactions"

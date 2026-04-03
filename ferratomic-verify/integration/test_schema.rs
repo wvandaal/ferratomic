@@ -545,10 +545,24 @@ fn test_inv_ferr_023_forbid_unsafe_code() {
     for path in &lib_files {
         let content = std::fs::read_to_string(path)
             .unwrap_or_else(|e| panic!("INV-FERR-023: cannot read {path}: {e}"));
-        assert!(
-            content.contains("#![forbid(unsafe_code)]"),
-            "INV-FERR-023 violated: {path} is missing #![forbid(unsafe_code)]. \
-             Every crate in the workspace must forbid unsafe code.",
-        );
+
+        // ADR-FERR-020: ferratomic-core uses #![deny(unsafe_code)] instead of
+        // #![forbid(unsafe_code)] to allow the localized mmap.rs unsafe boundary.
+        // The mmap module has #![allow(unsafe_code)] as the sole exception.
+        // All other crates retain #![forbid(unsafe_code)].
+        let is_core = path.contains("ferratomic-core");
+        if is_core {
+            assert!(
+                content.contains("#![deny(unsafe_code)]"),
+                "INV-FERR-023 / ADR-FERR-020: ferratomic-core must have \
+                 #![deny(unsafe_code)] (not forbid, per ADR-FERR-020 mmap exception).",
+            );
+        } else {
+            assert!(
+                content.contains("#![forbid(unsafe_code)]"),
+                "INV-FERR-023 violated: {path} is missing #![forbid(unsafe_code)]. \
+                 Every non-core crate must forbid unsafe code.",
+            );
+        }
     }
 }

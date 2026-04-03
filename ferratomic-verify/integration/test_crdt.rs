@@ -554,15 +554,23 @@ fn build_convergence_index_datoms() -> [Datom; 6] {
 }
 
 /// Build forward-order and reverse-order stores from the given datoms.
+///
+/// bd-5zc4: `SortedVecBackend` defers sorting after `insert()`.
+/// `ensure_indexes_sorted()` is called after all inserts to restore
+/// sorted order before convergence assertions.
 fn build_forward_and_reverse_stores(datoms: &[Datom]) -> (Store, Store) {
     let mut forward = Store::genesis();
     for d in datoms {
         forward.insert(d);
     }
+    // bd-5zc4: SortedVecBackend defers sorting after insert().
+    // Must sort before querying indexes for convergence checks.
+    forward.ensure_indexes_sorted();
     let mut reverse = Store::genesis();
     for d in datoms.iter().rev() {
         reverse.insert(d);
     }
+    reverse.ensure_indexes_sorted();
     (forward, reverse)
 }
 

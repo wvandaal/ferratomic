@@ -417,13 +417,15 @@ impl Store {
         }
     }
 
-    /// Sort the `SortedVecIndexes` after incremental insertions (test only).
+    /// Sort the `SortedVecIndexes` after incremental insertions.
     ///
     /// bd-5zc4: `SortedVecBackend` defers sorting until query time.
-    /// After calling `insert()` in tests that then query indexes, call
+    /// After calling `insert()` in code that then queries indexes, call
     /// this method to ensure all four backends are in sorted order for
     /// binary-search lookups. No-op for `Positional` stores.
-    #[cfg(test)]
+    ///
+    /// Note: `transact()` does not need this — it calls `promote()` (which
+    /// sorts) then `demote()`. This is only needed for direct `insert()` callers.
     pub fn ensure_indexes_sorted(&mut self) {
         if let StoreRepr::OrdMap { indexes, .. } = &mut self.repr {
             indexes.sort_all();
