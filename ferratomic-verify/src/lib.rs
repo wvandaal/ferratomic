@@ -16,6 +16,7 @@ pub mod confidence;
 pub mod fault_injection;
 pub mod generators;
 pub mod invariant_catalog;
+pub mod isomorphism;
 
 #[path = "../stateright/mod.rs"]
 pub mod stateright_models;
