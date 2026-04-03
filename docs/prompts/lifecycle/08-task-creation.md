@@ -46,6 +46,37 @@ Every issue needs ALL of these. Missing fields = incomplete crystallization.
 
 ---
 
+## Verification Method Selection (Epistemic Fit)
+
+Before writing a bead's verification plan, ask: **what is the RIGHT method to
+verify this invariant?** Prescribing the wrong method wastes agent time on
+vacuous proofs or redundant tests.
+
+Check the invariant's spec `**Verification**:` tags (e.g., `V:PROP`, `V:LEAN`,
+`V:MODEL`, `V:TYPE`, `V:KANI`). These are the spec author's assessment of which
+methods match the invariant's algebraic structure. If the bead adds a verification
+method NOT in the spec tags, justify why — or don't add it.
+
+| Method | Use when the property is... | Do NOT use when... |
+|--------|----------------------------|-------------------|
+| **Lean** | An algebraic identity or inclusion on `Finset Datom`: commutativity, monotonicity, subset, homomorphism | A type system property, performance threshold, crash-timing property, or rate limit |
+| **Stateright** | A safety/liveness property under concurrent or crash interleavings | A pure algebraic identity provable by Finset rewriting |
+| **Kani** | A bounded Rust code-path property verifiable by exhaustive small-input enumeration | A property requiring unbounded inputs, real I/O, or timing |
+| **Proptest** | A concrete Rust implementation conformance check (does the code match the spec?) | A universal algebraic proof (use Lean) or a concurrency property (use Stateright) |
+| **V:TYPE** | Enforced by the Rust compiler at compile time (trait bounds, Result, forbid(unsafe)) | A runtime behavioral property |
+
+**The test**: If you're about to write "Lean proof for INV-FERR-NNN," ask: does the
+Lean `DatomStore := Finset Datom` model have a concept that corresponds to this
+invariant's core claim? If not (e.g., the claim is about latency, crash timing,
+rate limiting, or the Rust type system), Lean is the wrong tool.
+
+**Evidence**: Session 011 found 7 of 9 "Lean proof" beads were epistemically wrong.
+They would have produced compilable-but-vacuous theorems for properties the Finset
+model cannot encode. The correct action was RECLASSIFY — use the method the spec
+already prescribes.
+
+---
+
 ## Pseudocode Contract: The Type-Level Specification
 
 **The single highest-impact addition to a bead.** For any task that introduces or
@@ -294,6 +325,7 @@ Before creating any task, verify:
 - [ ] File paths are specific (not "somewhere in ferratomic-core")
 - [ ] Dependencies are real (not aspirational ordering preferences)
 - [ ] Priority reflects impact, not effort
+- [ ] **Epistemic fit**: verification method matches the invariant's domain (see table above)
 - [ ] **Pseudocode Contract** included if the task introduces or modifies Rust types
 - [ ] Every struct field specifies exact type including ownership wrapper (Arc/Box/owned)
 - [ ] Every method signature specifies receiver (&self/&mut self), visibility, return type
