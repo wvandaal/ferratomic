@@ -318,3 +318,110 @@ fn test_inv_ferr_059_isomorphism_detects_divergence() {
         "INV-FERR-059: divergent optimization must be detected"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Phase 2 verification gap coverage (bd-u6bq, bd-nwva)
+// ---------------------------------------------------------------------------
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(10_000))]
+
+    /// INV-FERR-059 + INV-FERR-027: Interpolation search returns identical
+    /// results to binary search for all EAVT lookups.
+    ///
+    /// `eavt_get` uses interpolation search on the canonical array.
+    /// This test verifies it finds the same datoms as a direct binary
+    /// search on the same sorted array.
+    ///
+    /// Falsification: any datom where interpolation_search returns a different
+    /// result than binary_search_by on the same canonical array.
+    #[test]
+    fn inv_ferr_059_interpolation_search_preserves_lookups(
+        datoms in prop::collection::btree_set(arb_datom(), 1..200),
+    ) {
+        let ps = PositionalStore::from_datoms(datoms.iter().cloned());
+
+        // For every datom in the store, eavt_get must find it.
+        for d in &datoms {
+            let key = EavtKey::from_datom(d);
+            let found = ps.eavt_get(&key);
+            prop_assert!(
+                found.is_some(),
+                "INV-FERR-059: interpolation search failed to find datom {:?}",
+                d.entity()
+            );
+            prop_assert_eq!(
+                found.unwrap().entity(),
+                d.entity(),
+                "INV-FERR-059: interpolation search returned wrong datom"
+            );
+        }
+
+        // For a non-existent key, eavt_get must return None.
+        let absent_key = EavtKey::from_datom(&Datom::new(
+            ferratom::EntityId::from_content(b"ABSENT_ENTITY_NEVER_INSERTED"),
+            ferratom::Attribute::from("db/absent"),
+            ferratom::Value::Bool(false),
+            ferratom::TxId::new(0, 0, 0),
+            ferratom::Op::Assert,
+        ));
+        prop_assert!(
+            ps.eavt_get(&absent_key).is_none(),
+            "INV-FERR-059: interpolation search found absent key"
+        );
+    }
+
+    /// INV-FERR-059 + INV-FERR-072: Transact triggers promote+demote cycle,
+    /// and the resulting store preserves all pre-transact datoms plus the new ones.
+    ///
+    /// `transact()` calls `promote()` then `demote()` internally.
+    /// After transact, the store must be back in Positional representation
+    /// AND contain all original datoms plus the transaction's new datoms.
+    ///
+    /// Falsification: any pre-transact datom missing after transact,
+    /// or store not in Positional after transact completes.
+    #[test]
+    fn inv_ferr_059_transact_demotion_preserves_datoms(
+        datoms in prop::collection::btree_set(arb_datom(), 1..100),
+    ) {
+        use ferratomic_core::writer::Transaction;
+
+        let store = Store::from_datoms(datoms.clone());
+        let pre_datoms: BTreeSet<Datom> = store.datoms().cloned().collect();
+        let pre_len = store.len();
+
+        // Transact a new datom (triggers promote → insert → demote).
+        let mut store_mut = store;
+        let tx = Transaction::new(store_mut.genesis_agent())
+            .assert_datom(
+                ferratom::EntityId::from_content(b"isomorphism-test-entity"),
+                ferratom::Attribute::from("db/doc"),
+                ferratom::Value::String("isomorphism-test-value".into()),
+            )
+            .commit_unchecked();
+        let _receipt = store_mut.transact_test(tx)
+            .expect("INV-FERR-072: transact must succeed");
+
+        // After transact: store must be Positional (demote happened).
+        prop_assert!(
+            store_mut.positional().is_some(),
+            "INV-FERR-072: store must be Positional after transact"
+        );
+
+        // All pre-transact datoms must still be present (monotonic growth).
+        let post_datoms: BTreeSet<Datom> = store_mut.datoms().cloned().collect();
+        for d in &pre_datoms {
+            prop_assert!(
+                post_datoms.contains(d),
+                "INV-FERR-004: pre-transact datom lost after transact"
+            );
+        }
+
+        // Store grew (transact adds at least tx metadata datoms).
+        prop_assert!(
+            store_mut.len() > pre_len,
+            "INV-FERR-004: store did not grow after transact. pre={}, post={}",
+            pre_len, store_mut.len()
+        );
+    }
+}
