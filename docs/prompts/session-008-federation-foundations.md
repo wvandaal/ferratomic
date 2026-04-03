@@ -1,203 +1,176 @@
-# Ferratomic Continuation — Session 008: Phase 4a.5 Federation Foundations Spec
+# Ferratomic Continuation — Session 008: Phase 4a.5 Federation Foundations
 
-> Generated: 2026-04-02
-> Last commit: c0017c7 "feat: PositionalStore — positional content addressing core (INV-FERR-076)"
+> Generated: 2026-04-03
+> Last commit: 30a45b2 "docs: complete cleanroom review — 1 CRITICAL (fixed), 2 MAJOR (fixed), 4 MINOR (filed)"
 > Branch: main
 
 ## Read First
 
-1. `AGENTS.md` — guidelines and constraints (note: `ferratom-clock` crate exists now)
-2. `spec/05-federation.md` — **THE target file** — read lines 4922-5760 (§23.8.5, written in session 005)
-3. `spec/01-core-invariants.md` — INV-FERR-031 (genesis determinism) needs amendment
-4. `spec/README.md` — counts need updating after new invariants
-5. `docs/prompts/lifecycle/16-spec-authoring.md` — **THE methodology** — follow exactly
-6. `docs/prompts/lifecycle/17-spec-audit.md` — run AFTER spec authoring completes
-7. `/home/ubuntu/.claude/plans/parsed-questing-moon.md` — comprehensive 49-bead plan
+1. `AGENTS.md` — project guidelines (note: `ferratom-clock` crate exists)
+2. `spec/05-federation.md` lines 4945-6623 — **THE spec content written in session 005** (§23.8.5)
+3. `spec/03-performance.md` lines 1007-1060 — INV-FERR-031 amendment (genesis 19→23)
+4. `/home/ubuntu/.claude/plans/parsed-questing-moon.md` — 49-bead plan with full rationale
+5. `docs/prompts/lifecycle/08-task-creation.md` — bead creation standards
+6. `docs/prompts/lifecycle/14-bead-audit.md` — lab-grade bead template
 
 ## Load Before Starting
 
 ```bash
-ms load spec-first-design -m --full    # Formal specification methodology
+ms load spec-first-design -m --full
 ```
-
-## The Big Idea: Self-Verifying Spec Store
-
-Phase 4a.5 adds federation foundations: transaction signing, causal predecessors,
-store identity, provenance typing, selective merge, filtered observers, and
-LocalTransport. The capstone (B17) stores the Phase 4a.5 spec AS SIGNED DATOMS
-in a ferratomic store — making the store its own verification oracle.
-
-**Why this matters**: Every day of signed transactions is provenance history.
-Signed transactions + causal predecessors + CRDT merge = decentralized trustless
-knowledge chain WITHOUT consensus. The store that stores its own spec can query
-"am I correct?" by checking its own datoms.
 
 ## Session 005 Summary
 
 ### Completed
-- Deep exploration of all 4 crates, all 6 ideas documents, braid archaeology
-- 49-bead plan with 14 design decisions (`/home/ubuntu/.claude/plans/parsed-questing-moon.md`)
-- Structural beads: bd-oiqr (epic), bd-r3um (gate), bd-bdvf (B01 spec authoring)
-- Diamond topology wired: `bd-add → bd-r3um → bd-fzn` (4a.5 parallel with 4b)
-- **Spec authoring ~40% complete** in `spec/05-federation.md` lines 4922-5760:
-  - §23.8.5 scope section with 5 design principles
-  - ADR-FERR-011 through ADR-FERR-019 (9 ADRs, all complete)
+
+- Deep codebase exploration (all 4 crates), all 6 ideas documents (000-005)
+- Braid project archaeology: kernel code, spec, session history via cass
+- FrankenSQLite verification pattern research
+- 49-bead Phase 4a.5 plan (`/home/ubuntu/.claude/plans/parsed-questing-moon.md`)
+- **B01 spec authoring COMPLETE** (bd-bdvf — all 10 acceptance criteria met, five-lens converged):
+  - §23.8.5 scope section (5 design principles)
+  - ADR-FERR-021..029 (9 ADRs, all audited, ID collisions fixed)
   - INV-FERR-060: Store Identity Persistence (all 6 verification layers)
-  - INV-FERR-061: Causal Predecessor Completeness (all 6 verification layers)
-  - INV-FERR-062: Merge Receipt Completeness (all 6 verification layers)
+  - INV-FERR-061: Causal Predecessor Completeness (all 6 layers)
+  - INV-FERR-062: Merge Receipt Completeness (all 6 layers)
+  - INV-FERR-063: Provenance Lattice Total Order (all 6 layers)
+  - INV-FERR-025b: Universal Index Algebra & Graceful Degradation (Stage 1, all layers)
+  - §23.8.5.1: Type definitions (DatomFilter, TxSignature, TxSigner, SignedTransactionBundle, ProvenanceType, Transport, LocalTransport, DatomIndex, TextIndex, VectorIndex, EmbeddingFn)
+  - §23.8.5.2: Schema conventions (six-layer namespaces, observer-config, agent identity, verification evidence schema)
+  - INV-FERR-039 staging note (positive-only DatomFilter)
+  - INV-FERR-051 staging note (signing message with predecessors)
+  - INV-FERR-031 amendment (genesis 19→23, determinism not cardinality)
+  - spec/README.md updated (71 INV, 24 ADR)
+  - Back-references added to INV-FERR-004, 014, 016, 039, 040, 051
+- Spec audit (lifecycle/17): 23/23 findings resolved (3 CRITICAL, 9 MAJOR, 11 MINOR)
+- Five-lens convergence: CONVERGED (Lens 1: 1 fix; Lens 2-5: 0; recheck: 0)
+- Structural beads: bd-oiqr (epic), bd-r3um (gate), bd-bdvf (B01)
+- Diamond topology wired: `bd-add → bd-r3um → bd-fzn`
 
 ### Decisions Made (14 total — ALL settled, do NOT re-derive)
-- D1: Signatures as datoms (tx/signature, tx/signer metadata datoms)
+
+- D1: Signatures as datoms (tx/signature, tx/signer metadata)
 - D2: Per-transaction signing (explicit key, not per-Database)
-- D3: Async Transport via std only (Pin<Box<dyn Future>>, zero runtime deps)
+- D3: Async Transport via std only (Pin<Box<dyn Future>>)
 - D4: Positive-only DatomFilter (All, AttributeNamespace, FromAgents, Entities, And, Or)
 - D5: Genesis 19→23 (tx/signature + tx/signer + tx/predecessor + tx/provenance)
-- D6: Transaction-level federation (SignedTransactionBundle preserves signing boundary)
-- D7: Causal predecessors as datoms (Frontier → predecessor datoms at commit, ~30 LOC)
+- D6: Transaction-level federation (SignedTransactionBundle, braid insight)
+- D7: Causal predecessors as datoms (Frontier → predecessor datoms at commit)
 - D8: Store identity via self-signed first transaction (root of trust)
-- D9: Universal Index Algebra (DatomIndex trait; Text/Vector/Spatial/Temporal/Graph; Option<Box<dyn>>; graceful degradation; index config as datoms)
+- D9: Universal Index Algebra (DatomIndex/TextIndex/VectorIndex/EmbeddingFn, Option<Box<dyn>>, graceful degradation)
 - D10: Diamond phase topology (4a.5 parallel with 4b; 4c depends on both)
-- D11: Observer-config as schema convention (NOT engine concept — defer to 4c)
+- D11: Observer-config as schema convention (NOT engine; deferred to 4c)
 - D12: ProvenanceType lattice (Observed > Derived > Inferred > Hypothesized)
 - D13: Merge receipts as datoms (queryable federation history)
-- D14: Genesis determinism not cardinality (dynamic count, not hardcoded)
+- D14: Genesis determinism not cardinality (dynamic count)
 
 ### Stopping Point
-`spec/05-federation.md` line 5760 — after INV-FERR-062 closing `---` marker.
-The ADRs and three core invariants are complete. The REMAINING items below have
-NOT been written yet.
+
+B01 spec authoring is done and five-lens converged. The bead bd-bdvf cannot formally close because it depends on bd-add (Phase 4a gate), which is still open. The spec content IS complete and committed.
+
+The remaining Phase 4a.5 work is: create implementation beads (B02-B17), verification beads (V01-V03), and research beads (R01-R27) from the plan, then execute them.
 
 ## Next Execution Scope
 
-### Primary Task: Complete B01 (bd-bdvf) — Spec Authoring
+### Primary Task: Create Phase 4a.5 Beads
 
-**This is the single critical path item.** Everything else is blocked on it.
-Follow `docs/prompts/lifecycle/16-spec-authoring.md` exactly.
+The plan at `/home/ubuntu/.claude/plans/parsed-questing-moon.md` contains 49 fully-specified beads. 3 structural beads exist (bd-oiqr epic, bd-r3um gate, bd-bdvf B01). The remaining 46 beads need to be created with lab-grade descriptions per `docs/prompts/lifecycle/08-task-creation.md` and `docs/prompts/lifecycle/14-bead-audit.md`.
 
-### What Remains (append after line 5760 of spec/05-federation.md)
+**Create beads in this order:**
 
-**1. INV-FERR-025b: Universal Index Algebra & Graceful Degradation (Stage 1)**
+1. **Implementation beads B02-B17** (16 beads) — the core Phase 4a.5 work
+2. **Correctness verification beads V01-V03** (3 beads) — braid archaeology findings
+3. **Research/placeholder beads R01-R27** (27 beads) — future phase work
 
-Write with all 6 verification layers. Key properties:
-- Universal `DatomIndex` trait: `observe(&mut self, datom, schema)`, `retract(...)`, `rebuild(...)`, `name() -> &str`
-- Homomorphism contract: `I(S₁ ∪ S₂) = I(S₁) ⊕ I(S₂)` for all conforming indexes
-- Five index families: sort-order (EAVT/AEVT/VAET/AVET — required), LIVE (required), Text (optional), Vector (optional), Extensible (optional)
-- Optional indexes as `Option<Box<dyn Trait>>` with NullDefaults — zero overhead when None
-- Graceful degradation: text falls back to O(n) scan when absent; vector returns empty (engine doesn't claim semantic understanding without app-provided embeddings)
-- `TextIndex` trait: insert, remove, search, rebuild. Fully specifiable tokenization.
-- `VectorIndex` trait: insert, remove, search, rebuild. Requires app-provided `EmbeddingFn`
-- `EmbeddingFn` trait: `embed(&self, value: &Value) -> Option<Vec<f32>>`, `dimension() -> usize`
-- **Key algebraic insight**: Per-datom embedding IS a homomorphism (distributes over union). The distinction from FTS is specifiability (model-dependent), not algebra. Both IN as injectable traits.
-- Index config as datoms: `:index/*` namespace (Phase 4b impl)
-- Stage 1: spec now, implementation deferred to Phase 4b
+**Wire dependency edges per the plan's dependency table** (plan file section "Dependency Edge Summary").
 
-**2. INV-FERR-031 amendment (in spec/01-core-invariants.md)**
+**Wire phase gate edges:**
+- All B-beads and V-beads depend on bd-bdvf (B01, which depends on bd-add)
+- bd-r3um (gate) depends on all B-beads and V-beads
+- R-beads depend on bd-r3um (gate) or bd-7ij (4b gate) per the plan
 
-Find the existing INV-FERR-031 (Genesis Determinism) and amend:
-- Change "19 axiomatic meta-schema attributes" → assert DETERMINISM not CARDINALITY
-- Document 4 new genesis attributes: tx/signature (Bytes, One, LWW), tx/signer (Bytes, One, LWW), tx/predecessor (Ref, Many, MultiValue), tx/provenance (Keyword, One, LWW)
-- Braid lesson: compute count dynamically (no hardcoded constant)
-- Update Level 0, Level 1, Level 2, proptest, Lean to reflect new attributes
+### Braid Correctness Findings (MUST be verification beads)
 
-**3. INV-FERR-039 staging note (in spec/05-federation.md)**
+These are bugs braid discovered through implementation that ferratomic must verify against:
 
-Find existing INV-FERR-039 (Selective Merge) and add a staging note:
-"Phase 4a.5 implements selective merge with positive-only DatomFilter (ADR-FERR-012).
-Not/Custom/AfterEpoch variants deferred to Phase 4c."
+**V01**: LIVE view retraction handling + Op ordering invariant
+- Op::Assert < Op::Retract in im::OrdSet is load-bearing for correctness
+- Bare retractions must remove values from LIVE set
+- Cardinality::Many must NOT be served by LIVE view
+- Source: braid session `56ece7bd` (SOUND-LIVE-v2), session `6250045e`
 
-**4. INV-FERR-051 staging note (in spec/05-federation.md)**
+**V02**: Schema bootstrap ordering in WAL recovery and checkpoint load
+- Schema-defining datoms and user datoms may arrive in wrong order during recovery
+- evolve_schema() must run before validation, or recovery must bypass validation
+- Source: braid session `ed016be3`, `9c83906c`
 
-Find existing INV-FERR-051 (Signed Transactions) and add a staging note:
-"Phase 4a.5 implements Ed25519 signing without Merkle proof binding (needs prolly tree).
-Signing message = blake3(sorted_user_datoms ∥ tx_id ∥ sorted_predecessor_tx_ids ∥ signer_public_key).
-Metadata datoms (tx/signature, tx/signer, tx/predecessor, tx/provenance, tx/time, tx/agent) are
-excluded from the signing message per ADR-FERR-011."
+**V03**: Implicit LWW via iteration-order assumptions
+- Any code that iterates datoms and picks "the last one" for Cardinality::One is fragile
+- Must use LIVE view or explicit max-by-TxId, never iterate-and-overwrite
+- Source: braid session `c01bb082`
 
-**5. Level 2 type definitions (within §23.8.5)**
+### Key Beads (from the plan)
 
-Specify as Rust contracts (conceptual, using BTreeSet per spec convention):
-- `DatomFilter` enum — 6 variants + `matches(&self, &Datom) -> bool`
-- `TxSignature([u8; 64])` — opaque newtype, Serialize/Eq/Ord/Hash/Clone/Copy
-- `TxSigner([u8; 32])` — opaque newtype, same derives
-- `SignedTransactionBundle { tx_id: TxId, datoms: Vec<Datom>, signature: Option<TxSignature>, signer: Option<TxSigner>, predecessors: Vec<TxId>, provenance: Option<ProvenanceType> }`
-- `ProvenanceType` enum — Observed(1.0)/Derived(0.8)/Inferred(0.5)/Hypothesized(0.2) with Ord + confidence()
-- `Transport` trait — fetch_datoms, fetch_signed_transactions, schema, frontier, ping — all returning `Pin<Box<dyn Future<...> + Send + '_>>`
-- `LocalTransport { db: Arc<Database> }` implementing Transport
+| Level | Beads | Description |
+|-------|-------|-------------|
+| L1 (types) | B02-B06 | TxSignature/TxSigner, DatomFilter, genesis 23, error variants + ProvenanceType, SignedTransactionBundle |
+| L2 (bridge) | B07-B09 | ReplicaFilter bridge, sign in transact + predecessors, Ed25519 sign/verify |
+| L3 (integration) | B10-B13 | Filtered observers, selective merge + receipts, Transport trait, LocalTransport |
+| L4 (identity) | B14-B15 | Store identity constructor, federation conventions docs |
+| L5 (verification) | B16 | Integration test suite |
+| L6 (bootstrap) | B17 | Self-verifying spec store (the capstone — stores Phase 4a.5 spec as signed datoms) |
 
-**6. Schema conventions (documentation within §23.8.5)**
+### The Capstone: B17 Self-Verifying Spec Store
 
-- Six-layer namespace conventions (from doc 005):
-  `:world/*` (Layer 1), `:structure/*` (Layer 2), `:cognition/*` (Layer 3),
-  `:conversation/*` (Layer 4), `:interface/*` (Layer 5), `:policy/*` (Layer 6)
-- Observer-config convention: `:observer-config/*` namespace
-- Agent identity convention: `:agent/*` namespace (public-key, namespace, name, role)
-- Verification evidence schema: `:verification/*` (lean-status, proptest-passes, proptest-failures, confidence, kani-status, stateright-status, evidence-hash) and `:gate/*` (verdict, blocking-invariants)
+B17 is the single most important bead. It stores Phase 4a.5's own spec as signed datoms in a ferratomic store — making the store its own verification oracle. It composes ALL Phase 4a.5 features (signing, identity, predecessors, provenance, selective merge, merge receipts). It installs the `:verification/*` schema for Phase 4b evidence accumulation. Gate closure becomes a Datalog query. This seeds GOALS.md Level 2 ("bootstrap test") and replaces FrankenSQLite's const-array catalog with datoms.
 
-**7. spec/README.md update**
-
-Update INV-FERR count (was 59, now 62 + 025b = 63), ADR count (was 10, now 19).
-
-**8. Five-lens convergence protocol**
-
-After ALL content written, run 5 sequential single-lens passes over the entire
-new §23.8.5 section (including the 3 already-written invariants):
-1. **Completeness**: What fields are missing?
-2. **Soundness**: Are proof sketches correct?
-3. **Simplicity**: Simplest mathematical structure that works?
-4. **Adversarial**: How would an adversary break each invariant?
-5. **Traceability**: Does every thread trace through every layer?
-
-Converged when a pass produces zero structural changes.
-
-### After B01 Completes
-
-1. Run spec audit per `docs/prompts/lifecycle/17-spec-audit.md` on amended spec/05-federation.md
-2. Create remaining 46 beads (B02-B17, V01-V03, R01-R27) per plan file
-3. Execute implementation beads in dependency order (L0→L6)
+Compound chain: B17 → R16 (FBW witnesses) → ADR-FERR-012 (Bayesian confidence) → ADR-FERR-014 (gate certificates) → M(S) ≅ S.
 
 ### Ready Queue
+
 ```bash
-br show bd-bdvf    # B01 — the spec authoring bead (PRIMARY TASK)
-br ready            # Other ready work (Phase 4a gate closure, performance work)
-bv --robot-next     # Top pick with reasoning
+br show bd-bdvf    # B01 (complete, blocked on bd-add)
+br show bd-r3um    # Phase 4a.5 gate
+br show bd-oiqr    # Phase 4a.5 epic
+br ready            # Other ready work
+bv --robot-next     # Top pick
 ```
 
-### Key Beads
-- **bd-bdvf**: B01 spec authoring (THIS SESSION'S TARGET)
-- **bd-r3um**: Phase 4a.5 gate (depends on all Phase 4a.5 beads)
-- **bd-oiqr**: Phase 4a.5 epic (container)
-- **bd-add**: Phase 4a gate (bd-bdvf depends on this — check if closed)
+### Context Pointers
+
+| What | Where |
+|------|-------|
+| 49-bead plan (full rationale + dependencies) | `/home/ubuntu/.claude/plans/parsed-questing-moon.md` |
+| Phase 4a.5 spec content | `spec/05-federation.md` lines 4945-6623 |
+| Genesis amendment | `spec/03-performance.md` lines 1007-1060 |
+| Session 005 handoff memory | `~/.claude/projects/-data-projects-ddis-ferratomic/memory/project_session005_handoff.md` |
+| Phase 4a.5 design decisions | `~/.claude/projects/-data-projects-ddis-ferratomic/memory/project_phase_4a5.md` |
+| Semantic search = homomorphism insight | `~/.claude/projects/-data-projects-ddis-ferratomic/memory/feedback_semantic_homomorphism.md` |
+| Braid archaeology findings | `/home/ubuntu/.claude/plans/parsed-questing-moon-agent-ad8608737e7ae4ed8.md` |
+| Ideas documents 000-005 | `docs/ideas/` |
+| FrankenSQLite verification patterns | `spec/08-verification-infrastructure.md` (ADR-FERR-011..014 in spec/08) |
 
 ## Hard Constraints
 
 - `#![forbid(unsafe_code)]` in all crates (except ADR-FERR-020 localized mmap module)
 - No `unwrap()` in production code
 - `CARGO_TARGET_DIR=/data/cargo-target`
-- Every INV-FERR needs all 6 verification layers (Level 0 + Level 1 + Level 2 + falsification + proptest + Lean)
-- Every ADR follows the template: Problem/Options/Decision/Rejected/Consequence/Source
-- All cross-references bidirectional
-- Spec-first: NO implementation before spec converges
-- The 14 design decisions listed above are SETTLED — do not re-derive or re-debate
+- Every bead follows lab-grade template from lifecycle/14-bead-audit.md
+- The 14 design decisions listed above are SETTLED — do not re-derive
+- No `ed25519-dalek` in ferratom (leaf crate stays minimal) — signing types are newtypes; ed25519-dalek is in ferratomic-core only
+- Max 3 files per bead (scope atomicity)
+- Zero lint escape hatches — no `#[allow(...)]` anywhere
 
 ## Stop Conditions
 
 Stop and escalate to the user if:
-- Any design decision from the 14 listed above seems wrong upon deeper analysis
-- An invariant's Level 0 proof has a gap that can't be resolved
-- Two invariants contradict each other
-- The spec exceeds 7000 lines (may need splitting into 05a/05b)
-- You discover a dependency on Phase 4b infrastructure that wasn't anticipated
-- The five-lens convergence doesn't converge within 3 passes
+- Any design decision from the 14 above seems wrong upon deeper analysis
+- bd-add (Phase 4a gate) has blockers that prevent Phase 4a.5 from starting
+- Another agent's compilation errors block bead creation or testing
+- The bead dependency graph has cycles after wiring
+- A bead requires touching more than 3 files (needs splitting)
+- Any bead from the plan contradicts the spec content in §23.8.5
 
-## Context Pointers
+## Workspace State Warning
 
-These files contain the full reasoning behind every decision. Read them if you
-need to understand WHY a decision was made, not just WHAT was decided:
-
-- `/home/ubuntu/.claude/plans/parsed-questing-moon.md` — 49-bead plan with all rationale
-- `/home/ubuntu/.claude/projects/-data-projects-ddis-ferratomic/memory/project_phase_4a5.md` — design decision summary
-- `/home/ubuntu/.claude/projects/-data-projects-ddis-ferratomic/memory/project_session005_handoff.md` — detailed continuation state
-- `/home/ubuntu/.claude/projects/-data-projects-ddis-ferratomic/memory/feedback_semantic_homomorphism.md` — why VectorIndex IS a homomorphism
-- `docs/ideas/000-agentic-systems-algebra.md` — agent decomposition, associate mechanism
-- `docs/ideas/003-ferratomic-distributed-cognition.md` — store-messaging unification
-- `docs/ideas/005-everything-is-datoms.md` — six-layer stack, bilateral Y-combinator
+Other agents modified `ferratomic-core/src/positional.rs`, `store/apply.rs`, `store/mod.rs`, and several ferratomic-verify test files concurrently. Those changes have compilation errors (SortedVecBackend API breaking changes). Our spec-only commits are clean and pushed. The other agent's work is unstaged in the working tree. Investigate before running cargo commands.
