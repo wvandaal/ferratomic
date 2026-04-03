@@ -1154,6 +1154,7 @@ theorem genesis_merge_identity (s : DatomStore) :
 ### INV-FERR-032: LIVE Resolution Correctness
 
 **Traces to**: SEED.md §4, INV-FERR-029 (LIVE View Resolution), INV-STORE-012
+**Referenced by**: INV-FERR-075 (LIVE-first checkpoint)
 **Verification**: `V:PROP`, `V:KANI`, `V:LEAN`
 **Stage**: 0
 

@@ -12,6 +12,16 @@
 >
 > **Model gate**: Opus 4.6 with /effort max or GPT 5.4 xhigh. The per-bead
 > verification against multiple primary sources demands sustained precision.
+>
+> **Execution constraint**: The auditing agent MUST perform all work itself,
+> sequentially, one bead at a time. Do NOT delegate bead auditing to subagents.
+> The entire value of this prompt is that a single agent accumulates cross-bead
+> context — which invariants are referenced by multiple beads, which file sets
+> overlap, which dependency edges are missing. Subagents lose this accumulated
+> context and produce locally-correct but globally-inconsistent results. The
+> Session 006 Kani incident (7 API drift bugs) originated from exactly this
+> pattern: independent agents making locally-reasonable decisions that diverged
+> from each other. The auditing agent IS the integration point.
 
 ---
 
@@ -130,6 +140,75 @@ For bug-type beads, replace with:
 - **Expected**: <correct behavior per INV-FERR-NNN>
 - **Root cause**: <why the current code produces wrong behavior>
 - **Fix**: <minimal change that restores the invariant>
+
+## Pseudocode Contract  [T]
+Exact Rust type definitions, function signatures, and enum dispatch patterns for
+every type this bead introduces or modifies. This is NOT implementation — it is a
+**type-level contract** that eliminates all agent judgment calls about ownership,
+mutability, return types, visibility, and dispatch.
+
+**The Compilability Test**: Read ONLY this section. Could you write a `.rs` file
+with all the type definitions, struct fields, function signatures (with `todo!()`
+bodies), and trait impls? If not, the contract is incomplete.
+
+Why this matters: Agents that make "reasonable" type choices without full context
+produce code that compiles but silently violates invariants. The Session 006 Kani
+incident (7 API drift bugs from `cfg(kani)` gating) and the `Arc<PositionalStore>`
+vs `PositionalStore` ownership question demonstrate this. A wrong choice in a
+foundation bead propagates to every downstream bead.
+
+Format:
+
+```rust
+// --- New types ---
+
+/// <doc comment citing INV-FERR-NNN>
+pub struct NewType {
+    /// <field doc: what it represents, invariant it maintains>
+    pub(crate) field_a: ExactType,     // specify Arc<T> vs T vs Box<T>
+    field_b: OtherType,                 // private by default — state it
+}
+
+// --- Modified signatures ---
+
+impl ExistingType {
+    /// <what changed and why>
+    /// Was: `pub fn method(&self) -> OldReturn`
+    /// Now:
+    pub fn method(&self) -> NewReturn {  // &self vs &mut self: specified
+        todo!()
+    }
+}
+
+// --- Enum dispatch ---
+
+/// All match arms enumerated. Agent implements each arm, never adds/removes arms.
+match value {
+    Variant::A(inner) => { /* <what A does — one sentence> */ todo!() }
+    Variant::B { field } => { /* <what B does> */ todo!() }
+    Variant::C => { /* <what C does> */ todo!() }
+    // NO wildcard `_ =>` — every variant named
+}
+
+// --- Trait impls ---
+
+impl TraitName for NewType {
+    fn trait_method(&self, param: ParamType) -> ReturnType { todo!() }
+}
+```
+
+**5 rules — every bead that touches Rust types MUST resolve these:**
+
+| Decision | Why it matters | Bead must specify |
+|----------|---------------|-------------------|
+| `Arc<T>` vs `T` vs `Box<T>` | Determines O(1) vs O(n) clone, shared vs exclusive ownership | Exact wrapper for every struct field and return type |
+| `&self` vs `&mut self` | Determines whether method callable on shared references | Every new or changed method signature |
+| Return type of changed methods | A method returning `&T` when `T` may not exist is a compile error | Every method whose return type changes or whose invariants change |
+| `pub` vs `pub(crate)` vs private | Module boundary contract for downstream consumers | Every new struct, field, method, and function |
+| Enum match arms | Missing arm = compile error; wrong arm = silent invariant violation | Every match/if-let on an enum this bead touches |
+
+For beads that do not introduce or modify Rust types (e.g., docs, pure test beads,
+Lean proofs), state "N/A — no type changes."
 
 ## Verification Plan  [T]
 How to confirm the postconditions hold. Specific enough to execute mechanically.
@@ -306,6 +385,7 @@ Does the bead have all required fields from the lab-grade template?
 - [ ] Postconditions: binary, verifiable, INV-traced
 - [ ] Frame conditions: stated (even if "none — greenfield")
 - [ ] Refinement sketch or bug analysis
+- [ ] Pseudocode Contract (if bead introduces/modifies Rust types) or "N/A"
 - [ ] Verification plan: specific test names, commands
 - [ ] Files: exact paths with change descriptions
 - [ ] Dependencies: bidirectional (depends-on AND blocks)
@@ -337,6 +417,19 @@ Are the postconditions strong enough to verify the work?
 A postcondition is strong when an agent can write the test FROM the postcondition
 alone, without reading any other context.
 
+**Performance-to-type tracing**: Postconditions that reference performance
+characteristics MUST trace to a specific type choice in the Pseudocode Contract.
+A performance claim without a type anchor is unverifiable:
+
+- **Strong**: "O(1) snapshot via `Arc::clone` (INV-FERR-006). The `Arc<StoreInner>`
+  in the Pseudocode Contract guarantees this — `Arc::clone` is a reference count
+  increment, not a data copy."
+- **Weak**: "O(1) snapshot." (How? Clone semantics depend on whether the field is
+  `Arc<T>`, `Box<T>`, or `T` — each has different clone cost.)
+- **Strong**: "O(log n) lookup with ~4 cache misses (INV-FERR-071). The
+  `Vec<(K, V)>` in the Pseudocode Contract guarantees contiguous memory layout."
+- **Weak**: "Fast lookup." (Fast compared to what? Depends on the data structure.)
+
 #### Lens 4: Scope Atomicity
 
 Can one agent complete this in one focused session?
@@ -359,18 +452,63 @@ For parallel agent execution, frame conditions prevent collisions.
 
 Cross-reference: check all other open beads for file overlap.
 
-#### Lens 6: Executability (The Blind Agent Test)
+#### Lens 6: The Compiler Test (Pseudocode Contract Verification)
 
-Simulate a clean-context agent:
+For every bead that introduces or modifies Rust types, apply all 6 sub-checks.
+A bead **FAILS** if an implementing agent must make ANY of the following choices —
+each is a judgment call that risks silent invariant violation.
 
-> You have read AGENTS.md and spec/NN-section.md. You now read this bead.
-> Can you begin working IMMEDIATELY, or do you need to ask a question first?
+**Sub-check 6a: Type Resolution**
+Every struct field, function parameter, and return type is FULLY SPECIFIED with
+exact types. No placeholders, no "appropriate type", no "similar to X".
 
-Common executability failures:
-- "Fix the issue described in CR-035" — which issue? What's the fix?
-- "See bd-3gk for context" — the agent shouldn't need another bead
-- "Improve performance" — by how much? Measured how?
-- "Various files" — which files specifically?
+- PASS: `field: Arc<RwLock<PositionalStore>>` — no ambiguity
+- FAIL: `field: PositionalStore` when the bead doesn't state whether shared
+  ownership is required — agent must decide Arc vs owned vs Box
+
+**Sub-check 6b: Signature Resolution**
+Every new or modified function signature specifies: receiver (`&self`, `&mut self`,
+`self`, or none), all parameters with types, return type, and error type.
+
+- PASS: `pub(crate) fn promote(&mut self) -> Result<(), FerraError>`
+- FAIL: `fn promote(...)` — agent must decide mutability, visibility, error handling
+
+**Sub-check 6c: Match Pattern Completeness**
+Every `match`, `if let`, or pattern-dispatch that the bead's code will touch has
+ALL arms enumerated with a one-sentence description of what each arm does.
+
+- PASS: `AdaptiveIndexes::SortedVec(sv) => { /* promote to OrdMap */ }`
+  `AdaptiveIndexes::OrdMap(om) => { /* already promoted, no-op */ }`
+- FAIL: "Handle all variants of AdaptiveIndexes" — agent must discover the variants
+
+**Sub-check 6d: Lifetime Resolution**
+If any signature involves borrowed data (`&`, `&mut`, named lifetimes), the bead
+specifies the lifetime relationship. If the bead introduces a struct with references,
+it states the lifetime parameter.
+
+- PASS: `pub fn datom_at<'a>(&'a self, pos: u32) -> &'a Datom`
+- FAIL: `fn datom_at(&self, pos: u32) -> &Datom` when elision is ambiguous
+
+**Sub-check 6e: API Compatibility**
+If the bead modifies an existing function's signature or return type, it states
+the OLD signature and the NEW signature. Any callers affected by the change are
+listed in the Files section.
+
+- PASS: `Was: pub fn indexes(&self) -> &Indexes`
+  `Now: pub fn indexes(&self) -> Option<&Indexes>` — callers: `store/query.rs`, `store/merge.rs`
+- FAIL: "Change indexes() to handle the case where indexes don't exist" — agent
+  must choose the return type and find all callers
+
+**Sub-check 6f: Module Wiring**
+If the bead creates a new module or type, it states: which module declares it,
+which modules import it, and whether it's re-exported from `lib.rs`.
+
+- PASS: "Declare `PositionalStore` in `ferratomic-core/src/positional.rs`.
+  Re-export from `ferratomic-core/src/lib.rs`. Import in `store/mod.rs`."
+- FAIL: "Add the PositionalStore type" — agent must decide where to put it
+
+For beads that do not touch Rust types (docs, Lean proofs, pure config changes),
+Lens 6 is automatically PASS — note "N/A: no type changes."
 
 #### Lens 7: Axiological Alignment
 
@@ -570,10 +708,16 @@ For REWRITE (3+ missing fields): rebuild the bead from scratch using this protoc
    Ensure no collisions.
 7. **Write the refinement sketch**: Abstract (from spec Level 0/1) → Concrete
    (from spec Level 2) → Coupling (from proptest strategy or Lean theorem in the spec).
-8. **Write the verification plan**: Test name, test location, test strategy.
+8. **Write the Pseudocode Contract**: If the bead introduces or modifies Rust types,
+   extract exact type definitions, function signatures, and enum match patterns from
+   the spec Level 2 contract and the existing codebase. Apply the Compilability Test:
+   could an agent write a `.rs` file with `todo!()` bodies from ONLY this section?
+   Resolve all 5 judgment-call failure modes (ownership, mutability, return types,
+   visibility, match arms). If no type changes, write "N/A — no type changes."
+9. **Write the verification plan**: Test name, test location, test strategy.
    Derive from the proptest strategy in the spec if one exists.
-9. **Write files**: List every file that changes. If > 3 files, reconsider scope.
-10. **Write dependencies**: Check `bv --robot-insights` for graph neighborhood.
+10. **Write files**: List every file that changes. If > 3 files, reconsider scope.
+11. **Write dependencies**: Check `bv --robot-insights` for graph neighborhood.
 
 ```bash
 br update <id> --description "$(cat <<'BODY'
@@ -804,6 +948,9 @@ None — leaf task, no structural prerequisites.
   appear at 1K are real bugs exposed by the larger sample — file as
   separate beads, do not suppress.
 
+## Pseudocode Contract
+N/A — no type changes. This bead modifies only proptest configuration constants.
+
 ## Verification Plan
 1. Test: Run full proptest suite with `cargo test -p ferratomic-verify`.
    Expect: all tests pass (longer runtime is expected and acceptable).
@@ -821,6 +968,92 @@ None — leaf task, no structural prerequisites.
 - Depends on: None
 - Blocks: None (independent quality improvement)
 ```
+
+---
+
+## Demonstration: Pseudocode Contract (Type-Changing Bead)
+
+**Before** (underspecified):
+
+```
+bd-xyz: Wire PositionalStore into Store for cold start
+P1, type: task, label: phase-4a
+Description: "Make Store use PositionalStore for cold-start-loaded stores.
+The store should use sorted arrays when loaded from checkpoint and switch
+to OrdMap when mutated."
+```
+
+**Lens 6 (Compiler Test) failures**:
+- 6a FAIL: `PositionalStore` — owned? Arc? Where is it stored?
+- 6b FAIL: No method signatures. How does `indexes()` change?
+- 6c FAIL: `AdaptiveIndexes` — how many variants? What does each arm do?
+- 6e FAIL: `indexes()` return type changes — old and new not stated
+- 6f FAIL: Where is `AdaptiveIndexes` declared? What re-exports it?
+
+**After** (lab-grade Pseudocode Contract):
+
+```
+## Pseudocode Contract
+
+// --- ferratomic-core/src/store/adaptive.rs (NEW) ---
+
+/// Two-mode index storage: sorted arrays for cold start, OrdMap for mutation.
+/// INV-FERR-072: promotion preserves datom set and query results.
+pub(crate) enum AdaptiveIndexes {
+    /// Read-optimized after cold start. O(log n) lookup, ~4 cache misses.
+    /// O(n) clone — acceptable for read-only stores.
+    SortedVec(SortedVecIndexes),
+    /// Write-optimized after first mutation. O(log n) lookup, ~18 cache misses.
+    /// O(1) clone via structural sharing (Arc internally).
+    OrdMap(OrdMapIndexes),
+}
+
+impl AdaptiveIndexes {
+    /// Promote from SortedVec to OrdMap. Called exactly once, on first mutation.
+    /// O(n log n) one-time cost. After this call, self is always OrdMap.
+    /// INV-FERR-072: content(before) == content(after).
+    pub(crate) fn promote(&mut self) {
+        // match *self {
+        //   AdaptiveIndexes::SortedVec(sv) => { convert to OrdMap, replace self }
+        //   AdaptiveIndexes::OrdMap(_) => { no-op — already promoted }
+        // }
+        todo!()
+    }
+
+    /// Query the EAVT index regardless of current mode.
+    /// Was: pub fn eavt(&self) -> &OrdMap<EavtKey, Datom>
+    /// Now: returns an opaque iterator — callers must not depend on OrdMap.
+    pub(crate) fn eavt_range(&self, range: impl RangeBounds<EavtKey>)
+        -> Box<dyn Iterator<Item = &Datom> + '_>
+    {
+        // match self {
+        //   AdaptiveIndexes::SortedVec(sv) => { binary search + slice iter }
+        //   AdaptiveIndexes::OrdMap(om) => { OrdMap range iter }
+        // }
+        todo!()
+    }
+}
+
+// --- ferratomic-core/src/store/mod.rs (MODIFIED) ---
+
+impl Store {
+    /// Was: pub fn indexes(&self) -> &Indexes
+    /// Now: indexes are accessed through query methods, not directly.
+    /// Callers that called store.indexes().eavt().range(..) must use
+    /// store.eavt_range(..) instead.
+    /// REMOVED: pub fn indexes(&self) -> &Indexes
+    /// ADDED:
+    pub fn eavt_range(&self, range: impl RangeBounds<EavtKey>)
+        -> Box<dyn Iterator<Item = &Datom> + '_>
+    {
+        todo!()
+    }
+}
+```
+
+This contract eliminates all 5 Lens 6 failures: the agent knows the exact enum,
+the exact match arms, the exact method signatures, the exact visibility, and the
+exact callers affected by the `indexes()` removal.
 
 ---
 

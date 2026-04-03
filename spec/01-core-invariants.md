@@ -358,7 +358,7 @@ theorem merge_monotone_right (a b : DatomStore) : b ⊆ merge a b := by
 ### INV-FERR-005: Index Bijection
 
 **Traces to**: SEED.md 4, INV-STORE-012
-**Referenced by**: INV-FERR-071 (sorted-array backend), INV-FERR-073 (permutation index fusion)
+**Referenced by**: INV-FERR-071 (sorted-array backend), INV-FERR-073 (permutation index fusion), INV-FERR-076 (positional content addressing)
 **Verification**: `V:PROP`, `V:KANI`
 **Stage**: 0
 
@@ -1110,6 +1110,7 @@ theorem valid_preserves_monotonicity (s : DatomStore) (schema : Schema) (d : Dat
 **Traces to**: SEED.md 4 Axiom 2 (Store), C4,
 INV-FERR-001 (Merge Commutativity), INV-FERR-002 (Merge Associativity),
 INV-FERR-003 (Merge Idempotency)
+**Referenced by**: INV-FERR-074 (homomorphic store fingerprint)
 **Verification**: `V:PROP`, `V:KANI`, `V:LEAN`, `V:MODEL`
 **Stage**: 0
 
@@ -1455,6 +1456,7 @@ theorem epoch_monotone (s : DatomStore) (e1 e2 : Nat) (h : e1 ≤ e2) :
 
 **Traces to**: SEED.md 4 Axiom 1 (Identity), C2, INV-STORE-003,
 ADR-FERR-010 (Deserialization Trust Boundary)
+**Referenced by**: INV-FERR-076 (positional content addressing)
 **Verification**: `V:TYPE`, `V:PROP`, `V:KANI`, `V:LEAN`
 **Stage**: 0
 
