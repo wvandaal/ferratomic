@@ -5292,7 +5292,8 @@ clock skew, not epistemic quality.
 **Consequence**: Genesis schema gains `:tx/provenance` (Keyword, One, LWW).
 `ProvenanceType` enum in ferratom with `confidence() -> f64` method.
 
-**Source**: Braid kernel `datom.rs` ProvenanceType lattice.
+**Source**: Braid kernel `datom.rs` ProvenanceType lattice, C5 (Traceability —
+provenance tracks who observed what), SEED.md §4 (calibrated policies).
 
 ---
 
