@@ -5,7 +5,7 @@
 //!
 //! Two benchmarks per input size:
 //! - `trait_dispatched`: calls `IndexBackend::backend_get` on the EAVT
-//!   index obtained from `store.indexes().eavt()`.
+//!   index obtained from `store.indexes().unwrap().eavt()`.
 //! - `direct_ordmap`: calls `OrdMap::get` on an identically-populated
 //!   bare `im::OrdMap<EavtKey, Datom>`.
 //!
@@ -47,7 +47,10 @@ fn build_shifted_store(start: usize, count: usize) -> Store {
     let datoms = (start..start + count)
         .map(doc_datom)
         .collect::<BTreeSet<_>>();
-    Store::from_datoms(datoms)
+    let mut store = Store::from_datoms(datoms);
+    // bd-h2fz: promote to OrdMap so indexes() returns Some.
+    store.promote();
+    store
 }
 
 fn build_store(count: usize) -> Store {
@@ -86,7 +89,7 @@ fn bench_index_backend(c: &mut Criterion) {
             &size,
             |b, &_size| {
                 b.iter(|| {
-                    let datom = store.indexes().eavt().backend_get(black_box(&key));
+                    let datom = store.indexes().unwrap().eavt().backend_get(black_box(&key));
                     assert!(
                         datom.is_some(),
                         "INV-FERR-025: trait-dispatched lookup must find key"
@@ -143,13 +146,13 @@ fn bench_perf3_overhead_assertion(c: &mut Criterion) {
     // --- Wall-clock comparison with hard assertion ---
     // Warm up both paths first to avoid cold-cache bias.
     for _ in 0..1_000 {
-        black_box(store.indexes().eavt().backend_get(black_box(&key)));
+        black_box(store.indexes().unwrap().eavt().backend_get(black_box(&key)));
         black_box(direct.get(black_box(&key)));
     }
 
     let trait_start = Instant::now();
     for _ in 0..LOOKUP_ITERATIONS {
-        black_box(store.indexes().eavt().backend_get(black_box(&key)));
+        black_box(store.indexes().unwrap().eavt().backend_get(black_box(&key)));
     }
     let trait_elapsed = trait_start.elapsed();
 
@@ -174,7 +177,7 @@ fn bench_perf3_overhead_assertion(c: &mut Criterion) {
     group.throughput(Throughput::Elements(LOOKUP_ITERATIONS as u64));
     group.bench_function("trait_vs_direct_ratio", |b| {
         b.iter(|| {
-            black_box(store.indexes().eavt().backend_get(black_box(&key)));
+            black_box(store.indexes().unwrap().eavt().backend_get(black_box(&key)));
         });
     });
 

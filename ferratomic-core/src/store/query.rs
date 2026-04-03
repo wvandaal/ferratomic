@@ -7,7 +7,7 @@
 use ferratom::{Attribute, Datom, EntityId, Op, TxId, Value};
 use im::{OrdMap, OrdSet};
 
-use super::{Snapshot, Store};
+use super::{iter::DatomIter, Snapshot, SnapshotDatoms, Store, StoreRepr};
 
 /// Type alias for the causal OR-Set LIVE lattice.
 ///
@@ -25,7 +25,8 @@ impl Snapshot {
     ///
     /// INV-FERR-006: the iterator yields exactly the datoms that
     /// were present when the snapshot was created -- no more, no fewer.
-    pub fn datoms(&self) -> impl Iterator<Item = &Datom> {
+    #[must_use]
+    pub fn datoms(&self) -> DatomIter<'_> {
         self.datoms.iter()
     }
 
@@ -67,10 +68,17 @@ impl Store {
     ///
     /// INV-FERR-006: the returned snapshot is frozen. Subsequent
     /// calls to `transact` or `insert` do not affect it.
+    ///
+    /// bd-h2fz: `Positional` stores clone the `Arc` (O(1)).
+    /// `OrdMap` stores clone the `OrdSet` (O(1) structural sharing).
     #[must_use]
     pub fn snapshot(&self) -> Snapshot {
+        let datoms = match &self.repr {
+            StoreRepr::Positional(ps) => SnapshotDatoms::Positional(ps.clone()),
+            StoreRepr::OrdMap { datoms, .. } => SnapshotDatoms::OrdSet(datoms.clone()),
+        };
         Snapshot {
-            datoms: self.datoms.clone(),
+            datoms,
             epoch: self.epoch,
         }
     }

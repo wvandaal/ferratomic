@@ -32,19 +32,49 @@
 
 mod apply;
 mod checkpoint;
+pub(crate) mod iter;
 mod merge;
 mod query;
 
 #[cfg(test)]
 mod tests;
 
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, sync::Arc};
 
 use ferratom::{AgentId, Attribute, AttributeDef, Datom, EntityId, Op, Schema, TxId, Value};
 use im::{OrdMap, OrdSet};
 
-pub use self::merge::SchemaConflict;
-use crate::indexes::Indexes;
+pub use self::{
+    iter::{DatomIter, DatomSetView, SnapshotDatoms},
+    merge::SchemaConflict,
+};
+use crate::{indexes::Indexes, positional::PositionalStore};
+
+// ---------------------------------------------------------------------------
+// StoreRepr — dual representation (bd-h2fz)
+// ---------------------------------------------------------------------------
+
+/// Internal representation of the datom set and indexes.
+///
+/// Cold-start-loaded stores begin as `Positional` (contiguous arrays,
+/// cache-optimal, ~6x less memory). On first write, `Store::promote()`
+/// converts to `OrdMap` (persistent tree, O(log n) insert).
+///
+/// INV-FERR-076: positional representation preserves all algebraic
+/// properties. Promotion is semantics-preserving.
+#[derive(Debug, Clone)]
+pub(crate) enum StoreRepr {
+    /// Cold-start representation: contiguous arrays with permutation indexes.
+    /// Wrapped in `Arc` for O(1) clone (snapshot creation, merge input).
+    Positional(Arc<PositionalStore>),
+    /// Write-active representation: persistent balanced tree with `OrdMap` indexes.
+    OrdMap {
+        /// Primary datom set (ADR-FERR-001).
+        datoms: OrdSet<Datom>,
+        /// Secondary indexes maintained in bijection with primary set.
+        indexes: Indexes,
+    },
+}
 
 // ---------------------------------------------------------------------------
 // TxReceipt
@@ -90,13 +120,13 @@ impl TxReceipt {
 /// An immutable point-in-time view of the store.
 ///
 /// INV-FERR-006: a snapshot is frozen at creation time. Later writes
-/// to the store do not affect it. `im::OrdSet` clone is O(1) via
-/// structural sharing (ADR-FERR-001), so snapshot creation is O(1).
+/// to the store do not affect it. For `Positional` stores, the `Arc`
+/// clone is O(1). For `OrdMap` stores, the `im::OrdSet` clone is O(1)
+/// via structural sharing (ADR-FERR-001).
 #[derive(Debug, Clone)]
 pub struct Snapshot {
-    /// Structurally-shared copy of the datom set at snapshot time.
-    /// O(1) clone via `im::OrdSet` (ADR-FERR-001).
-    datoms: OrdSet<Datom>,
+    /// Datom set at snapshot time, dispatched by representation.
+    datoms: SnapshotDatoms,
     /// Epoch at the time the snapshot was taken.
     epoch: u64,
 }
@@ -115,13 +145,18 @@ pub struct Snapshot {
 ///
 /// INV-FERR-004: the store only grows. No datom is ever removed.
 /// Retractions are new datoms with `Op::Retract`.
+///
+/// ## Adaptive representation (bd-h2fz)
+///
+/// Cold-start-loaded stores use `StoreRepr::Positional` (contiguous arrays,
+/// ~6x less memory, cache-optimal reads). On first write, `promote()`
+/// converts to `StoreRepr::OrdMap` (persistent tree, O(log n) insert).
+/// The promotion is semantics-preserving: callers observe identical behavior
+/// regardless of which representation is active.
 #[derive(Debug, Clone)]
 pub struct Store {
-    /// Primary datom set. The single source of truth.
-    /// `im::OrdSet` provides O(1) clone via structural sharing (ADR-FERR-001).
-    pub(crate) datoms: OrdSet<Datom>,
-    /// Secondary indexes maintained in bijection with the primary set.
-    pub(crate) indexes: Indexes,
+    /// Dual representation: Positional (cold start) or `OrdMap` (write-active).
+    pub(crate) repr: StoreRepr,
     /// Attribute definitions governing transact validation.
     pub(crate) schema: Schema,
     /// Monotonically increasing transaction epoch counter.
@@ -157,18 +192,16 @@ impl Store {
     /// ensuring bijection by construction. The schema is empty and
     /// epoch starts at 0.
     ///
-    /// Accepts `BTreeSet` for generator/test compatibility and converts
-    /// to `im::OrdSet` internally (ADR-FERR-001). For merge, use
-    /// [`from_merge`] which preserves schema and epoch.
+    /// Accepts `BTreeSet` for generator/test compatibility. Builds a
+    /// `PositionalStore` internally (bd-h2fz: cold-start path).
+    /// For merge, use [`from_merge`] which preserves schema and epoch.
     #[must_use]
     pub fn from_datoms(datoms: BTreeSet<Datom>) -> Self {
-        let ord_set: OrdSet<Datom> = datoms.into_iter().collect();
-        let indexes = Indexes::from_datoms(ord_set.iter());
-        let live_causal = query::build_live_causal(ord_set.iter());
+        let positional = PositionalStore::from_datoms(datoms.into_iter());
+        let live_causal = query::build_live_causal(positional.datoms().iter());
         let live_set = query::derive_live_set(&live_causal);
         Self {
-            datoms: ord_set,
-            indexes,
+            repr: StoreRepr::Positional(Arc::new(positional)),
             schema: Schema::empty(),
             epoch: 0,
             genesis_agent: AgentId::from_bytes([0u8; 16]),
@@ -183,6 +216,8 @@ impl Store {
     /// INV-FERR-013: Used by `load_checkpoint` to rebuild the store from
     /// serialized epoch, genesis agent, schema attributes, and datoms.
     /// INV-FERR-005: indexes are rebuilt from the datom set by construction.
+    ///
+    /// bd-h2fz: builds `Positional` repr for cache-optimal cold-start reads.
     #[must_use]
     pub fn from_checkpoint(
         epoch: u64,
@@ -194,13 +229,11 @@ impl Store {
         for (name, def) in schema_attrs {
             schema.define(Attribute::from(name.as_str()), def);
         }
-        let ord_set: OrdSet<Datom> = datoms.into_iter().collect();
-        let indexes = Indexes::from_datoms(ord_set.iter());
-        let live_causal = query::build_live_causal(ord_set.iter());
+        let positional = PositionalStore::from_datoms(datoms.into_iter());
+        let live_causal = query::build_live_causal(positional.datoms().iter());
         let live_set = query::derive_live_set(&live_causal);
         Self {
-            datoms: ord_set,
-            indexes,
+            repr: StoreRepr::Positional(Arc::new(positional)),
             schema,
             epoch,
             genesis_agent,
@@ -216,11 +249,13 @@ impl Store {
     /// The 19 attributes are the ONLY hardcoded elements in the engine.
     /// Every other attribute is defined by transacting datoms that reference
     /// these 19. This is the schema-as-data bootstrap (C3, C7).
+    ///
+    /// bd-h2fz: builds `Positional` repr (empty store, zero-cost).
     #[must_use]
     pub fn genesis() -> Self {
+        let positional = PositionalStore::from_datoms(std::iter::empty());
         Self {
-            datoms: OrdSet::new(),
-            indexes: Indexes::from_datoms(std::iter::empty()),
+            repr: StoreRepr::Positional(Arc::new(positional)),
             schema: crate::schema_evolution::genesis_schema(),
             epoch: 0,
             genesis_agent: AgentId::from_bytes([0u8; 16]),
@@ -230,21 +265,31 @@ impl Store {
         }
     }
 
-    /// Return a reference to the primary datom set.
+    /// Return a view of the primary datom set.
     ///
     /// INV-FERR-005: this is the authoritative set. All secondary
     /// indexes are bijective with this set.
+    ///
+    /// bd-h2fz: returns `DatomSetView` that dispatches to the active
+    /// representation. Callers use `contains`, `len`, `iter` uniformly.
     #[must_use]
-    pub fn datom_set(&self) -> &OrdSet<Datom> {
-        &self.datoms
+    pub fn datom_set(&self) -> DatomSetView<'_> {
+        match &self.repr {
+            StoreRepr::Positional(ps) => DatomSetView::Slice(ps.datoms()),
+            StoreRepr::OrdMap { datoms, .. } => DatomSetView::OrdSet(datoms),
+        }
     }
 
     /// Iterate over all datoms in the store.
     ///
     /// INV-FERR-004: the iterator yields every datom ever inserted.
     /// No datom is skipped or filtered.
-    pub fn datoms(&self) -> impl Iterator<Item = &Datom> {
-        self.datoms.iter()
+    #[must_use]
+    pub fn datoms(&self) -> DatomIter<'_> {
+        match &self.repr {
+            StoreRepr::Positional(ps) => DatomIter::Slice(ps.datoms().iter()),
+            StoreRepr::OrdMap { datoms, .. } => DatomIter::OrdSet(datoms.iter()),
+        }
     }
 
     /// Number of datoms in the store.
@@ -253,21 +298,65 @@ impl Store {
     /// of a store (modulo cloning via `from_datoms`).
     #[must_use]
     pub fn len(&self) -> usize {
-        self.datoms.len()
+        match &self.repr {
+            StoreRepr::Positional(ps) => ps.len(),
+            StoreRepr::OrdMap { datoms, .. } => datoms.len(),
+        }
     }
 
     /// Whether the store contains zero datoms.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.datoms.is_empty()
+        match &self.repr {
+            StoreRepr::Positional(ps) => ps.is_empty(),
+            StoreRepr::OrdMap { datoms, .. } => datoms.is_empty(),
+        }
     }
 
-    /// Access the secondary indexes.
+    /// Access the secondary indexes (`OrdMap` variant only).
     ///
     /// INV-FERR-005: all four indexes are bijective with the primary set.
+    ///
+    /// bd-h2fz: returns `None` for `Positional` stores (indexes are
+    /// encoded as permutation arrays, not `Indexes`). Returns `Some`
+    /// for `OrdMap` stores.
     #[must_use]
-    pub fn indexes(&self) -> &Indexes {
-        &self.indexes
+    pub fn indexes(&self) -> Option<&Indexes> {
+        match &self.repr {
+            StoreRepr::Positional(_) => None,
+            StoreRepr::OrdMap { indexes, .. } => Some(indexes),
+        }
+    }
+
+    /// Access the positional store (Positional variant only).
+    ///
+    /// Returns `Some` for cold-start-loaded stores that have not yet
+    /// been promoted, `None` for write-active stores.
+    #[must_use]
+    pub fn positional(&self) -> Option<&PositionalStore> {
+        match &self.repr {
+            StoreRepr::Positional(ps) => Some(ps),
+            StoreRepr::OrdMap { .. } => None,
+        }
+    }
+
+    /// Promote from `Positional` to `OrdMap` representation.
+    ///
+    /// Called automatically on first write (`insert`, `transact`). May also
+    /// be called explicitly when the `Indexes` API is needed (e.g., in tests
+    /// or callers that require `store.indexes()` to return `Some`).
+    /// No-op if already `OrdMap`.
+    ///
+    /// O(n log n) for `OrdSet` construction + O(n log n) for `Indexes`.
+    pub fn promote(&mut self) {
+        if let StoreRepr::Positional(ps) = &self.repr {
+            let ord_set: OrdSet<Datom> = ps.datoms().iter().cloned().collect();
+            let indexes = Indexes::from_datoms(ord_set.iter());
+            self.repr = StoreRepr::OrdMap {
+                datoms: ord_set,
+                indexes,
+            };
+        }
     }
 
     /// Access the schema.

@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{collections::BTreeSet, sync::Arc};
 
 use ferratom::{Attribute, Cardinality, Datom, EntityId, Op, TxId, Value, ValueType};
 
@@ -23,8 +23,9 @@ fn test_from_datoms_preserves_set() {
     set.insert(sample_datom("b"));
 
     let store = Store::from_datoms(set.clone());
-    let expected: im::OrdSet<Datom> = set.into_iter().collect();
-    assert_eq!(*store.datom_set(), expected);
+    let stored: BTreeSet<&Datom> = store.datom_set().iter().collect();
+    let expected: BTreeSet<&Datom> = set.iter().collect();
+    assert_eq!(stored, expected);
     assert_eq!(store.len(), 2);
 }
 
@@ -44,7 +45,10 @@ fn test_inv_ferr_031_genesis_determinism() {
         b.schema(),
         "INV-FERR-031: genesis() must produce identical schemas"
     );
-    assert_eq!(a.datom_set(), b.datom_set());
+    assert!(
+        a.datom_set() == b.datom_set(),
+        "INV-FERR-031: genesis() must produce identical datom sets"
+    );
     assert_eq!(a.epoch(), b.epoch());
 }
 
@@ -94,12 +98,16 @@ fn test_inv_ferr_005_index_bijection_from_datoms() {
     set.insert(sample_datom("y"));
     set.insert(sample_datom("z"));
 
-    let store = Store::from_datoms(set);
+    // bd-h2fz: from_datoms builds Positional repr (no OrdMap indexes).
+    // Promote to OrdMap to verify index bijection via Indexes API.
+    let mut store = Store::from_datoms(set);
+    store.promote();
     let primary: BTreeSet<&Datom> = store.datoms().collect();
-    let eavt: BTreeSet<&Datom> = store.indexes().eavt_datoms().collect();
-    let aevt: BTreeSet<&Datom> = store.indexes().aevt_datoms().collect();
-    let vaet: BTreeSet<&Datom> = store.indexes().vaet_datoms().collect();
-    let avet: BTreeSet<&Datom> = store.indexes().avet_datoms().collect();
+    let indexes = store.indexes().unwrap();
+    let eavt: BTreeSet<&Datom> = indexes.eavt_datoms().collect();
+    let aevt: BTreeSet<&Datom> = indexes.aevt_datoms().collect();
+    let vaet: BTreeSet<&Datom> = indexes.vaet_datoms().collect();
+    let avet: BTreeSet<&Datom> = indexes.avet_datoms().collect();
 
     assert_eq!(primary, eavt, "INV-FERR-005: EAVT must match primary");
     assert_eq!(primary, aevt, "INV-FERR-005: AEVT must match primary");

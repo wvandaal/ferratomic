@@ -506,14 +506,15 @@ proptest! {
         // Property 2: apply_diff with empty diff is a no-op.
         let mut store_copy = store.clone();
         let epoch_before = store_copy.epoch();
-        let datoms_before = store_copy.datom_set().clone();
+        let datoms_before: std::collections::BTreeSet<ferratom::Datom> = store_copy.datoms().cloned().collect();
         let schema_len_before = store_copy.schema().len();
 
         ae.apply_diff(&mut store_copy, &diff)
             .expect("INV-FERR-022: apply_diff with empty diff must succeed");
 
+        let datoms_after: std::collections::BTreeSet<ferratom::Datom> = store_copy.datoms().cloned().collect();
         prop_assert_eq!(
-            store_copy.datom_set(), &datoms_before,
+            datoms_after, datoms_before,
             "INV-FERR-022 violated: apply_diff with empty diff changed datom set"
         );
         prop_assert_eq!(
@@ -528,13 +529,14 @@ proptest! {
         // Property 3: apply_diff with arbitrary bytes is also a no-op.
         let mut store_arb = store.clone();
         let epoch_before_arb = store_arb.epoch();
-        let datoms_before_arb = store_arb.datom_set().clone();
+        let datoms_before_arb: std::collections::BTreeSet<ferratom::Datom> = store_arb.datoms().cloned().collect();
 
         ae.apply_diff(&mut store_arb, &arbitrary_bytes)
             .expect("INV-FERR-022: apply_diff with arbitrary bytes must succeed");
 
+        let datoms_after_arb: std::collections::BTreeSet<ferratom::Datom> = store_arb.datoms().cloned().collect();
         prop_assert_eq!(
-            store_arb.datom_set(), &datoms_before_arb,
+            datoms_after_arb, datoms_before_arb,
             "INV-FERR-022 violated: apply_diff with arbitrary bytes changed datom set"
         );
         prop_assert_eq!(

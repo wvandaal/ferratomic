@@ -568,8 +568,8 @@ fn build_forward_and_reverse_stores(datoms: &[Datom]) -> (Store, Store) {
 
 /// Assert that EAVT index iteration matches field-by-field between two stores.
 fn assert_eavt_field_convergence(forward: &Store, reverse: &Store) {
-    let eavt_f: Vec<&Datom> = forward.indexes().eavt_datoms().collect();
-    let eavt_r: Vec<&Datom> = reverse.indexes().eavt_datoms().collect();
+    let eavt_f: Vec<&Datom> = forward.indexes().unwrap().eavt_datoms().collect();
+    let eavt_r: Vec<&Datom> = reverse.indexes().unwrap().eavt_datoms().collect();
     assert_eq!(
         eavt_f.len(),
         eavt_r.len(),
@@ -637,18 +637,18 @@ fn test_inv_ferr_010_convergence_index_level() {
     assert_eavt_field_convergence(&forward, &reverse);
 
     assert_secondary_index_convergence(
-        forward.indexes().aevt_datoms().collect(),
-        reverse.indexes().aevt_datoms().collect(),
+        forward.indexes().unwrap().aevt_datoms().collect(),
+        reverse.indexes().unwrap().aevt_datoms().collect(),
         "AEVT",
     );
     assert_secondary_index_convergence(
-        forward.indexes().avet_datoms().collect(),
-        reverse.indexes().avet_datoms().collect(),
+        forward.indexes().unwrap().avet_datoms().collect(),
+        reverse.indexes().unwrap().avet_datoms().collect(),
         "AVET",
     );
     assert_secondary_index_convergence(
-        forward.indexes().vaet_datoms().collect(),
-        reverse.indexes().vaet_datoms().collect(),
+        forward.indexes().unwrap().vaet_datoms().collect(),
+        reverse.indexes().unwrap().vaet_datoms().collect(),
         "VAET",
     );
 }

@@ -53,11 +53,13 @@ proptest! {
         let path = dir.path().join("test.chkp");
 
         write_checkpoint(&store, &path).unwrap();
-        let loaded = load_checkpoint(&path).unwrap();
+        let mut loaded = load_checkpoint(&path).unwrap();
 
+        // bd-h2fz: from_checkpoint builds Positional. Promote to verify bijection.
+        loaded.promote();
         // Index bijection (derived from datoms, so this is a secondary check).
         prop_assert!(
-            loaded.indexes().verify_bijection(),
+            loaded.indexes().unwrap().verify_bijection(),
             "INV-FERR-005: index bijection violated after checkpoint load"
         );
         // INV-FERR-013: exact state equality — datoms, schema, epoch.

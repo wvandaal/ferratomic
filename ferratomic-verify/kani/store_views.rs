@@ -26,13 +26,16 @@ fn index_bijection() {
     kani::assume(count <= 4);
     let datoms = concrete_datom_set(count);
 
-    let store = Store::from_datoms(datoms.clone());
+    let mut store = Store::from_datoms(datoms.clone());
+    // bd-h2fz: promote to OrdMap to verify index bijection.
+    store.promote();
 
     let primary: BTreeSet<&Datom> = store.datoms().collect();
-    let eavt: BTreeSet<&Datom> = store.indexes().eavt_datoms().collect();
-    let aevt: BTreeSet<&Datom> = store.indexes().aevt_datoms().collect();
-    let vaet: BTreeSet<&Datom> = store.indexes().vaet_datoms().collect();
-    let avet: BTreeSet<&Datom> = store.indexes().avet_datoms().collect();
+    let indexes = store.indexes().unwrap();
+    let eavt: BTreeSet<&Datom> = indexes.eavt_datoms().collect();
+    let aevt: BTreeSet<&Datom> = indexes.aevt_datoms().collect();
+    let vaet: BTreeSet<&Datom> = indexes.vaet_datoms().collect();
+    let avet: BTreeSet<&Datom> = indexes.avet_datoms().collect();
 
     for d in primary.iter().copied() {
         assert!(eavt.contains(d));
@@ -160,13 +163,15 @@ fn index_backend_order_independence() {
     let mut set_ab = BTreeSet::new();
     set_ab.insert(d1.clone());
     set_ab.insert(d2.clone());
-    let store_ab = Store::from_datoms(set_ab);
+    let mut store_ab = Store::from_datoms(set_ab);
+    store_ab.promote();
 
     // Insert in order d2, d1.
     let mut set_ba = BTreeSet::new();
     set_ba.insert(d2);
     set_ba.insert(d1);
-    let store_ba = Store::from_datoms(set_ba);
+    let mut store_ba = Store::from_datoms(set_ba);
+    store_ba.promote();
 
     // Primary datom sets must be identical.
     assert_eq!(
@@ -176,20 +181,22 @@ fn index_backend_order_independence() {
     );
 
     // All four index iterators must yield the same datoms.
-    let eavt_ab: Vec<_> = store_ab.indexes().eavt_datoms().collect();
-    let eavt_ba: Vec<_> = store_ba.indexes().eavt_datoms().collect();
+    let idx_ab = store_ab.indexes().unwrap();
+    let idx_ba = store_ba.indexes().unwrap();
+    let eavt_ab: Vec<_> = idx_ab.eavt_datoms().collect();
+    let eavt_ba: Vec<_> = idx_ba.eavt_datoms().collect();
     assert_eq!(eavt_ab, eavt_ba, "INV-FERR-025: EAVT must match");
 
-    let aevt_ab: Vec<_> = store_ab.indexes().aevt_datoms().collect();
-    let aevt_ba: Vec<_> = store_ba.indexes().aevt_datoms().collect();
+    let aevt_ab: Vec<_> = idx_ab.aevt_datoms().collect();
+    let aevt_ba: Vec<_> = idx_ba.aevt_datoms().collect();
     assert_eq!(aevt_ab, aevt_ba, "INV-FERR-025: AEVT must match");
 
-    let vaet_ab: Vec<_> = store_ab.indexes().vaet_datoms().collect();
-    let vaet_ba: Vec<_> = store_ba.indexes().vaet_datoms().collect();
+    let vaet_ab: Vec<_> = idx_ab.vaet_datoms().collect();
+    let vaet_ba: Vec<_> = idx_ba.vaet_datoms().collect();
     assert_eq!(vaet_ab, vaet_ba, "INV-FERR-025: VAET must match");
 
-    let avet_ab: Vec<_> = store_ab.indexes().avet_datoms().collect();
-    let avet_ba: Vec<_> = store_ba.indexes().avet_datoms().collect();
+    let avet_ab: Vec<_> = idx_ab.avet_datoms().collect();
+    let avet_ba: Vec<_> = idx_ba.avet_datoms().collect();
     assert_eq!(avet_ab, avet_ba, "INV-FERR-025: AVET must match");
 }
 
@@ -227,7 +234,7 @@ fn eavt_lookup_correctness() {
 
     // For every datom in the committed transaction, the EAVT index
     // must return that exact datom when queried by its key.
-    let indexes = store.indexes();
+    let indexes = store.indexes().unwrap();
     for datom in &committed_datoms {
         let key = EavtKey::from_datom(datom);
         let found = indexes.eavt().backend_get(&key);

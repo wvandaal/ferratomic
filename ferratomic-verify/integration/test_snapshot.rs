@@ -127,17 +127,17 @@ fn test_inv_ferr_005_bijection_after_transact() {
 
         // Verify bijection after every transaction.
         assert!(
-            store.indexes().verify_bijection(),
+            store.indexes().unwrap().verify_bijection(),
             "INV-FERR-005: index bijection violated after transact"
         );
     }
 
     // Final explicit 4-index cardinality check.
     let primary_count = store.len();
-    let eavt_count = store.indexes().eavt().len();
-    let aevt_count = store.indexes().aevt().len();
-    let vaet_count = store.indexes().vaet().len();
-    let avet_count = store.indexes().avet().len();
+    let eavt_count = store.indexes().unwrap().eavt().len();
+    let aevt_count = store.indexes().unwrap().aevt().len();
+    let vaet_count = store.indexes().unwrap().vaet().len();
+    let avet_count = store.indexes().unwrap().avet().len();
 
     assert_eq!(
         eavt_count, primary_count,
@@ -840,7 +840,7 @@ fn test_inv_ferr_025_index_backend_trait() {
     }
 
     assert!(
-        store.indexes().verify_bijection(),
+        store.indexes().unwrap().verify_bijection(),
         "INV-FERR-025: index bijection violated after 5 transactions"
     );
 }

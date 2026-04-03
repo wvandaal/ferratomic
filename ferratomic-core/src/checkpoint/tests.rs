@@ -16,7 +16,7 @@ fn test_inv_ferr_013_roundtrip_empty() {
 
     assert_eq!(loaded.epoch(), store.epoch());
     assert_eq!(loaded.len(), store.len());
-    assert_eq!(*loaded.datom_set(), *store.datom_set());
+    assert_eq!(loaded.datom_set(), store.datom_set());
     assert_eq!(loaded.schema().len(), store.schema().len());
 }
 
@@ -37,11 +37,11 @@ fn test_inv_ferr_013_roundtrip_with_datoms() {
     let path = dir.path().join("checkpoint.chkp");
 
     write_checkpoint(&store, &path).unwrap();
-    let loaded = load_checkpoint(&path).unwrap();
+    let mut loaded = load_checkpoint(&path).unwrap();
 
     assert_eq!(
-        *loaded.datom_set(),
-        *store.datom_set(),
+        loaded.datom_set(),
+        store.datom_set(),
         "INV-FERR-013: datom set must be identical after roundtrip"
     );
     assert_eq!(
@@ -54,12 +54,15 @@ fn test_inv_ferr_013_roundtrip_with_datoms() {
         store.schema().len(),
         "INV-FERR-013: schema must be preserved"
     );
+    // bd-h2fz: from_checkpoint builds Positional repr. Promote to
+    // OrdMap to verify index bijection via the Indexes API.
+    loaded.promote();
     assert!(
-        loaded.indexes().verify_bijection(),
+        loaded.indexes().unwrap().verify_bijection(),
         "INV-FERR-005: all indexes must have same cardinality after load"
     );
     assert_eq!(
-        loaded.indexes().len(),
+        loaded.indexes().unwrap().len(),
         loaded.len(),
         "INV-FERR-005: index len must match primary after load"
     );

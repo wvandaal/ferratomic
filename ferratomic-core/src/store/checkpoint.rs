@@ -63,8 +63,8 @@ mod tests {
             .unwrap_or_else(|_| panic!("INV-FERR-013: {label} deserialization must succeed"));
 
         assert_eq!(
-            *loaded.datom_set(),
-            *original.datom_set(),
+            loaded.datom_set(),
+            original.datom_set(),
             "INV-FERR-013: {label} datom set must survive bytes round-trip"
         );
         assert_eq!(
@@ -105,13 +105,16 @@ mod tests {
 
         let bytes = assert_bytes_roundtrip(&store, "datoms");
 
-        let loaded = Store::from_checkpoint_bytes(&bytes).expect("reload ok");
+        // bd-h2fz: from_checkpoint builds Positional repr. Promote to
+        // OrdMap to verify index bijection via the Indexes API.
+        let mut loaded = Store::from_checkpoint_bytes(&bytes).expect("reload ok");
+        loaded.promote();
         assert!(
-            loaded.indexes().verify_bijection(),
+            loaded.indexes().unwrap().verify_bijection(),
             "INV-FERR-005: all indexes must have same cardinality after bytes round-trip"
         );
         assert_eq!(
-            loaded.indexes().len(),
+            loaded.indexes().unwrap().len(),
             loaded.len(),
             "INV-FERR-005: index len must match primary after bytes round-trip"
         );

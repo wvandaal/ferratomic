@@ -33,14 +33,21 @@ impl Store {
     /// INV-FERR-004: the store never shrinks.
     /// INV-FERR-005: the datom is inserted into all four secondary indexes.
     ///
+    /// bd-h2fz: promotes from Positional to `OrdMap` on first write, then
+    /// inserts into the `OrdMap` variant.
+    ///
     /// Used by convergence tests that build stores by individual insertion.
     pub fn insert(&mut self, datom: &Datom) {
+        // bd-h2fz: lazy promotion — Positional → OrdMap on first write.
+        self.promote();
         // INV-FERR-005: primary first, then indexes. If a panic occurs
         // between the two operations, the datom is in primary but missing
         // from indexes (recoverable by rebuild) rather than a phantom
         // index entry (no primary counterpart).
-        self.datoms.insert(datom.clone());
-        self.indexes.insert(datom);
+        if let super::StoreRepr::OrdMap { datoms, indexes } = &mut self.repr {
+            datoms.insert(datom.clone());
+            indexes.insert(datom);
+        }
         // INV-FERR-029: maintain LIVE set incrementally.
         self.live_apply(datom);
     }
@@ -118,12 +125,16 @@ impl Store {
         // INV-FERR-009: evolve schema from schema-defining datoms.
         crate::schema_evolution::evolve_schema(&mut self.schema, &all_datoms)?;
 
+        // bd-h2fz: lazy promotion — Positional → OrdMap on first write.
+        self.promote();
         // INV-FERR-004/005: insert into primary then indexes (bd-4pg).
         // MI-007: Insert from references, then move vec into receipt
         // (eliminates receipt_datoms.clone() double-clone).
         for datom in &all_datoms {
-            self.datoms.insert(datom.clone());
-            self.indexes.insert(datom);
+            if let super::StoreRepr::OrdMap { datoms, indexes } = &mut self.repr {
+                datoms.insert(datom.clone());
+                indexes.insert(datom);
+            }
             self.live_apply(datom);
         }
 
@@ -239,7 +250,7 @@ mod tests {
         store.insert(&sample_datom("inserted"));
 
         let primary: BTreeSet<&Datom> = store.datoms().collect();
-        let eavt: BTreeSet<&Datom> = store.indexes().eavt_datoms().collect();
+        let eavt: BTreeSet<&Datom> = store.indexes().unwrap().eavt_datoms().collect();
         assert_eq!(
             primary, eavt,
             "INV-FERR-005: EAVT must match primary after insert"

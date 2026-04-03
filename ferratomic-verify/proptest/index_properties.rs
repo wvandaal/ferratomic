@@ -20,12 +20,17 @@ use im::OrdMap;
 use proptest::prelude::*;
 
 /// Verify index bijection: primary set == each secondary index set.
+/// bd-h2fz: promotes a clone to OrdMap if needed (Positional stores
+/// have no OrdMap indexes, so we promote first).
 fn verify_index_bijection(store: &Store) -> bool {
-    let primary: BTreeSet<&Datom> = store.datoms().collect();
-    let eavt: BTreeSet<&Datom> = store.indexes().eavt_datoms().collect();
-    let aevt: BTreeSet<&Datom> = store.indexes().aevt_datoms().collect();
-    let vaet: BTreeSet<&Datom> = store.indexes().vaet_datoms().collect();
-    let avet: BTreeSet<&Datom> = store.indexes().avet_datoms().collect();
+    let mut promoted = store.clone();
+    promoted.promote();
+    let primary: BTreeSet<&Datom> = promoted.datoms().collect();
+    let indexes = promoted.indexes().unwrap();
+    let eavt: BTreeSet<&Datom> = indexes.eavt_datoms().collect();
+    let aevt: BTreeSet<&Datom> = indexes.aevt_datoms().collect();
+    let vaet: BTreeSet<&Datom> = indexes.vaet_datoms().collect();
+    let avet: BTreeSet<&Datom> = indexes.avet_datoms().collect();
 
     primary == eavt && primary == aevt && primary == vaet && primary == avet
 }
@@ -80,18 +85,22 @@ proptest! {
     fn test_inv_ferr_005_index_bijection(
         store in arb_store(50),
     ) {
+        // bd-h2fz: arb_store builds Positional. Promote to verify OrdMap indexes.
+        let mut store = store;
+        store.promote();
         // (a) The indexes verify_bijection must succeed.
         prop_assert!(
-            store.indexes().verify_bijection(),
+            store.indexes().unwrap().verify_bijection(),
             "INV-FERR-005: index bijection violated for a valid store"
         );
 
         // (b) Explicit 4-index cardinality check against primary.
         let primary_count = store.len();
-        let eavt_count = store.indexes().eavt().len();
-        let aevt_count = store.indexes().aevt().len();
-        let vaet_count = store.indexes().vaet().len();
-        let avet_count = store.indexes().avet().len();
+        let indexes = store.indexes().unwrap();
+        let eavt_count = indexes.eavt().len();
+        let aevt_count = indexes.aevt().len();
+        let vaet_count = indexes.vaet().len();
+        let avet_count = indexes.avet().len();
 
         prop_assert_eq!(
             eavt_count, primary_count,
@@ -341,10 +350,12 @@ proptest! {
     fn inv_ferr_027_read_latency_lookup(
         datoms in prop::collection::vec(arb_datom(), 1..100),
     ) {
-        let store = Store::from_datoms(datoms.iter().cloned().collect());
+        let mut store = Store::from_datoms(datoms.iter().cloned().collect());
+        // bd-h2fz: promote to OrdMap to verify index lookups.
+        store.promote();
 
         // Every inserted datom must be findable in the EAVT index.
-        let eavt_datoms: BTreeSet<&Datom> = store.indexes().eavt_datoms().collect();
+        let eavt_datoms: BTreeSet<&Datom> = store.indexes().unwrap().eavt_datoms().collect();
         for d in &datoms {
             prop_assert!(
                 eavt_datoms.contains(d),
@@ -421,11 +432,15 @@ proptest! {
     fn inv_ferr_071_sorted_vec_indexes_full_pipeline(
         store in arb_store(50),
     ) {
+        // bd-h2fz: promote to OrdMap to compare against SortedVecIndexes.
+        let mut store = store;
+        store.promote();
         let mut sv: SortedVecIndexes = SortedVecIndexes::from_datoms(store.datoms());
         sv.sort_all();
 
+        let indexes = store.indexes().unwrap();
         prop_assert_eq!(
-            sv.len(), store.indexes().len(),
+            sv.len(), indexes.len(),
             "INV-FERR-071: SortedVecIndexes len != OrdMap Indexes len"
         );
         prop_assert!(
@@ -435,21 +450,21 @@ proptest! {
 
         // EAVT: ordered iteration must match (catches sort-order bugs).
         let sv_eavt: Vec<_> = sv.eavt_datoms().collect();
-        let om_eavt: Vec<_> = store.indexes().eavt_datoms().collect();
+        let om_eavt: Vec<_> = indexes.eavt_datoms().collect();
         prop_assert_eq!(sv_eavt, om_eavt,
             "INV-FERR-071: EAVT iteration order differs");
 
         // Remaining indexes: set equality (ordering is Ord-derived, same argument).
         let sv_aevt: BTreeSet<_> = sv.aevt_datoms().collect();
-        let om_aevt: BTreeSet<_> = store.indexes().aevt_datoms().collect();
+        let om_aevt: BTreeSet<_> = indexes.aevt_datoms().collect();
         prop_assert_eq!(sv_aevt, om_aevt, "INV-FERR-071: AEVT datom sets differ");
 
         let sv_vaet: BTreeSet<_> = sv.vaet_datoms().collect();
-        let om_vaet: BTreeSet<_> = store.indexes().vaet_datoms().collect();
+        let om_vaet: BTreeSet<_> = indexes.vaet_datoms().collect();
         prop_assert_eq!(sv_vaet, om_vaet, "INV-FERR-071: VAET datom sets differ");
 
         let sv_avet: BTreeSet<_> = sv.avet_datoms().collect();
-        let om_avet: BTreeSet<_> = store.indexes().avet_datoms().collect();
+        let om_avet: BTreeSet<_> = indexes.avet_datoms().collect();
         prop_assert_eq!(sv_avet, om_avet, "INV-FERR-071: AVET datom sets differ");
     }
 

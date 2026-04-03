@@ -5,10 +5,12 @@
 //! INV-FERR-009: merged stores preserve the union of both schemas.
 //! INV-FERR-010: merge convergence — SEC follows from 001+002+003.
 
-use ferratom::{Attribute, AttributeDef, Schema};
+use std::sync::Arc;
 
-use super::Store;
-use crate::indexes::Indexes;
+use ferratom::{Attribute, AttributeDef, Datom, Schema};
+
+use super::{Store, StoreRepr};
+use crate::positional::{merge_positional, PositionalStore};
 
 /// INV-FERR-043: A deterministic schema conflict discovered during merge.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -36,10 +38,13 @@ impl Store {
     /// INV-FERR-007: epoch is `max(a.epoch, b.epoch)` -- the merged store is at
     /// least as current as either input.
     /// INV-FERR-010: this constructor is the SEC convergence mechanism.
+    ///
+    /// bd-h2fz: merge ALWAYS produces a Positional result. The 4-way match
+    /// on (a.repr, b.repr) extracts datom slices/iterators and feeds them
+    /// into `merge_positional` or `PositionalStore::from_datoms`.
     #[must_use]
     pub fn from_merge(a: &Store, b: &Store) -> Self {
-        let datoms = a.datoms.clone().union(b.datoms.clone());
-        let indexes = Indexes::from_datoms(datoms.iter());
+        let positional = merge_repr(&a.repr, &b.repr);
         let schema_merge = merge_schemas(&a.schema, &b.schema);
         let epoch = a.epoch.max(b.epoch);
         let genesis_agent = std::cmp::min(a.genesis_agent, b.genesis_agent);
@@ -50,14 +55,36 @@ impl Store {
         let live_set = super::query::derive_live_set(&live_causal);
 
         Self {
-            datoms,
-            indexes,
+            repr: StoreRepr::Positional(Arc::new(positional)),
             schema: schema_merge.schema,
             epoch,
             genesis_agent,
             live_causal,
             live_set,
             schema_conflicts: schema_merge.conflicts,
+        }
+    }
+}
+
+/// bd-h2fz: 4-way match on repr variants for merge.
+///
+/// Both `Positional` → `merge_positional` (optimal: merge-sort on contiguous arrays).
+/// Mixed or both `OrdMap` → collect into a single datom iterator, build fresh
+/// `PositionalStore`. The result is always `Positional`.
+fn merge_repr(a: &StoreRepr, b: &StoreRepr) -> PositionalStore {
+    match (a, b) {
+        (StoreRepr::Positional(pa), StoreRepr::Positional(pb)) => merge_positional(pa, pb),
+        (StoreRepr::Positional(pa), StoreRepr::OrdMap { datoms: db, .. }) => {
+            let combined: Vec<Datom> = pa.datoms().iter().chain(db.iter()).cloned().collect();
+            PositionalStore::from_datoms(combined.into_iter())
+        }
+        (StoreRepr::OrdMap { datoms: da, .. }, StoreRepr::Positional(pb)) => {
+            let combined: Vec<Datom> = da.iter().chain(pb.datoms().iter()).cloned().collect();
+            PositionalStore::from_datoms(combined.into_iter())
+        }
+        (StoreRepr::OrdMap { datoms: da, .. }, StoreRepr::OrdMap { datoms: db, .. }) => {
+            let combined: Vec<Datom> = da.iter().chain(db.iter()).cloned().collect();
+            PositionalStore::from_datoms(combined.into_iter())
         }
     }
 }

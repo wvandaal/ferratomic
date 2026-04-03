@@ -30,7 +30,10 @@ fn build_shifted_store(start: usize, count: usize) -> Store {
     let datoms = (start..start + count)
         .map(doc_datom)
         .collect::<BTreeSet<_>>();
-    Store::from_datoms(datoms)
+    let mut store = Store::from_datoms(datoms);
+    // bd-h2fz: promote to OrdMap so indexes() returns Some.
+    store.promote();
+    store
 }
 
 fn build_store(count: usize) -> Store {
@@ -54,7 +57,7 @@ fn bench_read_latency(c: &mut Criterion) {
             &datom_count,
             |b, &_datom_count| {
                 b.iter(|| {
-                    let datom = store.indexes().eavt().get(black_box(&key));
+                    let datom = store.indexes().unwrap().eavt().get(black_box(&key));
                     assert!(
                         datom.is_some(),
                         "INV-FERR-027: benchmark lookup key must exist"

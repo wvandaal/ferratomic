@@ -15,12 +15,18 @@ use ferratomic_verify::generators::*;
 use proptest::prelude::*;
 
 /// Verify index bijection: primary set == each secondary index set.
+/// bd-h2fz: promotes a clone to OrdMap if needed (Positional stores
+/// have no OrdMap indexes, but their permutation arrays are built
+/// from the same canonical sort, so bijection is by construction).
 fn verify_index_bijection(store: &Store) -> bool {
-    let primary: BTreeSet<&Datom> = store.datoms().collect();
-    let eavt: BTreeSet<&Datom> = store.indexes().eavt_datoms().collect();
-    let aevt: BTreeSet<&Datom> = store.indexes().aevt_datoms().collect();
-    let vaet: BTreeSet<&Datom> = store.indexes().vaet_datoms().collect();
-    let avet: BTreeSet<&Datom> = store.indexes().avet_datoms().collect();
+    let mut promoted = store.clone();
+    promoted.promote();
+    let primary: BTreeSet<&Datom> = promoted.datoms().collect();
+    let indexes = promoted.indexes().unwrap();
+    let eavt: BTreeSet<&Datom> = indexes.eavt_datoms().collect();
+    let aevt: BTreeSet<&Datom> = indexes.aevt_datoms().collect();
+    let vaet: BTreeSet<&Datom> = indexes.vaet_datoms().collect();
+    let avet: BTreeSet<&Datom> = indexes.avet_datoms().collect();
 
     primary == eavt && primary == aevt && primary == vaet && primary == avet
 }
@@ -158,7 +164,7 @@ proptest! {
         initial in arb_store(50),
         tx in arb_transaction(),
     ) {
-        let pre_datoms = initial.datom_set().clone();
+        let pre_datoms: std::collections::BTreeSet<ferratom::Datom> = initial.datoms().cloned().collect();
         let pre_len = initial.len();
 
         let mut store = initial;
@@ -204,13 +210,13 @@ proptest! {
             b.len(), merged.len()
         );
 
-        for d in a.datom_set() {
+        for d in a.datom_set().iter() {
             prop_assert!(
                 merged.datom_set().contains(d),
                 "INV-FERR-004 violated: datom from A missing in merge result"
             );
         }
-        for d in b.datom_set() {
+        for d in b.datom_set().iter() {
             prop_assert!(
                 merged.datom_set().contains(d),
                 "INV-FERR-004 violated: datom from B missing in merge result"

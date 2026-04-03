@@ -161,7 +161,12 @@ impl Database<Ready> {
         let count = self.transaction_count.load(Ordering::Acquire);
         if count % 100 == 0 {
             let published_store = self.current.load();
-            if !published_store.indexes().verify_bijection() {
+            // bd-h2fz: indexes() returns Option — None for Positional stores
+            // (bijection maintained by PositionalStore construction, not OrdMap indexes).
+            if published_store
+                .indexes()
+                .is_some_and(|idx| !idx.verify_bijection())
+            {
                 return Err(FerraError::InvariantViolation {
                     invariant: "INV-FERR-005".to_string(),
                     details: format!(

@@ -60,7 +60,10 @@ fn shard_equivalence() {
     let shards = shard(&store, shard_count);
     let recomposed = unshard(&shards);
 
-    assert_eq!(store.datom_set(), recomposed.datom_set());
+    assert!(
+        store.datom_set() == recomposed.datom_set(),
+        "INV-FERR-017: shard/unshard round-trip must preserve datom set"
+    );
 }
 
 /// INV-FERR-017: shards form a pairwise-disjoint partition.
@@ -80,10 +83,11 @@ fn shard_disjointness() {
 
     for i in 0..shards.len() {
         for j in (i + 1)..shards.len() {
-            let intersection = shards[i]
-                .datom_set()
-                .clone()
-                .intersection(shards[j].datom_set().clone());
+            // bd-h2fz: datom_set() returns DatomSetView, not OrdSet.
+            // Convert to BTreeSet<&Datom> for intersection check.
+            let set_i: BTreeSet<&Datom> = shards[i].datom_set().iter().collect();
+            let set_j: BTreeSet<&Datom> = shards[j].datom_set().iter().collect();
+            let intersection: BTreeSet<_> = set_i.intersection(&set_j).collect();
             assert!(
                 intersection.is_empty(),
                 "INV-FERR-017: shards {} and {} share datoms",

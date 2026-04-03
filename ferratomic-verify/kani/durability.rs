@@ -416,7 +416,7 @@ fn cold_start_checkpoint_roundtrip() {
     let bytes = store
         .to_checkpoint_bytes()
         .expect("INV-FERR-028: checkpoint serialization must succeed");
-    let loaded = Store::from_checkpoint_bytes(&bytes)
+    let mut loaded = Store::from_checkpoint_bytes(&bytes)
         .expect("INV-FERR-028: checkpoint deserialization must succeed");
 
     assert_eq!(
@@ -429,8 +429,10 @@ fn cold_start_checkpoint_roundtrip() {
         loaded.epoch(),
         "INV-FERR-028: epoch must survive cold-start round-trip"
     );
+    // bd-h2fz: from_checkpoint builds Positional. Promote to verify bijection.
+    loaded.promote();
     assert!(
-        loaded.indexes().verify_bijection(),
+        loaded.indexes().unwrap().verify_bijection(),
         "INV-FERR-028: indexes must be bijective after cold start"
     );
 }

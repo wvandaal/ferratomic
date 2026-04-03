@@ -44,7 +44,8 @@ fn null_anti_entropy_diff_empty() {
 fn null_anti_entropy_identity() {
     let mut store = Store::genesis();
     let epoch_before = store.epoch();
-    let datoms_before = store.datom_set().clone();
+    let datoms_before: std::collections::BTreeSet<ferratom::Datom> =
+        store.datoms().cloned().collect();
     let ae = NullAntiEntropy;
 
     // Apply an empty diff.
@@ -56,9 +57,10 @@ fn null_anti_entropy_identity() {
         epoch_before,
         "INV-FERR-022: NullAntiEntropy must not change epoch"
     );
+    let datoms_after: std::collections::BTreeSet<ferratom::Datom> =
+        store.datoms().cloned().collect();
     assert_eq!(
-        *store.datom_set(),
-        datoms_before,
+        datoms_after, datoms_before,
         "INV-FERR-022: NullAntiEntropy must not change datom set"
     );
 
@@ -71,9 +73,10 @@ fn null_anti_entropy_identity() {
         epoch_before,
         "INV-FERR-022: NullAntiEntropy must not change epoch (non-empty diff)"
     );
+    let datoms_after_nonempty: std::collections::BTreeSet<ferratom::Datom> =
+        store.datoms().cloned().collect();
     assert_eq!(
-        *store.datom_set(),
-        datoms_before,
+        datoms_after_nonempty, datoms_before,
         "INV-FERR-022: NullAntiEntropy must not change datom set (non-empty diff)"
     );
 }

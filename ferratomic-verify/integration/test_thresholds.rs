@@ -138,7 +138,7 @@ fn measure_p99_read_latency_ns(
         .map(|i| EntityId::from_content(format!("entity-{}", i % datom_count).as_bytes()))
         .collect();
 
-    let eavt = store.indexes().eavt();
+    let eavt = store.indexes().unwrap().eavt();
 
     // Warm up: fault in pages / warm caches.
     let warmup_key = EavtKey::from_datom(&ferratom::Datom::new(
@@ -198,7 +198,10 @@ fn build_store_batch(count: usize) -> Store {
         })
         .collect();
 
-    Store::from_datoms(datoms)
+    let mut store = Store::from_datoms(datoms);
+    // bd-h2fz: promote to OrdMap so indexes() returns Some for benchmarks.
+    store.promote();
+    store
 }
 
 // ---------------------------------------------------------------------------
