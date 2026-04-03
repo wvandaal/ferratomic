@@ -243,6 +243,40 @@ impl Store {
         }
     }
 
+    /// Reconstruct a store from V3 checkpoint data (zero-construction cold start).
+    ///
+    /// INV-FERR-013: Used by V3 checkpoint deserialization. The datoms are
+    /// already sorted and the LIVE bitvector is pre-computed, so this
+    /// constructor builds a `PositionalStore` without re-sorting or
+    /// recomputing liveness.
+    ///
+    /// INV-FERR-076: `from_sorted_with_live` is used for the positional store.
+    #[must_use]
+    pub fn from_checkpoint_v3(
+        epoch: u64,
+        genesis_agent: AgentId,
+        schema_attrs: Vec<(String, AttributeDef)>,
+        sorted_datoms: Vec<Datom>,
+        live_bits: bitvec::prelude::BitVec<u64, bitvec::prelude::Lsb0>,
+    ) -> Self {
+        let mut schema = Schema::empty();
+        for (name, def) in schema_attrs {
+            schema.define(Attribute::from(name.as_str()), def);
+        }
+        let positional = PositionalStore::from_sorted_with_live(sorted_datoms, live_bits);
+        let live_causal = query::build_live_causal(positional.datoms().iter());
+        let live_set = query::derive_live_set(&live_causal);
+        Self {
+            repr: StoreRepr::Positional(Arc::new(positional)),
+            schema,
+            epoch,
+            genesis_agent,
+            live_causal,
+            live_set,
+            schema_conflicts: Vec::new(),
+        }
+    }
+
     /// Deterministic genesis store with the 19 axiomatic meta-schema attributes.
     ///
     /// INV-FERR-031: every call to `genesis()` produces an identical store.

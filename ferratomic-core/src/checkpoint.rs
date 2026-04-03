@@ -5,7 +5,16 @@
 //! through serialization and deserialization. No datom is lost, added,
 //! or reordered.
 //!
-//! # File Format
+//! ## Format dispatch
+//!
+//! Deserialization dispatches on the first 4 magic bytes:
+//! - `b"CHKP"` — V2 (legacy)
+//! - `b"CHK3"` — V3 (pre-sorted, LIVE bitvector persisted)
+//!
+//! Serialization always produces V3. V2 read support is retained for
+//! backward compatibility with existing checkpoint files.
+//!
+//! ## V2 File Format (legacy)
 //!
 //! ```text
 //! +------------------+
@@ -23,28 +32,42 @@
 //! +------------------+
 //! ```
 //!
+//! ## V3 File Format
+//!
+//! See [`v3`] module documentation for the V3 wire format.
+//!
 //! CR-005: The payload uses bincode serialization (matching the WAL format)
 //! for INV-FERR-028 compliance. At 100M datoms, bincode produces ~20GB
 //! (parseable in <5s on `NVMe`). Per ADR-FERR-010, deserialization goes through
-//! wire types (`WireCheckpointPayload`) for trust boundary enforcement.
+//! wire types (`WireCheckpointPayload` / `V3PayloadRead`) for trust boundary
+//! enforcement.
 
+#[cfg(test)]
+use std::collections::BTreeMap;
 use std::{
-    collections::BTreeMap,
     fs::File,
     io::{BufWriter, Write as IoWrite},
     path::Path,
 };
 
-use ferratom::{AgentId, AttributeDef, Datom, FerraError};
+use ferratom::FerraError;
+#[cfg(test)]
+use ferratom::{AgentId, AttributeDef, Datom};
+#[cfg(test)]
 use serde::Serialize;
 
 use crate::store::Store;
 
+pub(crate) mod v3;
+
 #[cfg(test)]
 mod tests;
 
-/// Checkpoint file magic bytes: ASCII "CHKP".
+/// V2 checkpoint file magic bytes: ASCII "CHKP".
 const CHECKPOINT_MAGIC: [u8; 4] = *b"CHKP";
+
+/// V3 checkpoint file magic bytes: ASCII "CHK3".
+const V3_MAGIC: [u8; 4] = *b"CHK3";
 
 /// Checkpoint format version. Little-endian u16. V2: u64 length field.
 const CHECKPOINT_VERSION: u16 = 2;
@@ -58,12 +81,13 @@ const HASH_SIZE: usize = 32;
 /// Minimum checkpoint file size: header + hash (empty payload).
 const MIN_FILE_SIZE: usize = HEADER_SIZE + HASH_SIZE;
 
-/// JSON-serializable checkpoint payload (serialization only).
+/// V2 checkpoint payload (serialization only, test use).
 ///
 /// ADR-FERR-010: Deserialization uses `WireCheckpointPayload` from the
 /// `ferratom::wire` module instead. This struct retains `Serialize` only.
 /// Schema attributes are sorted by name for deterministic output.
 /// Datoms are in `OrdSet` iteration order (`Datom`'s `Ord` impl = EAVT).
+#[cfg(test)]
 #[derive(Serialize)]
 struct CheckpointPayload {
     /// Schema attributes as sorted (name, definition) pairs.
@@ -74,11 +98,12 @@ struct CheckpointPayload {
     datoms: Vec<Datom>,
 }
 
-/// Build and serialize the checkpoint payload (schema + agent + datoms).
+/// Build and serialize the V2 checkpoint payload (schema + agent + datoms).
 ///
 /// INV-FERR-013: schema is sorted by attribute name for determinism.
 /// Datoms are in `OrdSet` iteration order (`Datom::Ord` = EAVT).
 /// CR-005: bincode for INV-FERR-028 cold-start compliance.
+#[cfg(test)]
 fn build_payload_bytes(store: &Store) -> Result<Vec<u8>, FerraError> {
     let schema: Vec<(String, AttributeDef)> = {
         let mut sorted: BTreeMap<String, AttributeDef> = BTreeMap::new();
@@ -97,18 +122,32 @@ fn build_payload_bytes(store: &Store) -> Result<Vec<u8>, FerraError> {
     bincode::serialize(&payload).map_err(|e| FerraError::CheckpointWrite(e.to_string()))
 }
 
-/// Serialize a store to checkpoint bytes (in-memory).
+/// Serialize a store to checkpoint bytes (in-memory) using V3 format.
 ///
 /// INV-FERR-013: The returned bytes contain the full store state (epoch,
-/// schema, genesis agent, all datoms) in the checkpoint wire format.
-/// A trailing BLAKE3 hash covers all preceding bytes for tamper detection.
-/// `deserialize_checkpoint_bytes` can reconstruct the store exactly.
+/// schema, genesis agent, all datoms, LIVE bitvector) in the V3 checkpoint
+/// wire format. A trailing BLAKE3 hash covers all preceding bytes for
+/// tamper detection. `deserialize_checkpoint_bytes` can reconstruct the
+/// store exactly.
+///
+/// # Errors
+///
+/// Returns `FerraError::CheckpointWrite` if serialization fails.
+pub(crate) fn serialize_checkpoint_bytes(store: &Store) -> Result<Vec<u8>, FerraError> {
+    v3::serialize_v3_bytes(store)
+}
+
+/// Serialize a store to V2 checkpoint bytes (in-memory).
+///
+/// INV-FERR-013: Legacy V2 format. Used in tests for V2/V3 equivalence
+/// verification.
 ///
 /// # Errors
 ///
 /// Returns `FerraError::CheckpointWrite` if the payload exceeds
 /// `u32::MAX` bytes or serialization fails.
-pub(crate) fn serialize_checkpoint_bytes(store: &Store) -> Result<Vec<u8>, FerraError> {
+#[cfg(test)]
+fn serialize_v2_bytes(store: &Store) -> Result<Vec<u8>, FerraError> {
     let epoch = store.epoch();
     let payload_bytes = build_payload_bytes(store)?;
 
@@ -135,18 +174,52 @@ pub(crate) fn serialize_checkpoint_bytes(store: &Store) -> Result<Vec<u8>, Ferra
     Ok(buf)
 }
 
-/// Deserialize a store from checkpoint bytes (in-memory).
+/// Deserialize a store from checkpoint bytes (in-memory), dispatching
+/// on magic bytes.
 ///
-/// INV-FERR-013: Verifies the BLAKE3 checksum before reconstructing
-/// the store. Returns an error if the data is truncated, the magic
-/// is wrong, or the checksum fails. Indexes are rebuilt from the
-/// deserialized datom set (INV-FERR-005 by construction).
+/// INV-FERR-013: Examines the first 4 bytes to determine the format:
+/// - `b"CHKP"` → V2 (legacy)
+/// - `b"CHK3"` → V3 (pre-sorted, LIVE bitvector persisted)
+///
+/// # Errors
+///
+/// Returns `FerraError::CheckpointCorrupted` on unknown magic, checksum
+/// mismatch, format errors, or deserialization failure.
+pub(crate) fn deserialize_checkpoint_bytes(data: &[u8]) -> Result<Store, FerraError> {
+    if data.len() < 4 {
+        return Err(FerraError::CheckpointCorrupted {
+            expected: "at least 4 bytes for magic".to_string(),
+            actual: format!("{} bytes", data.len()),
+        });
+    }
+
+    let magic: [u8; 4] = data[0..4]
+        .try_into()
+        .map_err(|_| FerraError::CheckpointCorrupted {
+            expected: "4-byte magic".to_string(),
+            actual: "truncated".to_string(),
+        })?;
+
+    match magic {
+        CHECKPOINT_MAGIC => deserialize_v2_bytes(data),
+        V3_MAGIC => v3::deserialize_v3_bytes(data),
+        _ => Err(FerraError::CheckpointCorrupted {
+            expected: "CHKP or CHK3".to_string(),
+            actual: String::from_utf8_lossy(&magic).to_string(),
+        }),
+    }
+}
+
+/// Deserialize a store from V2 checkpoint bytes (in-memory).
+///
+/// INV-FERR-013: Legacy V2 format. Verifies the BLAKE3 checksum before
+/// reconstructing the store.
 ///
 /// # Errors
 ///
 /// Returns `FerraError::CheckpointCorrupted` on checksum mismatch,
 /// format errors, or deserialization failure.
-pub(crate) fn deserialize_checkpoint_bytes(data: &[u8]) -> Result<Store, FerraError> {
+pub(crate) fn deserialize_v2_bytes(data: &[u8]) -> Result<Store, FerraError> {
     if data.len() < MIN_FILE_SIZE {
         return Err(FerraError::CheckpointCorrupted {
             expected: format!("at least {MIN_FILE_SIZE} bytes"),
@@ -424,7 +497,7 @@ fn read_header_bytes<const N: usize>(
 }
 
 /// Encode bytes as hex string for error messages.
-fn hex_encode(bytes: &[u8]) -> String {
+pub(super) fn hex_encode(bytes: &[u8]) -> String {
     use std::fmt::Write;
     bytes
         .iter()

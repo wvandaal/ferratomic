@@ -257,6 +257,43 @@ impl PositionalStore {
     pub fn fingerprint(&self) -> &[u8; 32] {
         &self.fingerprint
     }
+
+    /// Clone the LIVE bitvector for checkpoint serialization (INV-FERR-076).
+    ///
+    /// V3 checkpoints persist the bitvector to skip recomputation on load.
+    #[must_use]
+    pub(crate) fn live_bits_clone(&self) -> BitVec<u64, Lsb0> {
+        self.live_bits.clone()
+    }
+
+    /// Build from pre-sorted datoms and a pre-computed LIVE bitvector.
+    ///
+    /// INV-FERR-076: Zero-construction cold start for V3 checkpoint
+    /// deserialization. The caller guarantees `canonical` is sorted and
+    /// `live_bits.len() == canonical.len()`. Permutation arrays are
+    /// deferred (`OnceLock::new()`).
+    #[must_use]
+    pub(crate) fn from_sorted_with_live(
+        canonical: Vec<Datom>,
+        live_bits: BitVec<u64, Lsb0>,
+    ) -> Self {
+        Self {
+            canonical,
+            live_bits,
+            perm_aevt: OnceLock::new(),
+            perm_vaet: OnceLock::new(),
+            perm_avet: OnceLock::new(),
+            fingerprint: [0u8; 32],
+        }
+    }
+}
+
+/// Build a LIVE bitvector from EAVT-sorted datoms (public within crate).
+///
+/// Delegates to `build_live_bitvector`. Used by V3 checkpoint deserialization
+/// when loading from non-Positional stores (INV-FERR-029, INV-FERR-076).
+pub(crate) fn build_live_bitvector_pub(sorted_datoms: &[Datom]) -> BitVec<u64, Lsb0> {
+    build_live_bitvector(sorted_datoms)
 }
 
 // ---------------------------------------------------------------------------

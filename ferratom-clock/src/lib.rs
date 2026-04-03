@@ -26,10 +26,51 @@ pub use frontier::Frontier;
 pub use txid::{AgentId, TxId};
 
 // ---------------------------------------------------------------------------
+// ClockSource trait
+// ---------------------------------------------------------------------------
+
+/// Wall clock source for HLC (INV-FERR-015).
+///
+/// Default: [`SystemClock`] (real time). Kani verification uses a
+/// deterministic `KaniClock` (lives in `ferratomic-verify`).
+pub trait ClockSource: Send + Sync + 'static {
+    /// Current wall clock time in milliseconds since Unix epoch.
+    fn now(&self) -> u64;
+}
+
+// ---------------------------------------------------------------------------
+// SystemClock
+// ---------------------------------------------------------------------------
+
+/// Real wall clock via [`std::time::SystemTime`].
+///
+/// INV-FERR-015: Returns milliseconds since the Unix epoch. The
+/// `unwrap_or(0)` fallback is intentional — `SystemTime::now()` returning
+/// a time before the Unix epoch is a platform-level impossibility on
+/// modern systems; falling back to 0 lets the HLC logical counter
+/// advance (safe degradation).
+#[derive(Debug, Clone, Default)]
+pub struct SystemClock;
+
+impl ClockSource for SystemClock {
+    fn now(&self) -> u64 {
+        let millis_u128 = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis();
+        u64::try_from(millis_u128).unwrap_or(u64::MAX)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // HybridClock
 // ---------------------------------------------------------------------------
 
 /// Hybrid Logical Clock producing causally ordered [`TxId`]s.
+///
+/// Generic over [`ClockSource`] with a default of [`SystemClock`], so
+/// existing call sites that use `HybridClock` (without a type parameter)
+/// resolve to `HybridClock<SystemClock>` and compile without changes.
 ///
 /// INV-FERR-015: `tick()` always produces a `TxId` strictly greater than
 /// any previously produced or received timestamp. Even if the wall clock
@@ -41,7 +82,9 @@ pub use txid::{AgentId, TxId};
 /// ordered after the remote event. This establishes happens-before
 /// ordering across agents.
 #[derive(Clone, Debug)]
-pub struct HybridClock {
+pub struct HybridClock<C: ClockSource = SystemClock> {
+    /// Wall clock source.
+    clock: C,
     /// Last known physical time (wall clock ms).
     physical: u64,
     /// Logical counter within the current physical timestamp.
@@ -50,14 +93,15 @@ pub struct HybridClock {
     agent: AgentId,
 }
 
-impl HybridClock {
-    /// Create a new `HybridClock` for the given agent.
+impl<C: ClockSource> HybridClock<C> {
+    /// Create a new `HybridClock` for the given agent with a custom clock source.
     ///
     /// INV-FERR-015: The clock starts at `(0, 0)` — the first `tick()`
     /// will advance to at least the current wall clock time.
     #[must_use]
-    pub fn new(agent: AgentId) -> Self {
+    pub fn with_clock(agent: AgentId, clock: C) -> Self {
         Self {
+            clock,
             physical: 0,
             logical: 0,
             agent,
@@ -74,7 +118,7 @@ impl HybridClock {
     /// The returned `TxId` is guaranteed to be strictly greater than any
     /// previously returned or received timestamp.
     pub fn tick(&mut self) -> TxId {
-        let now = Self::wall_clock();
+        let now = self.clock.now();
 
         if now > self.physical {
             self.physical = now;
@@ -86,7 +130,7 @@ impl HybridClock {
             // Backpressure: busy-wait until wall clock advances.
             loop {
                 std::thread::yield_now();
-                let updated = Self::wall_clock();
+                let updated = self.clock.now();
                 if updated > self.physical {
                     self.physical = updated;
                     self.logical = 0;
@@ -105,7 +149,7 @@ impl HybridClock {
     /// local state. The next `tick()` will produce a `TxId` strictly
     /// greater than both.
     pub fn receive(&mut self, remote: &TxId) {
-        let now = Self::wall_clock();
+        let now = self.clock.now();
         let new_physical = now.max(self.physical).max(remote.physical());
 
         let new_logical = if new_physical == self.physical && new_physical == remote.physical() {
@@ -121,15 +165,25 @@ impl HybridClock {
         self.physical = new_physical;
         self.logical = new_logical;
     }
+}
 
-    /// Current wall-clock time in milliseconds since the Unix epoch.
+impl HybridClock<SystemClock> {
+    /// Create a new `HybridClock` for the given agent using the real wall clock.
+    ///
+    /// This is a convenience constructor equivalent to
+    /// `HybridClock::with_clock(agent, SystemClock)`.
+    ///
+    /// INV-FERR-015: The clock starts at `(0, 0)` — the first `tick()`
+    /// will advance to at least the current wall clock time.
     #[must_use]
-    fn wall_clock() -> u64 {
-        let millis_u128 = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis();
-        u64::try_from(millis_u128).unwrap_or(u64::MAX)
+    pub fn new(agent: AgentId) -> Self {
+        Self::with_clock(agent, SystemClock)
+    }
+
+    /// Alias for [`HybridClock::new`] — explicitly names the clock source.
+    #[must_use]
+    pub fn with_system_clock(agent: AgentId) -> Self {
+        Self::new(agent)
     }
 }
 
@@ -217,7 +271,7 @@ mod tests {
     #[test]
     fn inv_ferr_015_tick_monotonicity() {
         let agent = AgentId::from_bytes([1u8; 16]);
-        let mut clock = HybridClock::new(agent);
+        let mut clock = HybridClock::with_system_clock(agent);
         let t1 = clock.tick();
         let t2 = clock.tick();
         let t3 = clock.tick();
@@ -227,8 +281,8 @@ mod tests {
 
     #[test]
     fn inv_ferr_016_receive_advances_past_remote() {
-        let mut sender = HybridClock::new(AgentId::from_bytes([1u8; 16]));
-        let mut recv_clock = HybridClock::new(AgentId::from_bytes([2u8; 16]));
+        let mut sender = HybridClock::with_system_clock(AgentId::from_bytes([1u8; 16]));
+        let mut recv_clock = HybridClock::with_system_clock(AgentId::from_bytes([2u8; 16]));
         let sent = sender.tick();
         recv_clock.receive(&sent);
         let after_recv = recv_clock.tick();
@@ -237,7 +291,7 @@ mod tests {
 
     #[test]
     fn inv_ferr_016_receive_preserves_local_progress() {
-        let mut clock = HybridClock::new(AgentId::from_bytes([1u8; 16]));
+        let mut clock = HybridClock::with_system_clock(AgentId::from_bytes([1u8; 16]));
         let local = clock.tick();
         let old_remote = TxId::new(0, 0, 5);
         clock.receive(&old_remote);
