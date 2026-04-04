@@ -71,6 +71,10 @@ path = "proptest/conformance.rs"
 name = "proptest_isomorphism"
 path = "proptest/isomorphism_properties.rs"
 
+[[test]]
+name = "proptest_refinement"
+path = "proptest/refinement.rs"
+
 # --- Integration test suites (integration/) ---
 
 [[test]]

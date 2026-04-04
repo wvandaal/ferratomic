@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 //! Stateright bounded model for write linearizability (INV-FERR-007).
 //!
 //! INV-FERR-007: Committed writes appear in a strict total order defined by

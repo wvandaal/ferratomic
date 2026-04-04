@@ -59,6 +59,9 @@ use crate::{
 /// `epoch()`. These become available after `finish()` transitions to
 /// `Database<Ready>`. Phase 4b will add validation and actor startup in
 /// `finish()`.
+///
+/// `pub` because callers using phased initialization must name
+/// `Database<Opening>` in type signatures.
 #[derive(Debug)]
 pub struct Opening;
 
@@ -67,7 +70,10 @@ pub struct Opening;
 ///
 /// All convenience constructors (`genesis`, `recover`, `from_store`, etc.)
 /// return `Database<Ready>` directly by internally going through
-/// `Database<Opening>` → `finish()`.
+/// `Database<Opening>` -> `finish()`.
+///
+/// `pub` because `Database<Ready>` is the standard type parameter used
+/// throughout the crate and by downstream consumers.
 #[derive(Debug)]
 pub struct Ready;
 
@@ -257,6 +263,35 @@ impl Database<Ready> {
     pub fn epoch(&self) -> u64 {
         let store = self.current.load();
         store.epoch()
+    }
+
+    /// Access the genesis agent identity.
+    ///
+    /// HI-014: the genesis agent is `min(a.genesis_agent, b.genesis_agent)`
+    /// across all merge ancestors. For single-node databases, this is the
+    /// agent that created the genesis store.
+    #[must_use]
+    pub fn genesis_agent(&self) -> ferratom::AgentId {
+        let store = self.current.load();
+        store.genesis_agent()
+    }
+
+    /// Obtain a clone of the current Store suitable for checkpoint serialization.
+    ///
+    /// INV-FERR-013: the returned `Store` faithfully represents the database's
+    /// current state — epoch, schema, `genesis_agent`, datom set, and LIVE
+    /// metadata. Callers pass this to `write_checkpoint` for durable
+    /// persistence. The clone is O(n) for both representations
+    /// (`Positional` clones contiguous arrays; `OrdMap` uses structural
+    /// sharing making it fast in practice).
+    ///
+    /// This is the correct entry point for checkpoint writing. Reconstructing
+    /// a Store from snapshot parts (epoch + datoms + schema) loses LIVE
+    /// metadata and risks epoch mismatch.
+    #[must_use]
+    pub fn store_for_checkpoint(&self) -> Store {
+        let guard = self.current.load();
+        Store::clone(&guard)
     }
 }
 

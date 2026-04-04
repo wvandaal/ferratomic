@@ -85,6 +85,8 @@ cd ferratomic-verify/lean && lake build
 If it type-checks, the proof is valid. If it fails, the theorem
 statement or the model is wrong. Fix the model, not the proof.
 
+**CI Gate 9 (GOALS.md §6.8)**: `lake build` runs unconditionally in CI — not gated on commit message keywords. Every commit that changes Lean files or Rust code that Lean models must pass `lake build` with 0 `sorry`.
+
 ---
 
 ## File Organization
@@ -172,6 +174,7 @@ For each INV-FERR you prove:
 - Do not model I/O, disk, or network in Lean. Those are Stateright's job.
 - Do not use `sorry` except as a temporary placeholder during development.
   No `sorry` may be committed.
+- Do not add `sorry` without filing a tracking bead.
 - Do not fight mathlib. If your model doesn't match mathlib's types,
   change your model.
 - Do not prove theorems that aren't in the spec. Every theorem traces

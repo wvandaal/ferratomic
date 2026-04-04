@@ -484,7 +484,7 @@ fn inv_ferr_029_merge_causal_cross_retraction() {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(1_000))]
+    #![proptest_config(ProptestConfig::with_cases(10_000))]
 
     /// ME-017 / INV-FERR-043: Merge of stores with conflicting attribute
     /// definitions is deterministic and commutative.

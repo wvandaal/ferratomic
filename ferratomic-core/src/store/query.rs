@@ -130,8 +130,23 @@ pub(super) fn derive_live_set(causal: &LiveCausal) -> OrdMap<(EntityId, Attribut
 /// INV-FERR-032: For card-one resolution, filters to `Op::Assert` entries and
 /// picks the one with the highest `TxId` (LWW semantics).
 fn select_latest_live_value(entries: &OrdMap<Value, (TxId, Op)>) -> Option<&Value> {
+    select_latest_live_value_from_iter(entries.iter())
+}
+
+/// Proof-friendly card-one LIVE selection surface.
+///
+/// This exposes the exact selection kernel used by `Store::live_resolve`
+/// without requiring harnesses to construct a full `Store`.
+#[cfg(any(test, feature = "test-utils"))]
+#[must_use]
+pub fn select_latest_live_value_for_test(entries: &[(Value, (TxId, Op))]) -> Option<&Value> {
+    select_latest_live_value_from_iter(entries.iter().map(|(value, meta)| (value, meta)))
+}
+
+fn select_latest_live_value_from_iter<'a>(
+    entries: impl Iterator<Item = (&'a Value, &'a (TxId, Op))>,
+) -> Option<&'a Value> {
     entries
-        .iter()
         .filter(|(_, &(_, op))| op == Op::Assert)
         .max_by(|(left_value, (left_tx, _)), (right_value, (right_tx, _))| {
             left_tx

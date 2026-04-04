@@ -1,10 +1,15 @@
 //! Wire-format types for the deserialization trust boundary.
 //!
-//! ADR-FERR-010: Two-tier type system. Wire types have `Deserialize` and
-//! are the ONLY types that touch untrusted bytes. Core types (`EntityId`,
-//! `Value`, `Datom`) have NO `Deserialize`. The trust boundary is crossed
-//! via `into_trusted()` (local integrity-verified storage) or
-//! `into_verified()` (Phase 4c: cryptographic proof).
+//! ADR-FERR-010: Two-tier type system. Types containing `EntityId`
+//! (directly or transitively) do NOT derive `Deserialize` — these are
+//! `EntityId`, `Value` (via `Ref(EntityId)`), and `Datom`. Wire variants
+//! (`WireEntityId`, `WireValue`, `WireDatom`) carry `Deserialize` and
+//! cross the trust boundary via `into_trusted()` (local integrity-verified
+//! storage) or `into_verified()` (Phase 4c: cryptographic proof).
+//!
+//! Provenance-independent types (`Op`, `Attribute`, `TxId`, `AgentId`,
+//! schema types) derive `Deserialize` directly because they contain no
+//! content-addressed identity and cannot smuggle unverified `EntityId`s.
 //!
 //! INV-FERR-012: Every `EntityId` has known provenance:
 //! - `from_content()` — computed BLAKE3 hash

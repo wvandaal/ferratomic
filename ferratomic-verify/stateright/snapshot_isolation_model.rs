@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 //! Stateright snapshot isolation model for ferratomic verification.
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -38,13 +40,19 @@ pub struct SnapshotIsolationState {
     pub total_writes: u8,
     /// Whether at least one snapshot has been verified (for liveness).
     pub snapshot_verified: bool,
+    /// INV-FERR-011: Per-observer epoch capture history.
+    /// `observer_epoch_history[i]` records the sequence of epochs at which
+    /// observer `i` took snapshots. The monotonicity property requires
+    /// this sequence to be non-decreasing for every observer.
+    pub observer_epoch_history: Vec<Vec<u8>>,
 }
 
-/// Actions available to the Stateright checker for INV-FERR-006.
+/// Actions available to the Stateright checker for INV-FERR-006 and INV-FERR-011.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub enum SnapshotAction {
-    /// A reader captures a snapshot at the current epoch.
-    StartRead,
+    /// A specific observer captures a snapshot at the current epoch.
+    /// The observer ID indexes into `observer_epoch_history`.
+    StartRead(usize),
     /// Begin a write transaction with specific datom ids.
     StartWrite(Vec<u8>),
     /// Commit the pending write: advance epoch, make datoms visible.
@@ -172,13 +180,18 @@ impl Model for SnapshotIsolationModel {
             pending_write: None,
             total_writes: 0,
             snapshot_verified: false,
+            observer_epoch_history: vec![Vec::new(); self.max_readers],
         }]
     }
 
     fn actions(&self, state: &Self::State, actions: &mut Vec<Self::Action>) {
-        // StartRead: a reader captures a snapshot if we haven't hit max readers.
+        // StartRead: each observer can capture a snapshot if we haven't hit
+        // max readers total. INV-FERR-011 requires per-observer identity so
+        // we can verify epoch monotonicity per observer.
         if state.reader_snapshots.len() < self.max_readers {
-            actions.push(SnapshotAction::StartRead);
+            for observer_id in 0..self.max_readers {
+                actions.push(SnapshotAction::StartRead(observer_id));
+            }
         }
 
         // StartWrite: begin a write transaction if none is pending and
@@ -206,8 +219,11 @@ impl Model for SnapshotIsolationModel {
     fn next_state(&self, state: &Self::State, action: Self::Action) -> Option<Self::State> {
         let mut next = state.clone();
         match action {
-            SnapshotAction::StartRead => {
+            SnapshotAction::StartRead(observer_id) => {
                 if next.reader_snapshots.len() >= self.max_readers {
+                    return None;
+                }
+                if observer_id >= self.max_readers {
                     return None;
                 }
                 // INV-FERR-006: reader captures the current epoch and the
@@ -215,6 +231,8 @@ impl Model for SnapshotIsolationModel {
                 let epoch = next.current_epoch;
                 let visible = Self::visible_datoms_at_epoch(&next.datoms_by_epoch, epoch);
                 next.reader_snapshots.push((epoch, visible));
+                // INV-FERR-011: record this observer's epoch capture.
+                next.observer_epoch_history[observer_id].push(epoch);
             }
             SnapshotAction::StartWrite(datom_ids) => {
                 if next.pending_write.is_some() {
@@ -256,6 +274,13 @@ impl Model for SnapshotIsolationModel {
                 .datoms_by_epoch
                 .values()
                 .all(|ids| ids.iter().all(|&id| id < self.max_datoms))
+            // INV-FERR-011: bound per-observer history length to keep
+            // the state space finite. Each observer can take at most
+            // max_readers snapshots total.
+            && state
+                .observer_epoch_history
+                .iter()
+                .all(|h| h.len() <= self.max_readers)
     }
 
     fn properties(&self) -> Vec<Property<Self>> {
@@ -315,6 +340,29 @@ impl Model for SnapshotIsolationModel {
                     state.snapshot_verified
                         && !state.reader_snapshots.is_empty()
                         && state.total_writes > 0
+                },
+            ),
+            // INV-FERR-011: Observer monotonicity.
+            // ∀ i, j where i < j: epoch_seq(α)[i] ≤ epoch_seq(α)[j].
+            // For every observer, their sequence of captured epochs must be
+            // non-decreasing. Once an observer sees epoch e, all subsequent
+            // snapshots by that observer must be at epoch >= e.
+            //
+            // NOTE: In this model, current_epoch is monotonically increasing
+            // by construction (only advanced by CommitWrite via checked_add).
+            // Every StartRead captures current_epoch, so observer histories
+            // are trivially non-decreasing. This property is structurally
+            // guaranteed — its falsification power comes from verifying the
+            // MODEL DESIGN, not from catching implementation bugs. The
+            // adversarial INV-FERR-011 test lives in observer.rs unit tests
+            // and the AtomicU64::fetch_max enforcement in Observer::observe.
+            Property::always(
+                "inv_ferr_011_observer_monotonicity",
+                |_: &SnapshotIsolationModel, state: &SnapshotIsolationState| {
+                    state
+                        .observer_epoch_history
+                        .iter()
+                        .all(|history| history.windows(2).all(|w| w[0] <= w[1]))
                 },
             ),
         ]
@@ -449,9 +497,9 @@ mod tests {
             state2.current_epoch, 1,
             "INV-FERR-006: epoch must advance to 1 after first commit"
         );
-        // Now take a snapshot.
+        // Now take a snapshot (observer 0).
         let state3 = model
-            .next_state(&state2, SnapshotAction::StartRead)
+            .next_state(&state2, SnapshotAction::StartRead(0))
             .expect("INV-FERR-006: starting a read must succeed");
         assert_eq!(
             state3.reader_snapshots.len(),
@@ -495,9 +543,9 @@ mod tests {
     fn test_inv_ferr_006_snapshot_not_affected_by_later_write() {
         let model = SnapshotIsolationModel::default();
         let state0 = model.init_states().remove(0);
-        // Take a snapshot at epoch 0 (no datoms yet).
+        // Take a snapshot at epoch 0 (no datoms yet) as observer 0.
         let state1 = model
-            .next_state(&state0, SnapshotAction::StartRead)
+            .next_state(&state0, SnapshotAction::StartRead(0))
             .expect("INV-FERR-006: reading empty store must succeed");
         // Now write and commit.
         let state2 = model
@@ -540,7 +588,7 @@ mod tests {
         let model = SnapshotIsolationModel::default();
         let state0 = model.init_states().remove(0);
         let state1 = model
-            .next_state(&state0, SnapshotAction::StartRead)
+            .next_state(&state0, SnapshotAction::StartRead(0))
             .expect("INV-FERR-006: reading must succeed");
         assert!(
             !state1.snapshot_verified,
@@ -572,10 +620,10 @@ mod tests {
 
     #[test]
     fn test_snapshot_isolation_safety() {
-        // INV-FERR-006: exhaustively check that no reachable state
-        // violates snapshot isolation. The checker explores all
-        // interleavings of reads, writes, commits, and verifications
-        // within the bounded domain.
+        // INV-FERR-006 + INV-FERR-011: exhaustively check that no reachable
+        // state violates snapshot isolation or observer monotonicity.
+        // The checker explores all interleavings of reads, writes, commits,
+        // and verifications within the bounded domain.
         let checker = SnapshotIsolationModel::default()
             .checker()
             .spawn_bfs()
@@ -585,6 +633,8 @@ mod tests {
         checker.assert_no_discovery("inv_ferr_006_snapshot_isolation_safety");
         // Completeness: every snapshot contains exactly the right datoms.
         checker.assert_no_discovery("inv_ferr_006_snapshot_completeness");
+        // INV-FERR-011: no observer ever sees a decreasing epoch sequence.
+        checker.assert_no_discovery("inv_ferr_011_observer_monotonicity");
     }
 
     #[test]
@@ -602,8 +652,8 @@ mod tests {
 
     #[test]
     fn test_snapshot_isolation_safety_minimal() {
-        // INV-FERR-006: minimal configuration (1 epoch, 1 datom, 1 reader,
-        // 1 write) as a sanity check that the model works at small scale.
+        // INV-FERR-006 + INV-FERR-011: minimal configuration (1 epoch,
+        // 1 datom, 1 reader, 1 write) as a sanity check at small scale.
         let checker = SnapshotIsolationModel::new(1, 1, 1, 1)
             .checker()
             .spawn_bfs()
@@ -612,6 +662,7 @@ mod tests {
         checker.assert_no_discovery("inv_ferr_006_snapshot_isolation_safety");
         checker.assert_no_discovery("inv_ferr_006_snapshot_completeness");
         checker.assert_any_discovery("inv_ferr_006_snapshot_verified_reachable");
+        checker.assert_no_discovery("inv_ferr_011_observer_monotonicity");
     }
 
     #[test]
@@ -626,16 +677,16 @@ mod tests {
             .next_state(&state0, SnapshotAction::StartWrite(vec![0]))
             .unwrap();
         let s2 = model.next_state(&s1, SnapshotAction::CommitWrite).unwrap();
-        // Reader 1 captures at epoch 1.
-        let s3 = model.next_state(&s2, SnapshotAction::StartRead).unwrap();
+        // Observer 0 captures at epoch 1.
+        let s3 = model.next_state(&s2, SnapshotAction::StartRead(0)).unwrap();
 
         // Second write + commit: datom 1 at epoch 2.
         let s4 = model
             .next_state(&s3, SnapshotAction::StartWrite(vec![1]))
             .unwrap();
         let s5 = model.next_state(&s4, SnapshotAction::CommitWrite).unwrap();
-        // Reader 2 captures at epoch 2.
-        let s6 = model.next_state(&s5, SnapshotAction::StartRead).unwrap();
+        // Observer 1 captures at epoch 2.
+        let s6 = model.next_state(&s5, SnapshotAction::StartRead(1)).unwrap();
 
         let (epoch_r1, ref datoms_r1) = s6.reader_snapshots[0];
         let (epoch_r2, ref datoms_r2) = s6.reader_snapshots[1];
@@ -658,5 +709,86 @@ mod tests {
             id_set(&[0, 1]),
             "INV-FERR-006: second reader sees datoms 0 and 1"
         );
+
+        // INV-FERR-011: verify observer epoch histories are correct.
+        assert_eq!(
+            s6.observer_epoch_history[0],
+            vec![1],
+            "INV-FERR-011: observer 0 captured at epoch 1"
+        );
+        assert_eq!(
+            s6.observer_epoch_history[1],
+            vec![2],
+            "INV-FERR-011: observer 1 captured at epoch 2"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // INV-FERR-011 observer monotonicity tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_inv_ferr_011_observer_sees_non_decreasing_epochs() {
+        // INV-FERR-011: a single observer taking snapshots after successive
+        // writes must record a non-decreasing epoch sequence.
+        let model = SnapshotIsolationModel::default();
+        let s0 = model.init_states().remove(0);
+        // Write + commit at epoch 1.
+        let s1 = model
+            .next_state(&s0, SnapshotAction::StartWrite(vec![0]))
+            .unwrap();
+        let s2 = model.next_state(&s1, SnapshotAction::CommitWrite).unwrap();
+        // Observer 0 takes snapshot at epoch 1.
+        let s3 = model.next_state(&s2, SnapshotAction::StartRead(0)).unwrap();
+        assert_eq!(
+            s3.observer_epoch_history[0],
+            vec![1],
+            "INV-FERR-011: observer 0 should have epoch 1 in history"
+        );
+        // The epoch can only stay the same or increase for observer 0.
+        // Model structure guarantees this since current_epoch is monotonic.
+    }
+
+    #[test]
+    fn test_inv_ferr_011_observer_epoch_history_initialized() {
+        // INV-FERR-011: observer epoch history starts empty for each observer.
+        let model = SnapshotIsolationModel::default();
+        let s0 = model.init_states().remove(0);
+        assert_eq!(
+            s0.observer_epoch_history.len(),
+            model.max_readers,
+            "INV-FERR-011: observer_epoch_history must have one entry per observer"
+        );
+        for (i, history) in s0.observer_epoch_history.iter().enumerate() {
+            assert!(
+                history.is_empty(),
+                "INV-FERR-011: observer {i} must start with empty epoch history"
+            );
+        }
+    }
+
+    #[test]
+    fn test_inv_ferr_011_observer_id_out_of_bounds_returns_none() {
+        // INV-FERR-011: an observer ID beyond max_readers is rejected.
+        let model = SnapshotIsolationModel::default();
+        let s0 = model.init_states().remove(0);
+        let result = model.next_state(&s0, SnapshotAction::StartRead(model.max_readers));
+        assert!(
+            result.is_none(),
+            "INV-FERR-011: observer ID >= max_readers must return None"
+        );
+    }
+
+    #[test]
+    fn test_inv_ferr_011_exhaustive_observer_monotonicity() {
+        // INV-FERR-011: exhaustive model check that observer monotonicity
+        // holds across all reachable states. This is the primary verification
+        // that the invariant cannot be violated by any interleaving.
+        let checker = SnapshotIsolationModel::default()
+            .checker()
+            .spawn_bfs()
+            .join();
+
+        checker.assert_no_discovery("inv_ferr_011_observer_monotonicity");
     }
 }

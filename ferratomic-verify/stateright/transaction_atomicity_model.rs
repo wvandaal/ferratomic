@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 //! Stateright bounded model checker for INV-FERR-020: Transaction Atomicity.
 //!
 //! Models the all-or-nothing semantics of transaction commit, snapshot

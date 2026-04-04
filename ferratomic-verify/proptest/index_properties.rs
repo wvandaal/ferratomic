@@ -11,7 +11,10 @@ use std::collections::BTreeSet;
 
 use ferratom::Datom;
 use ferratomic_core::{
-    indexes::{EavtKey, IndexBackend, SortedVecBackend, SortedVecIndexes},
+    indexes::{
+        AevtKey, AvetKey, EavtKey, IndexBackend, Indexes, SortedVecBackend, SortedVecIndexes,
+        VaetKey,
+    },
     merge::merge,
     store::Store,
 };
@@ -336,6 +339,99 @@ proptest! {
             backend.backend_is_empty(),
             unique_keys.is_empty(),
             "INV-FERR-025 violated: is_empty disagrees with len"
+        );
+    }
+
+    /// INV-FERR-025: `Indexes` and `SortedVecIndexes` are observationally equivalent.
+    ///
+    /// Build both backend families from the same primary datom set and verify:
+    /// 1. exact lookup parity for all four key orders,
+    /// 2. ordered iteration parity for all four index views,
+    /// 3. identical cardinalities and bijection with the primary set.
+    ///
+    /// Falsification: any exact lookup, ordered iteration, or cardinality differs.
+    #[test]
+    fn inv_ferr_025_backend_observational_equivalence(
+        datoms in prop::collection::btree_set(arb_datom(), 0..200),
+    ) {
+        let om: Indexes = Indexes::from_datoms(datoms.iter());
+        let mut sv: SortedVecIndexes = SortedVecIndexes::from_datoms(datoms.iter());
+        sv.sort_all();
+
+        prop_assert!(
+            om.verify_bijection(),
+            "INV-FERR-025: OrdMap-backed indexes must satisfy bijection"
+        );
+        prop_assert!(
+            sv.verify_bijection(),
+            "INV-FERR-025: SortedVec-backed indexes must satisfy bijection"
+        );
+        prop_assert_eq!(
+            om.len(),
+            sv.len(),
+            "INV-FERR-025: backend cardinality differs. ordmap={}, sortedvec={}",
+            om.len(),
+            sv.len()
+        );
+        prop_assert_eq!(
+            om.len(),
+            datoms.len(),
+            "INV-FERR-025: index cardinality {} != primary cardinality {}",
+            om.len(),
+            datoms.len()
+        );
+
+        for datom in &datoms {
+            let eavt = EavtKey::from_datom(datom);
+            let aevt = AevtKey::from_datom(datom);
+            let vaet = VaetKey::from_datom(datom);
+            let avet = AvetKey::from_datom(datom);
+
+            prop_assert_eq!(
+                om.eavt().backend_get(&eavt),
+                sv.eavt().backend_get(&eavt),
+                "INV-FERR-025: EAVT exact lookup differs for entity {:?}",
+                datom.entity()
+            );
+            prop_assert_eq!(
+                om.aevt().backend_get(&aevt),
+                sv.aevt().backend_get(&aevt),
+                "INV-FERR-025: AEVT exact lookup differs for entity {:?}",
+                datom.entity()
+            );
+            prop_assert_eq!(
+                om.vaet().backend_get(&vaet),
+                sv.vaet().backend_get(&vaet),
+                "INV-FERR-025: VAET exact lookup differs for entity {:?}",
+                datom.entity()
+            );
+            prop_assert_eq!(
+                om.avet().backend_get(&avet),
+                sv.avet().backend_get(&avet),
+                "INV-FERR-025: AVET exact lookup differs for entity {:?}",
+                datom.entity()
+            );
+        }
+
+        prop_assert_eq!(
+            om.eavt_datoms().collect::<Vec<_>>(),
+            sv.eavt_datoms().collect::<Vec<_>>(),
+            "INV-FERR-025: EAVT ordered iteration differs between backends"
+        );
+        prop_assert_eq!(
+            om.aevt_datoms().collect::<Vec<_>>(),
+            sv.aevt_datoms().collect::<Vec<_>>(),
+            "INV-FERR-025: AEVT ordered iteration differs between backends"
+        );
+        prop_assert_eq!(
+            om.vaet_datoms().collect::<Vec<_>>(),
+            sv.vaet_datoms().collect::<Vec<_>>(),
+            "INV-FERR-025: VAET ordered iteration differs between backends"
+        );
+        prop_assert_eq!(
+            om.avet_datoms().collect::<Vec<_>>(),
+            sv.avet_datoms().collect::<Vec<_>>(),
+            "INV-FERR-025: AVET ordered iteration differs between backends"
         );
     }
 

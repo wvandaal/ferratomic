@@ -1,9 +1,9 @@
 //! Value types carried by datoms.
 //!
-//! INV-FERR-018: Values are immutable. Heap-allocated variants use `Arc`
-//! for cheap cloning without deep copies.
+//! Values are immutable (private fields, no mutation methods).
+//! Heap-allocated variants use `Arc` for cheap cloning without deep copies.
 //!
-//! INV-FERR-026: Attribute names are interned strings with O(1) clone.
+//! Attribute names are interned strings with O(1) clone.
 
 use std::{fmt, sync::Arc};
 
@@ -21,14 +21,13 @@ use super::EntityId;
 
 /// Interned attribute name backed by `Arc<str>` for O(1) clone.
 ///
-/// INV-FERR-026: Attribute names are interned strings. Cloning is a
-/// reference-count increment. Equality comparison is O(n) in the string
-/// length (derived `PartialEq` compares by content, not pointer).
+/// Cloning is a reference-count increment. Equality comparison is O(n) in the
+/// string length (derived `PartialEq` compares by content, not pointer).
 #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug, Serialize, Deserialize)]
 pub struct Attribute(Arc<str>);
 
 impl Attribute {
-    /// Borrow the attribute name as a string slice (INV-FERR-026).
+    /// Borrow the attribute name as a string slice.
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
@@ -154,7 +153,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_inv_ferr_026_attribute_from_str() {
+    fn test_attribute_from_str() {
         let attr = Attribute::from("db/ident");
         assert_eq!(attr.as_str(), "db/ident");
     }
@@ -169,7 +168,7 @@ mod tests {
     fn test_attribute_clone_equality() {
         let a = Attribute::from("db/doc");
         let b = a.clone();
-        assert_eq!(a, b, "INV-FERR-026: cloned attributes must be equal");
+        assert_eq!(a, b, "cloned attributes must remain equal");
     }
 
     #[test]

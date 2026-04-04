@@ -144,11 +144,38 @@ its dependencies are complete.
 ## Quality Gates (every commit)
 
 ```bash
-# All four must pass. No exceptions.
-CARGO_TARGET_DIR=/data/cargo-target cargo check --workspace --all-targets
-CARGO_TARGET_DIR=/data/cargo-target cargo clippy --workspace --all-targets -- -D warnings
+# All eleven must pass. No exceptions.
+
+# Gate 1: Formatting
 CARGO_TARGET_DIR=/data/cargo-target cargo fmt --all -- --check
+
+# Gate 2: Lint (all targets)
+CARGO_TARGET_DIR=/data/cargo-target cargo clippy --workspace --all-targets -- -D warnings
+
+# Gate 3: NEG-FERR-001 — no unwrap/expect/panic in production code
+CARGO_TARGET_DIR=/data/cargo-target cargo clippy --workspace --lib -- -D warnings \
+  -D clippy::unwrap_used -D clippy::expect_used -D clippy::panic
+
+# Gate 4: Tests
 CARGO_TARGET_DIR=/data/cargo-target cargo test --workspace
+
+# Gate 5: Supply chain audit
+CARGO_TARGET_DIR=/data/cargo-target cargo deny check
+
+# Gate 6: INV-FERR-023 — #![forbid(unsafe_code)] verified in all crate roots
+
+# Gate 7: Documentation builds without warnings
+CARGO_TARGET_DIR=/data/cargo-target cargo doc --workspace --no-deps -- -D warnings
+
+# Gate 8: File complexity limits (500 LOC, clippy.toml thresholds)
+
+# Gate 9: Lean proofs (0 sorry) — unconditional
+cd ferratomic-verify/lean && lake build
+
+# Gate 10: MIRI (pure-logic subset)
+CARGO_TARGET_DIR=/data/cargo-target cargo +nightly miri test
+
+# Gate 11: Coverage >= thresholds (no regression)
 ```
 
 A commit that fails any gate is a defect.
@@ -160,6 +187,8 @@ to production code. If clippy flags something, fix the root cause:
 - `needless_pass_by_value` -> actually consume the value or take a reference
 - `dead_code` -> remove the dead code or use it
 Suppressions are defects. They defeat the purpose of static analysis.
+
+**Defensive engineering standards**: See GOALS.md §6 for the full standard including MIRI, fuzzing, mutation testing, coverage thresholds, and supply chain security.
 
 ---
 

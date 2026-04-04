@@ -41,13 +41,41 @@ br sync --flush-only
 ### Step 3: Quality Gates (if code changed)
 
 ```bash
-CARGO_TARGET_DIR=/data/cargo-target cargo check --workspace
-CARGO_TARGET_DIR=/data/cargo-target cargo clippy --workspace -- -D warnings
-CARGO_TARGET_DIR=/data/cargo-target cargo fmt --check
+# All eleven must pass. No exceptions.
+
+# Gate 1: Formatting
+CARGO_TARGET_DIR=/data/cargo-target cargo fmt --all -- --check
+
+# Gate 2: Lint (all targets)
+CARGO_TARGET_DIR=/data/cargo-target cargo clippy --workspace --all-targets -- -D warnings
+
+# Gate 3: NEG-FERR-001 — no unwrap/expect/panic in production code
+CARGO_TARGET_DIR=/data/cargo-target cargo clippy --workspace --lib -- -D warnings \
+  -D clippy::unwrap_used -D clippy::expect_used -D clippy::panic
+
+# Gate 4: Tests
 CARGO_TARGET_DIR=/data/cargo-target cargo test --workspace
+
+# Gate 5: Supply chain audit
+CARGO_TARGET_DIR=/data/cargo-target cargo deny check
+
+# Gate 6: INV-FERR-023 — #![forbid(unsafe_code)] verified in all crate roots
+
+# Gate 7: Documentation builds without warnings
+CARGO_TARGET_DIR=/data/cargo-target cargo doc --workspace --no-deps -- -D warnings
+
+# Gate 8: File complexity limits (500 LOC, clippy.toml thresholds)
+
+# Gate 9: Lean proofs (0 sorry) — unconditional
+cd ferratomic-verify/lean && lake build
+
+# Gate 10: MIRI (pure-logic subset)
+CARGO_TARGET_DIR=/data/cargo-target cargo +nightly miri test
+
+# Gate 11: Coverage >= thresholds (no regression)
 ```
 
-All four must pass. If any fails, fix before continuing.
+All eleven must pass. If any fails, fix before continuing.
 
 ### Step 4: Commit and Push
 
@@ -118,10 +146,11 @@ Only include if the dependency graph is non-obvious.>
 
 ## Hard Constraints
 
-- `#![forbid(unsafe_code)]` in all crates
+- Safe callable surface: `#![forbid(unsafe_code)]` by default; internal unsafe permitted only when firewalled behind safe APIs, mission-critical, and ADR-documented (GOALS.md §6.2)
 - No `unwrap()` in production code
 - `CARGO_TARGET_DIR=/data/cargo-target`
 - Phase N+1 cannot start until Phase N passes isomorphism check
+- Full defensive engineering standards: GOALS.md §6
 - <any session-specific constraints discovered during work>
 
 ## Stop Conditions

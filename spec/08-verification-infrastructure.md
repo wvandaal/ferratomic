@@ -1361,6 +1361,101 @@ the probability of a production defect.
 
 ---
 
+### §23.12.7 Self-Monitoring Convergence: B17 → M(S) ≅ S
+
+**Traces to**: ADR-FERR-012 (Bayesian Confidence), ADR-FERR-013 (Invariant Catalog),
+ADR-FERR-014 (Release Certificates), INV-FERR-060 (Store Identity), INV-FERR-051
+(Signed Transactions), GOALS.md §5 (Compound Interest Argument)
+
+This section formalizes the architectural vision connecting the verification
+infrastructure invariants and ADRs into a convergent self-monitoring system. Each
+phase deposits verification evidence into the store; each subsequent phase draws
+on that evidence to make stronger claims. The terminal state is a store that
+answers "am I correct?" by querying itself — not an external oracle.
+
+**The compound interest chain:**
+
+```
+Phase 4a.5: B17 (Self-Verifying Spec Store)
+   Store installs its own invariants, ADRs, and schema as signed datoms.
+   Creates :spec/*, :adr/*, :verification/*, :gate/* attribute namespaces.
+   The store IS the verification oracle.
+       │
+       ▼
+Phase 4b:  R16 (Falsification-Bound Witnesses) + ADR-FERR-012
+   Each verified invariant gains triple-hash witness datoms:
+     {:e inv-001 :a :witness/spec-hash :v <blake3>}
+     {:e inv-001 :a :witness/test-hash :v <blake3>}
+     {:e inv-001 :a :witness/proof-hash :v <blake3>}
+   When any hash changes, the witness auto-invalidates.
+   ADR-FERR-012: Each proptest/Kani run ASSERTS its result as a datom.
+     Beta-posterior confidence is a materialized view over pass/fail datoms.
+   ADR-FERR-013: Machine-readable catalog becomes "query the datom catalog"
+     not "read const array." The catalog IS the store querying itself.
+       │
+       ▼
+Phase 4c:  ADR-FERR-014 (Release Certificates)
+   Gate certificate is a signed transaction:
+     {:e gate-4a5 :a :gate/verdict :v :approved}
+     {:e gate-4a5 :a :gate/timestamp :v <now>}
+     {:e gate-4a5 :a :gate/query-result :v :empty-set}
+     {:e gate-4a5 :a :gate/certificate-hash :v <blake3>}
+   Signed by gate authority, with causal predecessors referencing all
+   verification transactions. The gate query IS the gate check.
+       │
+       ▼
+Phase 4d:  M(S) ≅ S (Reflexive Property)
+   The Datalog engine enables native gate-closure queries:
+     "∀ Stage 0 invariants: :verification/confidence ≥ 0.999
+      AND :verification/lean-status = :proven"
+   If the query returns empty (no blocking invariants), the gate closes.
+   The store's self-description uses the same algebra (P(D), ∪) as all
+   other data. M(S) — the store's metadata about itself — IS contained
+   within S.
+```
+
+**Why this is a compound interest argument, not a convenience feature:**
+
+Each phase adds a layer of self-knowledge. B17 seeds the catalog. R16 populates
+it with content-addressed witnesses. ADR-FERR-012 quantifies confidence. ADR-FERR-014
+generates certificates. The Datalog engine makes the gate check a theorem (a
+query with quantified Bayesian confidence), not an opinion.
+
+The critical insight is that starting early costs almost nothing — signing adds
+~64 bytes per transaction (INV-FERR-051), witness datoms add ~3 datoms per
+invariant — but the accumulated provenance history makes each subsequent phase's
+trust gradient (INV-FERR-054) more valuable. This is the same compound interest
+dynamic as the HTTP→HTTPS transition: systems that defer authentication pay a
+painful migration cost, while systems that authenticate from genesis accumulate
+trust naturally.
+
+**Formal property**: Let `M(S)` denote the verification metadata within store `S`
+(all datoms in the `:spec/*`, `:verification/*`, `:gate/*` namespaces). The
+self-monitoring convergence property is:
+
+```
+∀ S at Phase 4d completion:
+  M(S) ⊆ S                     -- metadata IS datoms in the store
+  gate_query(S) : Bool          -- gate closure is a Datalog query over S
+  gate_query(S) = true  iff     -- the query is a decision procedure
+    ∀ inv ∈ required_stage_0(S):
+      confidence(S, inv) ≥ 0.999 ∧ lean_status(S, inv) = proven
+```
+
+This property does not require a new INV-FERR — it is the emergent consequence
+of INV-FERR-060 (store identity), INV-FERR-051 (signed transactions),
+ADR-FERR-012 (Bayesian confidence), ADR-FERR-013 (invariant catalog), and
+ADR-FERR-014 (release certificates) composed together. Formalizing it here
+ensures the architectural vision is not lost across phase boundaries.
+
+**Phase gate integration**: B17 is the capstone of Phase 4a.5 (bd-oiqr dependency
+chain). R16 requires Phase 4b (content-addressed witnesses need prolly tree
+hashes). ADR-FERR-014 certificates require Phase 4c. The Datalog gate query
+requires Phase 4d. The chain is fully captured in the phase gate beads:
+bd-add → bd-7ij → bd-fzn → bd-lvq.
+
+---
+
 ### Strategic Phase Integration
 
 The invariants and ADRs in this section integrate into the phase gate structure as follows:

@@ -57,7 +57,11 @@ impl std::fmt::Display for TxValidationError {
 
 impl std::error::Error for TxValidationError {}
 
-/// Convert `TxValidationError` into `FerraError` for `?` propagation (INV-FERR-019).
+/// Convert `TxValidationError` into `FerraError` for `?` propagation.
+///
+/// INV-FERR-019: typed errors propagate through the `?` operator without
+/// losing semantic category. Callers pattern-match on `FerraError` variant,
+/// not on message strings.
 impl From<TxValidationError> for ferratom::FerraError {
     fn from(error: TxValidationError) -> Self {
         match error {

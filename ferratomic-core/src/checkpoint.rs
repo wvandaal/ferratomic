@@ -365,7 +365,14 @@ pub(crate) fn load_checkpoint_from_reader<R: std::io::Read>(
 
 /// Write a checkpoint to an arbitrary writer (INV-FERR-013, INV-FERR-024).
 ///
-/// Backend-agnostic checkpoint writing for `StorageBackend` implementations.
+/// Backend-agnostic checkpoint writing for [`StorageBackend`](crate::storage::StorageBackend)
+/// implementations. The checkpoint contains the full store state (epoch,
+/// schema, genesis agent, all datoms, LIVE bitvector) in V3 format with
+/// a trailing BLAKE3 integrity hash.
+///
+/// INV-FERR-013: `load(checkpoint(S)) = S` -- round-trip identity.
+/// INV-FERR-024: substrate agnosticism -- writes through any `std::io::Write`
+/// implementor, decoupling the checkpoint protocol from filesystem specifics.
 ///
 /// # Errors
 ///

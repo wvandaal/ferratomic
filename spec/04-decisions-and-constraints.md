@@ -445,6 +445,59 @@ inlines and erases the conversion. Benchmarks show no regression.
 
 ---
 
+### ADR-FERR-015: ferratom-clock Crate Extraction
+
+**Traces to**: INV-FERR-015 (HLC Monotonicity), INV-FERR-016 (HLC Causality)
+**Stage**: 0
+
+**Problem**: The `ferratom` leaf crate contained both core datom types (`Datom`,
+`EntityId`, `Value`, `Schema`) AND clock types (`HybridClock`, `TxId`, `AgentId`,
+`Frontier`). These are two distinct responsibilities: the datom model and the
+temporal ordering model. The clock types have their own invariants (INV-FERR-015,
+INV-FERR-016) and their own test surface. Combining them in one crate violates
+single responsibility and complicates the dependency DAG.
+
+**Options**:
+
+| Option | Description | Pros | Cons |
+|--------|-------------|------|------|
+| A: Keep in ferratom | Status quo. All leaf types in one crate. | Simpler workspace. | Mixed responsibilities. Clock changes recompile all datom consumers. |
+| B: Extract ferratom-clock | New leaf crate for HLC/TxId/AgentId/Frontier. ferratom depends on ferratom-clock. | Single responsibility. Clock invariants isolated. LOC budget compliance (<1,000 LOC per crate for leaves). Precedent for Phase 4b ferratomic-prolly extraction. | One more crate in workspace. |
+
+**Decision**: **Option B: Extract ferratom-clock**
+
+The dependency DAG becomes:
+```
+ferratom-clock (leaf: HLC, TxId, AgentId, Frontier)
+  ↑
+ferratom (leaf: Datom, EntityId, Value, Schema — depends on ferratom-clock)
+  ↑
+ferratomic-core (engine: Store, Database, WAL, checkpoint)
+  ↑
+ferratomic-datalog (query: Datalog parser + evaluator)
+```
+
+**Rationale**:
+- **Single responsibility**: clock types have their own algebraic properties
+  (INV-FERR-015 monotonicity, INV-FERR-016 causality) independent of datom
+  identity (INV-FERR-012).
+- **LOC budget**: ferratom-clock is <1,000 LOC (within the leaf crate limit).
+  ferratom stays <2,000 LOC.
+- **Compilation isolation**: changes to HLC internals don't trigger recompilation
+  of datom-only consumers.
+- **Phase 4b precedent**: establishes the pattern for `ferratomic-prolly` extraction
+  (prolly tree block store as a separate crate).
+
+**Consequences**:
+- `ferratom` gains a dependency on `ferratom-clock`. This is the ONLY
+  additional internal dependency, preserving the acyclic DAG.
+- `HybridClock`, `TxId`, `AgentId`, and `Frontier` are re-exported from
+  `ferratom` for backward compatibility (consumers don't need to add
+  `ferratom-clock` to their `Cargo.toml`).
+- INV-FERR-023 (`#![forbid(unsafe_code)]`) applies to ferratom-clock.
+
+---
+
 ## 23.5 Negative Cases
 
 ### NEG-FERR-001: No Panics in Production Code

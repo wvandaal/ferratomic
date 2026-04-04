@@ -1,294 +1,148 @@
 # Ferratomic — Agent Guidelines
 
-> Ferratomic is a formally verified, distributed embedded datom database engine.
-> A general-purpose storage foundation for any system built on the datom model.
+Formally verified, distributed embedded datom database engine.
+**Store = (P(D), U)** — G-Set CRDT semilattice. No conflicts. No consensus.
 
 ---
 
-## True North
+## Build (CRITICAL — read first)
 
-Ferratomic provides the universal substrate: an append-only datom store with
-content-addressed identity, CRDT merge, indexed random access, and cloud-scale
-distribution. It is to applications what PostgreSQL is to a web app — the
-foundational infrastructure that everything else builds on.
-
-**Store = (P(D), ∪)** — a G-Set CRDT semilattice. Writes are commutative,
-associative, and idempotent by construction. No conflicts. No consensus protocol.
-The data structure IS the consistency mechanism.
-
----
-
-## Development Methodology: Spec-First TDD (Curry-Howard-Lambek)
-
-**Non-negotiable phase ordering:**
-```
-Phase 0: Formal specification (spec/ — canonical, modular)     ← DONE
-Phase 1: Lean 4 theorem statements + proofs
-Phase 2: Test suite (Stateright, Kani, proptest) — ALL FAIL (red phase)
-Phase 3: Type definitions (ferratom crate — types ARE propositions)
-Phase 4: Implementation (ferratomic-core — programs ARE proofs)
-Phase 5: Integration (application migration)
+```bash
+export CARGO_TARGET_DIR=/data/cargo-target  # MUST set. Default uses /tmp (RAM-backed, fills up)
+cargo check --workspace --all-targets
+cargo clippy --workspace --all-targets -- -D warnings
+cargo fmt --all -- --check
+PROPTEST_CASES=1000 cargo test --workspace  # Fast: 1K cases. Full: omit env var (10K, use --release)
 ```
 
-**Phase gate**: Phase N+1 CANNOT begin until Phase N passes isomorphism check.
-A gap between spec, algebra, and tests is a DEFECT, not technical debt.
-
-**Compilation expectation**: The workspace may not compile during Phases 1-2.
-This is expected. Phase 3 creates type stubs that make Phase 2 tests compilable.
-
-**Spec Level 2 contracts**: Level 2 Rust contracts are conceptual -- they illustrate
-algebraic properties using `BTreeSet`. Implementation uses `im::OrdSet`/`im::OrdMap`
-(ADR-FERR-001).
-
----
-
-## Specification
-
-The canonical specification lives in `spec/` in THIS repository.
-
-- **Formal spec**: `spec/` (59 INV, 14 ADR, 6 NEG, 2 CI-FERR) — canonical modular files, see `spec/README.md`
-- **Architecture**: `docs/design/FERRATOMIC_ARCHITECTURE.md`
-- **Design decisions**: `docs/design/`
-
----
-
-## Crate Architecture
-
-```
-ferratomic/
-├── ferratom-clock/     # Leaf: HLC clock types (ZERO project deps, ADR-FERR-015)
-├── ferratom/           # Leaf: core types (depends on ferratom-clock only)
-├── ferratomic-core/    # Core: storage + concurrency engine
-├── ferratomic-datalog/ # Facade: query engine
-└── ferratomic-verify/  # Verification: Lean 4 + Stateright + Kani + proptest
+Strict gate (production code — `--lib` only, test code exempt):
+```bash
+cargo clippy --workspace --lib -- -D warnings -D clippy::unwrap_used -D clippy::expect_used -D clippy::panic
 ```
 
-Dependency direction: clock → leaf → core → facade. No cycles.
-
----
-
-## Complexity Standards (Hard Limits, Not Guidelines)
-
-### File-level
-- **Max 500 LOC per file** (excluding tests). If approaching, split by responsibility.
-- **Max 1,500 LOC per file** including inline tests. Extract tests to `tests/` if over.
-- **One concept per module.** `store.rs` must not contain WAL logic. `db.rs` must not contain checkpoint logic.
-
-### Function-level
-- **Max 50 LOC per function.** Decompose if longer.
-- **Max cyclomatic complexity 10.** Enforced via `clippy::cognitive_complexity`.
-- **Max 5 parameters.** More → introduce a config/params struct.
-
-### Crate-level
-- **ferratom-clock**: < 1,000 LOC (HLC, TxId, AgentId, Frontier — extracted ADR-FERR-015)
-- **ferratom**: < 2,000 LOC (pure types, should be small)
-- **ferratomic-core**: < 10,000 LOC. If approaching, split into sub-crates.
-- **ferratomic-datalog**: < 5,000 LOC.
-- **ferratomic-verify**: No limit (tests and proofs can be verbose).
-
-### Splitting strategy
-- When a module grows > 500 LOC, split by responsibility into submodules:
-  `store/indexes.rs`, `store/merge.rs`, `store/apply.rs`.
-- Public API surface per crate: minimal. Re-export through `lib.rs`, keep internals private.
-- Never put two unrelated concepts in one file for convenience.
-
-### Enforced via CI
-```toml
-# clippy.toml
-cognitive-complexity-threshold = 10
-too-many-arguments-threshold = 5
-too-many-lines-threshold = 50
-```
-
----
-
-## Code Quality Standards
-
-### Type Discipline (Curry-Howard — types ARE propositions)
-
-- **Minimal cardinality types.** Every type admits exactly the valid states.
-  Invalid states are unrepresentable. `Port(u16)` not `u16`. `EntityId([u8; 32])`
-  not `Vec<u8>`. Every invalid state your type CAN represent is a proof obligation
-  shifted from compiler to runtime.
-- **Newtype wrappers for all domain concepts.** No raw primitives in APIs.
-  `EntityId`, not `[u8; 32]`. `Attribute`, not `String`. `Epoch`, not `u64`.
-- **Typestate for lifecycles.** `Transaction<Building>` → `Transaction<Committed>`.
-  `Database<Opening>` → `Database<Ready>`. Invalid state transitions are compile errors.
-- **Exhaustive pattern matching.** No `_ =>` wildcards on enums that may grow.
-  Every match arm names the variant. Adding a variant produces compile errors
-  at every match site — which is the point.
-- **Parse, don't validate.** Accept raw input at system boundaries, produce typed
-  values. Internal code never re-validates — the type IS the proof.
-
-### Error Discipline
-
-- **`Result<T, FerraError>` everywhere.** No panics, no `unwrap()`, no `expect()`
-  in production code. Test code may use `unwrap()` with descriptive messages.
-- **Error categories matter.** `FerraError::Io` is retryable. `FerraError::SchemaViolation`
-  is a caller bug. `FerraError::InvariantViolation` is OUR bug. Callers pattern-match
-  on category, not message strings.
-- **`?` propagation, not `.unwrap()`.** The only acceptable `unwrap()` in production
-  is on infallible operations (e.g., `regex::Regex::new` with a compile-time-known pattern).
-  Even then, prefer `const` initialization.
-
-### Documentation Standards
-
-- **Every public item has a doc comment.** Enforced by `#![deny(missing_docs)]`.
-- **Doc comments state the invariant, not the implementation.** "Returns the datom's
-  entity, which is a BLAKE3 hash of the content (INV-FERR-012)" — not "returns the
-  first field of the tuple."
-- **INV-FERR references in doc comments.** Every function that upholds or relies on
-  an invariant cites it: `/// INV-FERR-006: snapshot isolation guarantees this returns
-  /// a consistent view.`
-- **No aspirational docs.** Don't document what the function WILL do. Document what
-  it DOES. If it's not implemented, the doc says `TODO(Phase N)`.
-
-### Naming Conventions
-
-- **Types**: `PascalCase`. Names encode semantics: `DatomStore`, not `Store`. `ChunkAddress`, not `Hash`.
-- **Functions**: `snake_case`. Verb-first: `apply_datoms`, `merge_stores`, `load_checkpoint`.
-- **Constants**: `SCREAMING_SNAKE`. `GENESIS_HASH`, `MAX_CHUNK_SIZE`.
-- **Modules**: `snake_case`. One concept per module. Name = concept: `wal`, `checkpoint`, `snapshot`.
-- **No abbreviations** except universally understood ones (WAL, HLC, CRDT, IO).
-  `transaction`, not `txn`. `attribute`, not `attr`. Exception: local variables
-  in tight scopes where the full name adds noise.
-
-### Testing Standards
-
-- **Every public function has at least one test.** No exceptions.
-- **Property-based tests for algebraic laws.** proptest with 10,000+ cases for any
-  function involving CRDT operations, ordering, or identity.
-- **Named invariants in test names.** `test_inv_ferr_001_merge_commutativity`,
-  not `test_merge_works`.
-- **Test failure messages document expected behavior.** `assert_eq!(result, expected,
-  "INV-FERR-005: datom in primary must also be in entity index")`.
-- **No `#[ignore]` without a tracking issue.** Ignored tests are hidden failures.
-
-### Dependency Discipline
-
-- **Minimal dependencies.** Every dependency is a liability. Justify each one.
-- **ferratom-clock has ZERO project-internal dependencies.** It is the bottom leaf:
-  HLC, TxId, AgentId, Frontier, plus external crates only.
-- **ferratom may depend only on ferratom-clock plus external crates.** Additional
-  project-internal dependencies require an ADR because `ferratom` remains the
-  stable core-type surface for the rest of the workspace.
-- **No transitive dependency on tokio from ferratom-clock or ferratom.** The leaf
-  layers must remain runtime-agnostic. Only ferratomic-core may depend on async runtime.
-- **Pin major versions.** `im = "15"` not `im = "*"`. Reproducible builds.
-- **Audit new dependencies.** Check for `unsafe`, check maintenance status,
-  check license compatibility.
-
-### Git Standards
-
-- **Main branch only.** No long-lived feature branches. Short-lived branches
-  for PRs, merged within 1-2 days.
-- **Conventional commits.** `feat:`, `fix:`, `refactor:`, `test:`, `docs:`, `perf:`.
-- **Every commit compiles and passes tests.** No "WIP" commits on main.
-- **Atomic commits.** One logical change per commit. Don't mix refactoring with features.
-
-### Agentic Development Optimization
-
-- **AGENTS.md is the agent's onboarding document.** An agent should be productive
-  within 5 minutes of reading it. Keep it current.
-- **Session prompts (`docs/prompts/`) define execution scope.** One prompt per
-  major work phase. The prompt IS the task specification.
-- **Beads for task tracking.** Use `br ready`, `br create`, `br close` to manage
-  project tasks. Beads IS the source of truth for issue state.
-- **Skill loading protocol.** Load ONE methodology skill per cognitive phase:
-  - Discovery: `ms load spec-first-design -m --full`
-  - Implementation: `ms load rust-formal-engineering -m --full`
-  - Optimization: `ms load prompt-optimization -m --pack 2000`
-  - Never stack multiple full skills simultaneously (k* budget).
-- **Disjoint file sets for parallel agents.** Two agents NEVER edit the same file.
-  Agent coordination via beads tasks + dependency edges.
-- **NEVER use worktrees.** `isolation: "worktree"` is FORBIDDEN for all subagents.
-  Worktrees corrupt shared state (.beads/, .cass/) and create unmergeable branches.
-  Always use default (non-worktree) agents with disjoint file sets.
-- **Agents don't run cargo.** The orchestrator (human or primary agent) runs build/test
-  ONCE after all agents complete. Prevents build lock contention and disk exhaustion.
+Full verification (pre-tag): `cargo test --workspace --release && cd ferratomic-verify/lean && lake build`
 
 ---
 
 ## Hard Constraints
 
-**C1: Append-only store.** Never delete or mutate datoms. Retractions are new datoms.
-**C2: Content-addressed identity.** EntityId = BLAKE3(content).
-**C4: CRDT merge = set union.** Commutative, associative, idempotent.
-**INV-FERR-023: `#![forbid(unsafe_code)]`** in ALL crates. No exceptions.
-**NEG-FERR-001: No panics.** No `unwrap()`, no `expect()` in production code.
-**Zero lint escape hatches — in ALL code, including tests and verification.**
-No `#[allow(clippy::...)]`, `#[allow(dead_code)]`, `#[allow(unused_imports)]`, or
-ANY form of lint/warning suppression ANYWHERE in the codebase. No `#[cfg(...)]`
-gating that hides code from the type checker or clippy. No exceptions for test
-code, verification code, or "temporary" suppressions. If clippy or rustc flags it,
-fix the root cause — split the function, restructure the code, remove the dead
-item. Suppressions are a direct violation of the zero-defect cleanroom standard.
-The Kani harness incident proved this: `cfg(kani)` hid 7 API drift bugs that
-would have been caught by normal compilation. Every line of code is always
-type-checked and linted, or it does not exist in this repository.
-**Forbidden crates in core:** `tokio`, `hyper`, `reqwest`, `axum`, `async-std`, `smol`.
-Tokio-only dependencies must be behind `asupersync-tokio-compat` adapter modules.
-Core domain code depends on `asupersync` only (ADR-FERR-002).
+**C1** Append-only. Never delete or mutate datoms. Retractions are new datoms.
+**C2** Content-addressed identity. `EntityId = BLAKE3(content)`.
+**C4** CRDT merge = set union. Commutative, associative, idempotent.
+**NEG-FERR-001** No panics. No `unwrap()`, no `expect()` in production code. `Result<T, FerraError>` everywhere.
+**INV-FERR-023** Safe callable surface. `#![forbid(unsafe_code)]` by default. Internal `unsafe` permitted only when: (1) firewalled behind safe API — callers cannot trigger UB, (2) mission-critical for performance/scaling, (3) ADR-documented. See GOALS.md §6.2.
+**Zero lint suppressions.** No `#[allow(...)]` anywhere — not in tests, not in verification, not "temporarily." No `#[cfg(...)]` hiding code from the type checker. The Kani incident proved this: `cfg(kani)` hid 7 API drift bugs. Fix root causes, not symptoms.
+**Forbidden crates in core:** `tokio`, `hyper`, `reqwest`, `axum`, `async-std`, `smol`. Core depends on `asupersync` only (ADR-FERR-002).
 
 ---
 
-## Build
+## Quality Standard: GOALS.md §6
 
-**CRITICAL**: Set `export CARGO_TARGET_DIR=/data/cargo-target` at session start.
-This is NOT auto-configured. Omitting it uses /tmp (RAM-backed, will fill up).
-Every cargo command must use this target dir.
+Read **GOALS.md §6** (Defensive Engineering Standards) — it is the canonical quality reference. Summary:
 
-### Fast Gate (interactive feedback loop, ~30 seconds)
+### CI Gates (all must pass every commit, no `--no-verify`)
 
-Use this during development. Catches logic bugs, compilation errors, lint violations.
+| Gate | Command | What It Catches |
+|------|---------|----------------|
+| 1 | `cargo fmt --all -- --check` | Formatting drift |
+| 2 | `cargo clippy --workspace --all-targets -- -D warnings` | All lints |
+| 3 | `cargo clippy --workspace --lib -- -D clippy::unwrap_used -D clippy::expect_used -D clippy::panic` | Panics in production |
+| 4 | `cargo test --workspace` | Correctness |
+| 5 | `cargo deny check` | CVEs, license violations, banned crates |
+| 6 | `#![forbid(unsafe_code)]` in all 5 crate roots | Unsafe containment |
+| 7 | `cargo doc --workspace --no-deps -- -D warnings` | Doc gaps |
+| 8 | File complexity (500 LOC, clippy.toml) | Complexity creep |
+| 9 | `lake build` (unconditional) | Lean proof regressions (0 sorry) |
+| 10 | `cargo +nightly miri test` | Undefined behavior |
+| 11 | Coverage >= thresholds (no regression) | Untested code |
 
-```bash
-export CARGO_TARGET_DIR=/data/cargo-target
-cargo check --workspace --all-targets
-cargo clippy --workspace --all-targets -- -D warnings
-cargo fmt --all -- --check
-PROPTEST_CASES=1000 cargo test --workspace     # 1K cases — fast
-```
+### Dynamic Analysis
 
-### Strict Gate (production code only, ~15 seconds)
+- **MIRI**: All pure-logic tests pass. CI nightly.
+- **ASan**: `RUSTFLAGS="-Zsanitizer=address" cargo test`. Nightly or pre-tag.
+- **Fuzz**: 60s smoke per target in CI. Crashes become seed corpus entries.
+- **Mutation testing**: `cargo-mutants`, >80% kill rate. Weekly or pre-tag.
 
-NEG-FERR-001 enforcement. Verifies zero unwrap/expect/panic in production code.
-Test code is exempt (unwrap in tests is acceptable per testing standards).
+### Coverage Thresholds (ratchet — only goes up)
 
-```bash
-cargo clippy --workspace --lib -- -D warnings \
-  -D clippy::unwrap_used -D clippy::expect_used -D clippy::panic
-```
+Line >= 90%, branch >= 80%, mutation kill >= 80% per crate.
 
-### Full Verification (pre-tag / nightly, ~10 minutes)
+### Verification Layers (Stage 0 invariants require ALL six)
 
-Use before phase gate closure or tagging a release. Runs 10K proptest cases in
-release mode for statistical confidence on algebraic properties + meaningful
-performance threshold assertions.
-
-```bash
-cargo test --workspace --release                           # 10K cases, optimized
-cargo bench --package ferratomic-verify                    # criterion benchmarks
-cd ferratomic-verify/lean && lake build                    # Lean proofs (0 sorry)
-```
-
-### Why Two Modes?
-
-Proptests run 10,000 randomized cases per property. In debug mode (unoptimized),
-checkpoint/WAL round-trip tests take 30-40 minutes. In release mode, the same
-suite finishes in 5-10 minutes. Debug mode catches logic bugs in the first
-100-1000 cases; the remaining 9,000 provide statistical confidence on subtle
-algebraic properties (commutativity over the full input space) — that confidence
-matters in release mode where the optimizer may introduce subtle differences.
-
-The `PROPTEST_CASES` environment variable overrides the hardcoded case count.
-The proptest crate checks this at runtime. Use `PROPTEST_CASES=1000` for fast
-iteration and the default 10,000 for pre-tag verification.
+Lean 4 (0 sorry) + Kani + Stateright + proptest (10K, >99.97% Bayesian) + FaultInjectingBackend + type-level.
 
 ---
 
-## Quality Standard
+## Phase Ordering (non-negotiable)
 
-`ms load rust-formal-engineering -m --full` — the standard methodology.
-Every type encodes an invariant. Every function proves a property.
-NASA-grade, zero-defect, cleanroom engineering. No shortcuts.
+```
+Phase 0: Specification (73 INV, 25 ADR, 7 NEG, 2 CI-FERR)     DONE
+Phase 1: Lean 4 proofs (0 sorry)                                DONE
+Phase 2: Tests (all fail — red phase)                            DONE
+Phase 3: Type definitions (types ARE propositions)               DONE
+Phase 4: Implementation (programs ARE proofs)                    IN PROGRESS
+Phase 5: Integration
+```
+
+Phase N+1 CANNOT begin until Phase N passes isomorphism check. Gaps between spec, algebra, and tests are DEFECTS.
+
+Spec Level 2 uses `BTreeSet` conceptually. Implementation uses `im::OrdSet`/`im::OrdMap` (ADR-FERR-001).
+
+---
+
+## Specification
+
+- **Spec**: `spec/` (canonical) — see `spec/README.md` for module index
+- **Architecture**: `docs/design/FERRATOMIC_ARCHITECTURE.md`
+- **Goals & values**: `GOALS.md` (value hierarchy, success criteria, defensive standards)
+- **Lifecycle prompts**: `docs/prompts/lifecycle/` (one prompt per cognitive phase)
+
+### Crate Map
+
+```
+ferratom-clock/     Leaf: HLC, TxId, AgentId, Frontier (ZERO project deps)
+ferratom/           Leaf: Datom, EntityId, Value, Schema, Wire types
+ferratomic-core/    Core: Store, Database, WAL, checkpoint, indexes, merge, LIVE
+ferratomic-datalog/ Facade: Datalog parser, planner, evaluator (stubs — Phase 4d)
+ferratomic-verify/  Proofs: Lean 4, Stateright, Kani, proptest, fault injection
+```
+
+Dependency: clock -> ferratom -> core -> datalog. Acyclic.
+
+---
+
+## Agentic Development Rules
+
+**Worktrees FORBIDDEN.** `isolation: "worktree"` corrupts .beads/ and .cass/. Always use default (non-worktree) agents.
+**Agents don't run cargo.** Orchestrator compiles once after all agents complete. Prevents lock contention.
+**Disjoint file sets.** Two agents NEVER edit the same file. Coordinate via beads + dependency edges.
+**Session prompts define scope.** `docs/prompts/lifecycle/` — one prompt per phase. The prompt IS the task spec.
+**Beads for task tracking.** `br ready` (actionable), `bv --robot-next` (top pick), `br update <id> --status in_progress` (claim).
+**Skill loading.** One skill per cognitive phase. Discovery: `ms load spec-first-design -m --full`. Implementation: `ms load rust-formal-engineering -m --full`. Never stack.
+
+---
+
+## Code Discipline (non-discoverable rules only)
+
+**Types are propositions.** Minimal cardinality. Newtypes for all domain concepts. Typestate for lifecycles. Exhaustive matching (no `_ =>`). Parse, don't validate.
+**Error categories matter.** `FerraError::Io` = retryable. `SchemaViolation` = caller bug. `InvariantViolation` = our bug. Callers match on category, not strings.
+**INV-FERR in doc comments.** Every function that upholds an invariant cites it: `/// INV-FERR-006: snapshot isolation`.
+**Test names cite invariants.** `test_inv_ferr_001_merge_commutativity`, not `test_merge`.
+**No `#[ignore]` without a tracking bead.**
+**Conventional commits.** `feat:`, `fix:`, `refactor:`, `test:`, `docs:`, `perf:`. Atomic — one logical change per commit.
+**Every bug gets a regression test.** Every fuzz crash gets a seed corpus entry. Coverage ratchet: only goes up.
+
+---
+
+## Complexity Limits (enforced by clippy.toml + CI Gate 8)
+
+| Scope | Limit |
+|-------|-------|
+| Function | 50 LOC, cyclomatic complexity 10, 5 parameters |
+| File | 500 LOC (excl. tests), 1500 LOC (incl. tests) |
+| Module | One concept. `store.rs` must not contain WAL logic. |
+| ferratom-clock | < 1,000 LOC |
+| ferratom | < 2,000 LOC |
+| ferratomic-core | < 10,000 LOC |
+| ferratomic-datalog | < 5,000 LOC |
+| ferratomic-verify | No limit |

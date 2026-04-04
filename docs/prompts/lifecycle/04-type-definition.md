@@ -171,6 +171,20 @@ pub enum FerraError {
 3. Write a doc comment citing INV-FERR-NNN
 4. Verify minimal cardinality: can any invalid state be represented?
 5. Verify no `pub` fields that allow construction of invalid values
-6. Run: `CARGO_TARGET_DIR=/data/cargo-target cargo check --workspace`
-7. Run: `CARGO_TARGET_DIR=/data/cargo-target cargo clippy --workspace -- -D warnings`
-8. Close task: `br close <id> --reason "Type defined, encodes INV-FERR-NNN"`
+6. Run quality gates (see below)
+7. Close task: `br close <id> --reason "Type defined, encodes INV-FERR-NNN"`
+
+## Quality Gates
+
+After defining types, verify:
+
+```bash
+CARGO_TARGET_DIR=/data/cargo-target cargo check --workspace --all-targets
+CARGO_TARGET_DIR=/data/cargo-target cargo clippy --workspace --all-targets -- -D warnings
+CARGO_TARGET_DIR=/data/cargo-target cargo clippy --workspace --lib -- -D warnings \
+  -D clippy::unwrap_used -D clippy::expect_used -D clippy::panic
+CARGO_TARGET_DIR=/data/cargo-target cargo fmt --all -- --check
+CARGO_TARGET_DIR=/data/cargo-target cargo doc --workspace --no-deps -- -D warnings
+```
+
+See GOALS.md §6.8 for the full 11-gate process.

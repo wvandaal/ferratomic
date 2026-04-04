@@ -12,6 +12,10 @@
 //!                              where t' > t }
 //! ```
 //!
+//! These harnesses use fixed fixture `EntityId`s rather than calling
+//! `EntityId::from_content`. That keeps the proof target on LIVE semantics;
+//! INV-FERR-012 content-addressing remains a separate proof obligation.
+//!
 //! For Kani tractability, the model is simplified: for each (entity, attribute,
 //! value) triple, if there exists ANY retraction in the datom set, that
 //! triple is removed from the live view. This is sound for the bounded
@@ -20,7 +24,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use ferratom::{Attribute, Datom, EntityId, Op, TxId, Value};
+use ferratomic_core::store::select_latest_live_value_for_test;
 
+use super::helpers::proof_entity_id;
 #[cfg(not(kani))]
 use super::kani;
 
@@ -60,9 +66,9 @@ fn live_view(datoms: &BTreeSet<Datom>) -> BTreeSet<(EntityId, Attribute, Value)>
 #[cfg_attr(not(kani), test)]
 #[cfg_attr(not(kani), ignore = "requires Kani verifier")]
 fn retraction_removes_from_live_view() {
-    let entity = EntityId::from_content(b"kani-live-029");
-    let attr = Attribute::from("test/name");
-    let val = Value::String("alice".into());
+    let entity = proof_entity_id(0x29);
+    let attr = Attribute::from("a");
+    let val = Value::Long(1);
 
     let assert_tx = TxId::new(1, 0, 0);
     let retract_tx = TxId::new(2, 0, 0);
@@ -95,11 +101,11 @@ fn retraction_removes_from_live_view() {
 #[cfg_attr(not(kani), test)]
 #[cfg_attr(not(kani), ignore = "requires Kani verifier")]
 fn retraction_is_targeted() {
-    let e1 = EntityId::from_content(b"kani-live-e1");
-    let e2 = EntityId::from_content(b"kani-live-e2");
-    let attr = Attribute::from("test/name");
-    let val1 = Value::String("alice".into());
-    let val2 = Value::String("bob".into());
+    let e1 = proof_entity_id(0x31);
+    let e2 = proof_entity_id(0x32);
+    let attr = Attribute::from("a");
+    let val1 = Value::Long(1);
+    let val2 = Value::Long(2);
 
     let t1 = TxId::new(1, 0, 0);
     let t2 = TxId::new(2, 0, 0);
@@ -132,8 +138,8 @@ fn retraction_is_targeted() {
 #[cfg_attr(not(kani), test)]
 #[cfg_attr(not(kani), ignore = "requires Kani verifier")]
 fn live_view_contains_only_asserted() {
-    let entity = EntityId::from_content(b"kani-live-032");
-    let attr = Attribute::from("test/val");
+    let entity = proof_entity_id(0x33);
+    let attr = Attribute::from("a");
 
     // Symbolic choice: the operation at t=1 and t=2.
     let op1_raw: bool = kani::any();
@@ -165,4 +171,37 @@ fn live_view_contains_only_asserted() {
             "INV-FERR-032: triple with latest Retract must not be in live view"
         );
     }
+}
+
+/// INV-FERR-032: card-one resolution picks the highest surviving `TxId`.
+///
+/// This harness targets the exact selection kernel used by
+/// `Store::live_resolve`. First, the newest asserted value must win. Then,
+/// after retracting that newest value, resolution must fall back to the
+/// next-highest surviving assertion.
+#[cfg_attr(kani, kani::proof)]
+#[cfg_attr(kani, kani::unwind(6))]
+#[cfg_attr(not(kani), test)]
+#[cfg_attr(not(kani), ignore = "requires Kani verifier")]
+fn select_latest_live_value_lww_semantics() {
+    let older_value = Value::Long(1);
+    let newer_value = Value::Long(2);
+
+    assert_eq!(
+        select_latest_live_value_for_test(&[
+            (older_value.clone(), (TxId::new(1, 0, 0), Op::Assert)),
+            (newer_value.clone(), (TxId::new(2, 0, 0), Op::Assert)),
+        ]),
+        Some(&newer_value),
+        "INV-FERR-032: highest surviving TxId must win for card-one resolution"
+    );
+
+    assert_eq!(
+        select_latest_live_value_for_test(&[
+            (older_value.clone(), (TxId::new(1, 0, 0), Op::Assert)),
+            (newer_value.clone(), (TxId::new(2, 0, 0), Op::Retract)),
+        ]),
+        Some(&older_value),
+        "INV-FERR-032: retracting the head value must reveal the next-highest surviving assert"
+    );
 }

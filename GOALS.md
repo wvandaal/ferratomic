@@ -107,9 +107,16 @@ No tradeoff permitted. Violating these means the project has failed its purpose.
   WAL-before-snapshot discipline is the load-bearing guarantee. Data loss is not
   a bug — it is a fundamental breach.
 
-- **Safety.** No unsafe code. No panics in production. The type system and the
-  borrow checker are verification instruments. Subverting them (unsafe blocks,
-  unwrap in libraries) shifts proof obligations from the compiler to hope.
+- **Safety.** No panics in production. The type system and the borrow checker are
+  verification instruments. The application's entire callable surface area must be
+  safe — `unsafe` is a containment problem, not a blanket prohibition. Unsafe code
+  is permitted (in dependencies or in our own crates) if and only if: (1) it is
+  firewalled behind a safe public API so callers cannot trigger UB, (2) it is the
+  only possible way to achieve a performance or scaling objective that is
+  mission-critical to top-line goals, and (3) the proof obligation is bounded,
+  documented (via ADR), and auditable. Unsafe that leaks into the callable
+  surface, or that exists for convenience rather than necessity, shifts proof
+  obligations from the compiler to hope — a Tier 1 violation.
 
 ### Tier 2 — Foundation Priorities
 
@@ -252,3 +259,133 @@ opinion. With them, "correct" is a theorem.
 verification. Every type encodes an invariant. Every function signature is a
 contract. Invalid states must be unrepresentable. The compiler is the first and
 most reliable verifier — engage it fully.
+
+---
+
+## 6. Defensive Engineering Standards
+
+These standards define the quality floor. They are non-negotiable for the same
+reason Tier 1 values are non-negotiable: without them, claims of correctness are
+assertions, not evidence. The project targets the intersection of NASA/JPL flight
+software discipline, ISO/IEC 25010 Product Quality, and Cleanroom Software
+Engineering — adapted for a Rust embedded database.
+
+### 6.1 Verification Layers (all required for Stage 0 invariants)
+
+Every Stage 0 invariant must be verified across all six layers before its phase
+gate can close. Missing a layer is a gap, not a deferral.
+
+| Layer | Tool | What It Proves | Enforcement |
+|-------|------|---------------|-------------|
+| **Algebraic proof** | Lean 4 + mathlib | Mathematical law holds | 0 `sorry` required |
+| **Bounded model checking** | Kani | Property holds for all inputs within bound | CI gate (nightly) |
+| **Protocol model checking** | Stateright | Correct under all message orderings | CI gate |
+| **Property-based testing** | proptest (10K cases) | Statistical confidence >99.97% | CI gate, Bayesian confidence (ADR-FERR-012) |
+| **Fault injection** | FaultInjectingBackend | Survives adversarial storage faults | CI gate |
+| **Type-level enforcement** | Rust type system | Invalid states unrepresentable | Compilation IS the proof |
+
+### 6.2 Unsafe Code Containment
+
+Unsafe is a containment problem, not a blanket prohibition. The application's
+entire callable surface area must be safe.
+
+Unsafe code is permitted (in dependencies or in our own crates) if and only if:
+
+1. **Firewalled behind a safe public API** — callers cannot trigger undefined
+   behavior through the interface under any input.
+2. **Mission-critical necessity** — it is the only possible way to achieve a
+   performance or scaling objective critical to top-line goals.
+3. **ADR-documented** — the proof obligation is bounded, the unsafe sites are
+   enumerated, the containment argument is auditable.
+
+Unsafe that leaks into the callable surface, or that exists for convenience
+rather than necessity, is a Tier 1 violation. Dependencies with internal unsafe
+behind safe APIs (e.g., `im::OrdMap`, `blake3`, `memmap2`) are acceptable —
+the abstraction boundary IS the safety guarantee.
+
+### 6.3 Static Analysis
+
+| Tool | What It Catches | Enforcement |
+|------|----------------|-------------|
+| `cargo clippy` (permissive) | All standard lints, all targets | CI gate, every commit |
+| `cargo clippy` (strict, `--lib` only) | `unwrap_used`, `expect_used`, `panic` in production code | CI gate, every commit |
+| `clippy.toml` limits | Cognitive complexity >10, functions >50 LOC, >5 args | CI gate |
+| `cargo fmt` | Formatting drift | CI gate |
+| `cargo deny` | Vulnerable deps, license violations, banned crates | CI gate |
+| `cargo doc` with `-D warnings` | Documentation gaps on public items | CI gate |
+| Zero lint suppressions | No `#[allow(...)]` anywhere, including tests | CI gate + pre-commit hook |
+
+### 6.4 Dynamic Analysis
+
+| Tool | What It Catches | Enforcement |
+|------|----------------|-------------|
+| **MIRI** | Undefined behavior across unsafe boundaries: uninitialized reads, dangling pointers, data races | CI gate (nightly). All pure-logic tests must pass under MIRI. I/O-bound tests may be excluded. |
+| **AddressSanitizer** | Out-of-bounds access, use-after-free, double-free, memory leaks in C/FFI dependencies | Scheduled CI (nightly or pre-tag). `RUSTFLAGS="-Zsanitizer=address"`. |
+| **Fuzz testing** | Edge cases in deserialization, WAL parsing, checkpoint loading, wire type decoding | CI smoke runs (60s per target). Extended runs pre-tag. 5 targets with seed corpus. |
+| **Mutation testing** | Weak assertions — tests that pass but don't verify behavior. Measures test STRENGTH, not coverage. | Periodic (weekly or pre-tag). `cargo-mutants`. Target: >80% killed mutants. |
+
+### 6.5 Coverage and Confidence
+
+| Metric | Minimum Threshold | Tool | Rationale |
+|--------|------------------|------|-----------|
+| **Line coverage** | 90% per crate (ferratom, ferratomic-core) | `cargo-llvm-cov` | You cannot claim zero-defect without knowing the denominator. |
+| **Branch coverage** | 80% per crate | `cargo-llvm-cov` | Untested branches are unverified code paths. |
+| **Proptest confidence** | Beta(n+1,1) lower bound >= 0.9997 at 10K cases | ADR-FERR-012 | Bayesian quantification of statistical confidence. |
+| **Mutation kill rate** | >80% of injected mutants killed | `cargo-mutants` | Verifies test assertions are strong enough to catch defects. |
+| **Coverage direction** | Must not decrease between commits | CI gate | Ratchet: coverage only goes up. |
+
+### 6.6 Supply Chain Security
+
+| Practice | Tool | What It Prevents |
+|----------|------|-----------------|
+| **Dependency advisory check** | `cargo-deny` (advisories) | Known CVEs in transitive deps |
+| **License audit** | `cargo-deny` (licenses) | Copyleft/unlicensed contamination |
+| **Crate ban list** | `cargo-deny` (bans) | Explicitly banned crates (openssl, etc.) |
+| **Source restriction** | `cargo-deny` (sources) | No unknown registries or git sources |
+| **Transitive unsafe audit** | `cargo-geiger` | Visibility into dependency unsafe surface |
+| **SBOM generation** | CycloneDX or SPDX | Machine-readable bill of materials (pre-release) |
+
+### 6.7 Threat Modeling
+
+Before implementing any phase that introduces adversarial trust boundaries
+(Phase 4c federation, Phase 4c signing, transport), a STRIDE-based threat model
+must be authored as `docs/design/THREAT_MODEL.md`. The threat model must cover:
+
+- Trust boundaries (local vs. peer vs. untrusted)
+- Attack surfaces (deserialization, transport, signing, merge)
+- Mitigations for each identified threat
+- Residual risk and acceptance rationale
+
+The wire/core trust boundary (ADR-FERR-010) is the Phase 4a threat model.
+Federation requires its own analysis.
+
+### 6.8 Process Gates
+
+Every commit to main must pass ALL of the following. No exceptions. No
+`--no-verify`. Failures are defects, not inconveniences.
+
+```
+Gate 1:  cargo fmt --all -- --check
+Gate 2:  cargo clippy --workspace --all-targets -- -D warnings
+Gate 3:  cargo clippy --workspace --lib -- -D warnings \
+           -D clippy::unwrap_used -D clippy::expect_used -D clippy::panic
+Gate 4:  cargo test --workspace
+Gate 5:  cargo deny check
+Gate 6:  #![forbid(unsafe_code)] verified in all crate roots
+Gate 7:  cargo doc --workspace --no-deps -- -D warnings
+Gate 8:  File complexity limits (500 LOC, clippy.toml thresholds)
+Gate 9:  lake build (Lean proofs, 0 sorry) — unconditional
+Gate 10: cargo +nightly miri test (pure-logic subset)
+Gate 11: Coverage >= thresholds (no regression)
+```
+
+### 6.9 Regression Discipline
+
+- **Every bug gets a regression test.** The test must fail before the fix and
+  pass after. No exceptions.
+- **Every fuzz crash gets a seed corpus entry.** The crashing input is preserved
+  in `fuzz/corpus/` so it is re-tested on every subsequent run.
+- **Coverage ratchet.** Coverage thresholds only increase. A PR that drops
+  coverage below the threshold is rejected.
+- **Lean proofs are unconditional in CI.** Not gated on commit message keywords.
+  A code change that breaks a Lean proof fails CI regardless of the commit message.

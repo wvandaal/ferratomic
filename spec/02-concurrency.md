@@ -2258,17 +2258,22 @@ theorem anti_entropy_complete (a b : DatomStore) (d : Datom) (h : d ∈ a ∨ d 
 
 #### Level 0 (Algebraic Law)
 ```
-∀ crate C ∈ {ferratom, ferratomic-core, ferratomic-datalog, ferratomic-verify}:
+∀ crate C ∈ {ferratom, ferratom-clock, ferratomic-datalog, ferratomic-verify}:
   #![forbid(unsafe_code)] is present at crate root
+
+ferratomic-core uses #![deny(unsafe_code)] with a single exception:
+  mmap.rs has #![allow(unsafe_code)] per ADR-FERR-020 (localized unsafe
+  for performance-critical cold start, guarded by BLAKE3 verification).
 
 This is a structural invariant: the Rust compiler rejects any file in these
 crates that contains an `unsafe` block, `unsafe fn`, `unsafe impl`, or
-`unsafe trait`. Verification is by compilation — if the crate compiles,
-it contains no unsafe code.
+`unsafe trait` — except the explicitly documented mmap.rs module in
+ferratomic-core. Verification is by compilation.
 ```
 
 #### Level 1 (State Invariant)
-No crate in the Ferratomic workspace uses `unsafe` code. This means:
+No crate in the Ferratomic workspace uses `unsafe` code except the
+localized `mmap.rs` module in ferratomic-core (ADR-FERR-020). This means:
 - No raw pointer dereference.
 - No calls to `extern "C"` functions.
 - No `transmute`, `from_raw_parts`, or other memory-unsafety primitives.

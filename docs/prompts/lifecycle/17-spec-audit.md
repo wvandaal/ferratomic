@@ -59,6 +59,8 @@ A spec invariant meets lab-grade standard when it satisfies this predicate:
 An invariant missing any layer is structurally incomplete. An invariant where
 layers contradict each other is internally inconsistent. Both are findings.
 
+**Cross-reference with GOALS.md §6**: When auditing an invariant's `**Verification**` tags, check whether the invariant should also prescribe `V:MIRI`, `V:FUZZ`, `V:MUTANT`, or `V:FAULT` per GOALS.md §6.4. Invariants touching unsafe boundaries, deserialization, or durability paths should have the corresponding dynamic analysis tags.
+
 ---
 
 ## Phase 0: Ground Yourself

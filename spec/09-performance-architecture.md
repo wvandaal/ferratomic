@@ -244,6 +244,7 @@ theorem mmap_roundtrip (s : DatomStore) :
 **Traces to**: INV-FERR-025 (Index Backend Interchangeability), INV-FERR-027
 (Read P99.99 Latency), INV-FERR-005 (Index Bijection)
 **Verification**: `V:PROP`, `V:KANI`, `V:LEAN`, `V:TYPE`
+**Referenced by**: NEG-FERR-007 (FM-Index inapplicability), ADR-FERR-030 (wavelet matrix target)
 **Stage**: 0
 
 #### Level 0 (Algebraic Law)
@@ -566,6 +567,7 @@ theorem promote_preserves_content (s : DatomStore) :
 **Traces to**: INV-FERR-005 (Index Bijection), INV-FERR-025 (Index Backend
 Interchangeability), INV-FERR-071 (Sorted-Array Backend)
 **Verification**: `V:PROP`, `V:LEAN`
+**Referenced by**: ADR-FERR-030 (wavelet matrix target — subsumes permutation indexes)
 **Stage**: 1
 
 #### Level 0 (Algebraic Law)
@@ -1144,6 +1146,7 @@ Fusion), INV-FERR-074 (Homomorphic Fingerprint), INV-FERR-075 (LIVE-First Checkp
 INV-FERR-005 (Index Bijection), INV-FERR-012 (Content-Addressed Identity),
 C2 (Content-Addressed Identity), C4 (CRDT Merge = Set Union)
 **Verification**: `V:PROP`, `V:KANI`, `V:LEAN`, `V:TYPE`
+**Referenced by**: ADR-FERR-030 (wavelet matrix target — subsumes positional arrays)
 **Stage**: 0
 
 #### Level 0 (Algebraic Law)
@@ -1572,6 +1575,7 @@ store fingerprint), INV-FERR-076 (Positional Content Addressing — positions de
 chunk boundaries), C4 (CRDT Merge = Set Union), spec/06-prolly-tree.md (chunk
 fingerprints are Merkle leaf precursors)
 **Verification**: `V:PROP`, `V:LEAN`
+**Referenced by**: INV-FERR-080 (incremental LIVE via dirty-chunk tracking)
 **Stage**: 1
 
 #### Level 0 (Algebraic Law)
@@ -1939,6 +1943,134 @@ proptest! {
 -- Deferred to Phase 4b (Stage 2).
 theorem incremental_live_correctness : sorry := sorry
 ```
+
+---
+
+---
+
+### NEG-FERR-007: FM-Index Inapplicability for Content-Addressed Stores
+
+**Traces to**: INV-FERR-012 (Content-Addressed Identity), INV-FERR-071 (Sorted-Array Backend),
+INV-FERR-025 (Index Backend Interchangeability), ADR-FERR-030 (Wavelet Matrix)
+**Stage**: 0
+
+The FM-Index (Ferragina-Manzini, 2000) must NOT be used as an index backend or
+compression layer for ferratomic stores. The FM-Index achieves `n × H₀` bits of
+storage where `H₀` is the zeroth-order empirical entropy per symbol. Compression
+works when `H₀ < 8` bits/byte — i.e., when the data has statistical regularity
+that the Burrows-Wheeler Transform can exploit. Content-addressed entity
+identifiers (INV-FERR-012: `EntityId = BLAKE3(content)`) are cryptographic hash
+outputs with maximum entropy (`H₀ = 8.0 bits/byte`) by design. The FM-Index
+provides zero compression on the dominant field (EntityId: 32 of ~130 bytes per
+datom, 25% of storage).
+
+**Quantified performance deficit** (analysis at 200K datoms):
+
+| Metric | FM-Index | Binary search (PositionalStore) | Interpolation search |
+|--------|----------|--------------------------------|---------------------|
+| EntityId lookup | ~1,300 ns (256 wavelet tree accesses × 5 ns) | ~80 ns (18 probes × 4-5 ns) | ~20 ns (4 probes) |
+| Relative speed | **1×** (baseline) | **16× faster** | **65× faster** |
+| Compression on EntityId | 0% (max entropy) | 0% (raw storage) | 0% (raw storage) |
+
+The FM-Index's strength — arbitrary substring search on low-entropy natural
+language text — is the opposite of ferratomic's workload: structured field
+lookups on BLAKE3 entity identifiers with maximum entropy. The O(m) pattern
+search where `m = 32 bytes` requires `32 × 8 = 256` wavelet tree rank queries,
+each costing ~5 ns. The resulting ~1.3 μs per lookup is 4-65× slower than the
+binary/interpolation search alternatives that exploit array contiguity and
+BLAKE3's uniform distribution guarantee.
+
+**Field-by-field entropy analysis**:
+
+| Field | Size (bytes) | H₀ (bits/byte) | FM-Index compressible? | Reason |
+|-------|-------------|-----------------|----------------------|--------|
+| EntityId | 32 | 8.0 (maximum) | No | BLAKE3 output indistinguishable from random |
+| Attribute | ~30 | ~2-3 | Yes | Small dictionary (~50 unique values) |
+| Value | ~40 | ~5-7 | Partial | Strings/refs high-entropy; longs/instants compressible |
+| TxId | 10 | ~2-4 | Yes | Mostly sequential physical clock + counter |
+| Op | 1 | ~0.8 | Yes | 2 variants, ~80% Assert |
+
+The correct succinct direction for content-addressed stores is per-column
+compression via wavelet matrices (ADR-FERR-030), which operate on integer-encoded
+column symbols where entropy IS low, not on raw BLAKE3 bytes where entropy is
+maximal.
+
+**Decision**: bd-gzjb CLOSED as NO-GO (Session 009, confirmed by project lead).
+
+---
+
+### ADR-FERR-030: Wavelet Matrix as Information-Theoretic Convergence Target
+
+**Traces to**: INV-FERR-071 (Sorted-Array Backend), INV-FERR-073 (Yoneda Index Fusion),
+INV-FERR-076 (Positional Content Addressing), NEG-FERR-007 (FM-Index Inapplicability)
+**Stage**: 2
+
+**Problem**: The PositionalStore (INV-FERR-076) uses ~130 bytes/datom. The
+information-theoretic minimum for a typical agentic workload is ~28 bytes/datom
+(computed from field-by-field entropy analysis). No existing invariant addresses
+this 4.6× gap. What is the convergence target for the ALIEN performance
+architecture — i.e., what data structure closes the gap between current storage
+density and the information-theoretic minimum?
+
+**Options**:
+
+| Option | Description | Pros | Cons |
+|--------|-------------|------|------|
+| A: FM-Index | Succinct self-index over BWT-transformed datom bytes | Single structure replaces store + all indexes; O(m) pattern search | Zero compression on BLAKE3 EntityIds (NEG-FERR-007); 4-65× slower lookups |
+| B: Columnar + dictionary encoding | Per-field columnar storage with dictionary codes | Standard technique; good compression on low-cardinality fields | 5 random accesses per datom reconstruction; poor point-lookup performance |
+| C: Wavelet matrix | Per-column wavelet matrix over integer-encoded symbols | Unified storage + indexing; per-column compression approaching H₀; rank/select provides index queries in O(log σ); subsumes columnar benefits without point-lookup penalty | Requires integer symbol encoding (value pool, MMPH); complex implementation; Phase 4b prerequisites |
+
+**Decision**: **Option C: Wavelet matrix** as the Phase 4c+ convergence target.
+
+The wavelet matrix stores a sequence of symbols from alphabet σ in
+`n × ⌈log₂(σ)⌉` bits while supporting Access(i), Rank(c, i), and Select(c, j)
+in O(log σ) time. These operations are the building blocks for range queries,
+prefix lookups, and filter operations — meaning the wavelet matrix provides both
+compression and indexing from a single structure.
+
+Per-column analysis at 200K datoms:
+
+| Column | Alphabet size (σ) | Bits/datom | Rank/select provides |
+|--------|-------------------|-----------|---------------------|
+| Entity (symbol ID) | 10K-1M | 14-20 | Entity range scan (subsumes EAVT index) |
+| Attribute (dict code) | 50-100 | 6-7 | Attribute filter (subsumes AEVT index) |
+| Value (pool ID) | 50K-50M | 16-26 | Value retrieval |
+| TxId (delta-encoded) | small | 3-4 | Temporal query |
+| Op | 2 | 1 | LIVE count (IS the LIVE bitvector) |
+
+**Projected density**: ~5.1 bytes/datom + value pool overhead. At 200K datoms:
+~1 MB vs current ~26 MB (PositionalStore). At 100M datoms: ~510 MB vs ~13 GB.
+This is 1.5-2× above the ~2.8 byte/datom theoretical minimum — close enough
+that further compression would require domain-specific codebooks.
+
+**Prerequisites** (all Phase 4a/4b, designed to be accretive toward this target):
+- Value-pooled deduplicated storage (bd-kt98, Phase 4b) — integer value IDs
+- Monotone Minimal Perfect Hash for EntityId symbol mapping (bd-wa5p)
+- Attribute dictionary (genesis schema + schema evolution — already exists)
+- Prolly tree (Phase 4b, INV-FERR-045..050) — chunk boundaries for per-chunk wavelet matrices
+
+**Subsumption**: The wavelet matrix subsumes columnar decomposition
+(INV-FERR-078, Stage 2 — see below) because it achieves columnar compression benefits without the
+5-random-access penalty. It also subsumes the LIVE bitvector (INV-FERR-076)
+because the Op column's rank operation directly provides LIVE datom counts.
+
+**Rejected**:
+- Option A (FM-Index): Rejected per NEG-FERR-007. BLAKE3 maximum entropy makes
+  it strictly inferior to binary search on contiguous arrays.
+- Option B (Columnar): Not rejected as a technique — INV-FERR-078 (Stage 2,
+  not yet authored) specifies columnar decomposition as a Phase 4b stepping stone. But as the convergence
+  TARGET, it lacks the unified storage+indexing property. Columnar requires
+  separate index structures; wavelet matrix provides indexing intrinsically.
+
+**Consequence**: All Phase 4a/4b performance work is designed with the wavelet
+matrix as the information-theoretic horizon. The PositionalStore (INV-FERR-076),
+Yoneda fusion (INV-FERR-073), and value pooling (bd-kt98) are incremental steps
+toward this target. Implementation is Phase 4c+ (bd-gvil, P3 priority).
+
+**Source**: Session 009 first-principles analysis (ALIEN Architecture). Information-
+theoretic gap analysis: ~130 bytes/datom actual vs ~28 bytes/datom entropy minimum.
+Cross-pollination from succinct data structure literature (Navarro, "Compact Data
+Structures," 2016).
 
 ---
 

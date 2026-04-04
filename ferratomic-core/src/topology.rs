@@ -7,19 +7,44 @@
 
 use ferratom::Datom;
 
-/// Filter predicate for read replica subset selection (INV-FERR-030).
+/// Filter predicate that controls which datoms a read replica stores.
 ///
-/// Implementations determine which datoms a replica stores.
+/// INV-FERR-030: replica filter — `filter(R, d) in {accept, reject}` is
+/// deterministic for a given replica `R` and datom `d`. The set of datoms
+/// accepted by a replica is always a subset of the source store:
+/// `accepted(R) ⊆ source`. A filter must be a pure function of the datom
+/// alone — it does not depend on ordering, arrival time, or previously
+/// accepted datoms. Although `&self` is available, implementations MUST
+/// NOT use internal mutable state to vary the return value for the same
+/// datom across calls. This determinism guarantee means that two replicas
+/// with the same filter configuration converge to the same subset after
+/// anti-entropy exchange (INV-FERR-022).
+///
+/// The trait requires `Send + Sync` because filters are evaluated during
+/// merge and anti-entropy operations that may span thread boundaries.
 /// `AcceptAll` is the default (full replica).
 pub trait ReplicaFilter: Send + Sync {
-    /// Returns true if this replica should store the given datom (INV-FERR-030).
+    /// Evaluate whether this replica accepts the given datom.
+    ///
+    /// INV-FERR-030: returns `true` if the datom belongs to this replica's
+    /// accepted subset, `false` otherwise. The result is deterministic:
+    /// calling `accepts` on the same datom returns the same value every
+    /// time, regardless of call order or concurrent mutations to the store.
     fn accepts(&self, datom: &Datom) -> bool;
 }
 
-/// Accept all datoms: full replica behavior (INV-FERR-030).
+/// Full-replica filter that accepts every datom unconditionally.
 ///
-/// This is the default filter for single-node operation. Every datom
-/// is accepted, producing a full replica of the store.
+/// INV-FERR-030: satisfies the filter contract trivially -- `accepted(R) =
+/// source` because `accepts` returns `true` for all datoms. This is the
+/// default for single-node operation, where the node holds the complete
+/// datom set with no subset projection.
+///
+/// # Visibility
+///
+/// `pub` because verification tests in `ferratomic-verify` exercise
+/// replica filter semantics (INV-FERR-030 conformance testing).
+/// Phase 4c will add non-trivial filter implementations.
 #[derive(Debug, Default, Clone)]
 pub struct AcceptAll;
 

@@ -343,6 +343,8 @@ fn substrate_agnosticism_in_memory() {
 // ---------------------------------------------------------------------------
 
 /// WAL frame overhead: magic(4) + version(2) + epoch(8) + length(4) + CRC(4) = 22 bytes.
+/// Cross-reference: `ferratomic-core::wal::HEADER_SIZE` (18) + `CRC_SIZE` (4) = 22.
+/// If the WAL frame format changes, this constant must be updated to match.
 const WAL_FRAME_OVERHEAD: usize = 22;
 
 /// INV-FERR-026: WAL write amplification <= 10x.

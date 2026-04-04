@@ -231,6 +231,14 @@ For each INV-FERR you test:
 7. Commit: `test: red-phase tests for INV-FERR-NNN`
 8. Close task: `br close <id> --reason "Red-phase tests committed"`
 
+### Defensive Engineering Checks
+
+- [ ] Bayesian confidence: proptest at 10K cases gives Beta(10001,1) lower bound >= 0.9997 (ADR-FERR-012)
+- [ ] Coverage: new test code does not decrease line or branch coverage (GOALS.md §6.5 ratchet)
+- [ ] Mutation testing: assertions are strong enough to kill >80% of injected mutants (GOALS.md §6.5)
+- [ ] MIRI: pure-logic tests pass under `cargo +nightly miri test` (GOALS.md §6.4)
+- [ ] Fuzz targets: deserialization/WAL/checkpoint paths have fuzz targets in `fuzz/` (GOALS.md §6.4)
+
 ---
 
 ## What NOT To Do

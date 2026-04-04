@@ -51,6 +51,9 @@ mod tests;
 /// and [`Transaction::retract_datom`]. Transition to [`Committed`] via
 /// [`Transaction::commit`] (with schema validation) or
 /// [`Transaction::commit_unchecked`] (testing only).
+///
+/// `pub` because callers must name this type in generic bounds and
+/// function signatures that accept `Transaction<Building>`.
 #[derive(Debug)]
 pub struct Building;
 
@@ -59,6 +62,10 @@ pub struct Building;
 /// In this state, the transaction is read-only. The datom list is
 /// accessible via [`Transaction::datoms`]. No further modifications
 /// are possible -- invalid state transitions are compile errors.
+///
+/// `pub` because callers must name this type in function signatures
+/// that accept `Transaction<Committed>`, including `Database::transact`
+/// and WAL append.
 #[derive(Debug)]
 pub struct Committed;
 

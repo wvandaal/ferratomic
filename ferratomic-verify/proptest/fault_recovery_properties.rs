@@ -42,12 +42,7 @@ fn store_with_datoms(n: usize) -> Store {
 // ---------------------------------------------------------------------------
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(
-        std::env::var("PROPTEST_CASES")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(1_000)
-    ))]
+    #![proptest_config(ProptestConfig::with_cases(10_000))]
 
     /// INV-FERR-056: Checkpoint bit flip is detected by BLAKE3.
     ///

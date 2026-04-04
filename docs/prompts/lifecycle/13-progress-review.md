@@ -96,9 +96,14 @@ git diff --stat $(git log --since="${SINCE}" --format="%H" | tail -1)..HEAD  # N
 ### 1.3 Build Health
 
 ```bash
-CARGO_TARGET_DIR=/data/cargo-target cargo check --workspace 2>&1 | tail -1
-CARGO_TARGET_DIR=/data/cargo-target cargo clippy --workspace -- -D warnings 2>&1 | tail -5
-CARGO_TARGET_DIR=/data/cargo-target cargo test --workspace 2>&1 | grep -E "test result|running"
+CARGO_TARGET_DIR=/data/cargo-target cargo check --workspace --all-targets
+CARGO_TARGET_DIR=/data/cargo-target cargo clippy --workspace --all-targets -- -D warnings
+CARGO_TARGET_DIR=/data/cargo-target cargo clippy --workspace --lib -- -D warnings \
+  -D clippy::unwrap_used -D clippy::expect_used -D clippy::panic
+CARGO_TARGET_DIR=/data/cargo-target cargo fmt --all -- --check
+CARGO_TARGET_DIR=/data/cargo-target cargo test --workspace
+cargo deny check
+cargo doc --workspace --no-deps -- -D warnings
 ```
 
 ### 1.4 Codebase Size
@@ -161,6 +166,8 @@ Search locations:
 - **Type-level**: `ferratom/src/*.rs` (look for typestate, newtype, `#![forbid(...)]`)
 
 Empty cells are gaps. Cells with `sorry` or `todo!()` are partial.
+
+**GOALS.md §6 layers**: In addition to the 6 spec-level verification layers above, assess compliance with GOALS.md §6.4 dynamic analysis (MIRI, ASan, fuzz testing, mutation testing), §6.5 coverage thresholds (>=90% line, >=80% branch, >80% mutation kill rate), and §6.6 supply chain security (cargo-deny, cargo-geiger).
 
 ### Output: METRICS Artifact
 
@@ -228,8 +235,10 @@ test names, or metrics from Phase 1.
 *Does the code meet cleanroom standards from AGENTS.md?*
 
 - A: All hard limits met (500 LOC/file, 50 LOC/fn, complexity 10, 5 params).
-  `#![forbid(unsafe_code)]` in all crates. No `unwrap()` in production code.
+  Safe callable surface per GOALS.md §6.2 (unsafe contained, not blanket-forbidden).
+  No `unwrap()` in production code.
   Zero `#[allow(clippy::...)]` or `#[allow(dead_code)]` in production code.
+  MIRI clean, coverage thresholds met, mutation kill rate >80%.
   <5 open defects.
 - C: Most limits met. <15 open defects. Minor violations tracked.
   1-3 clippy suppressions with documented justification.
@@ -350,7 +359,7 @@ A phase gate passes when all four correspondence checks hold:
 | Spec ↔ Lean | Lean theorem statements match spec Level 0 algebraic laws | Compare theorem names/statements against INV-FERR Level 0 |
 | Lean ↔ Tests | Test names and strategies correspond to Lean theorem structure | Cross-reference test_inv_ferr_NNN names against lean theorem names |
 | Tests ↔ Types | Types encode what tests assert (Curry-Howard) | Check that type cardinality matches valid state count |
-| Types ↔ Impl | Implementation satisfies type contracts without `unsafe` escape | Run cargo check + clippy. No `unwrap()` in production paths |
+| Types ↔ Impl | Implementation satisfies type contracts with safe callable surface per GOALS.md §6.2 | Run cargo check + clippy. No `unwrap()` in production paths |
 
 Each boundary gets a verdict: **PASS**, **PARTIAL** (some correspondences hold),
 or **FAIL** (structural mismatch). A single FAIL blocks the phase gate.

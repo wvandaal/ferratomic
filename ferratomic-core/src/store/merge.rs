@@ -10,7 +10,7 @@ use std::sync::Arc;
 use ferratom::{Attribute, AttributeDef, Datom, Schema};
 
 use super::{Store, StoreRepr};
-use crate::positional::{merge_positional, PositionalStore};
+use crate::positional::{merge_positional, merge_sort_dedup, PositionalStore};
 
 /// INV-FERR-043: A deterministic schema conflict discovered during merge.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -69,22 +69,31 @@ impl Store {
 /// bd-h2fz: 4-way match on repr variants for merge.
 ///
 /// Both `Positional` → `merge_positional` (optimal: merge-sort on contiguous arrays).
-/// Mixed or both `OrdMap` → collect into a single datom iterator, build fresh
-/// `PositionalStore`. The result is always `Positional`.
+/// Mixed or both `OrdMap` → O(n+m) merge-sort on sorted inputs.
+/// The result is always `Positional`.
+///
+/// bd-9ecq: mixed-variant merge now uses `merge_sort_dedup` for O(n+m)
+/// instead of the previous `from_datoms(chain)` which was O(n log n).
+/// Both `PositionalStore::datoms()` and `OrdSet::iter()` yield datoms in
+/// EAVT sort order, so the inputs to `merge_sort_dedup` are pre-sorted.
 fn merge_repr(a: &StoreRepr, b: &StoreRepr) -> PositionalStore {
     match (a, b) {
         (StoreRepr::Positional(pa), StoreRepr::Positional(pb)) => merge_positional(pa, pb),
         (StoreRepr::Positional(pa), StoreRepr::OrdMap { datoms: db, .. }) => {
-            let combined: Vec<Datom> = pa.datoms().iter().chain(db.iter()).cloned().collect();
-            PositionalStore::from_datoms(combined.into_iter())
+            let b_sorted: Vec<Datom> = db.iter().cloned().collect();
+            let merged = merge_sort_dedup(pa.datoms(), &b_sorted);
+            PositionalStore::from_sorted_canonical(merged)
         }
         (StoreRepr::OrdMap { datoms: da, .. }, StoreRepr::Positional(pb)) => {
-            let combined: Vec<Datom> = da.iter().chain(pb.datoms().iter()).cloned().collect();
-            PositionalStore::from_datoms(combined.into_iter())
+            let a_sorted: Vec<Datom> = da.iter().cloned().collect();
+            let merged = merge_sort_dedup(&a_sorted, pb.datoms());
+            PositionalStore::from_sorted_canonical(merged)
         }
         (StoreRepr::OrdMap { datoms: da, .. }, StoreRepr::OrdMap { datoms: db, .. }) => {
-            let combined: Vec<Datom> = da.iter().chain(db.iter()).cloned().collect();
-            PositionalStore::from_datoms(combined.into_iter())
+            let a_sorted: Vec<Datom> = da.iter().cloned().collect();
+            let b_sorted: Vec<Datom> = db.iter().cloned().collect();
+            let merged = merge_sort_dedup(&a_sorted, &b_sorted);
+            PositionalStore::from_sorted_canonical(merged)
         }
     }
 }

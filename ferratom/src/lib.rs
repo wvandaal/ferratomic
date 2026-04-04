@@ -8,7 +8,7 @@
 //! Every type in this crate encodes an invariant:
 //! - `Datom`: a 5-tuple atomic fact (INV-FERR-012: content-addressed identity)
 //! - `EntityId`: BLAKE3 hash proving content-addressed identity (INV-FERR-012)
-//! - `Attribute`: interned string proving O(1) comparison (INV-FERR-026)
+//! - `Attribute`: interned `Arc<str>` with O(1) clone (design choice for INV-FERR-027 read latency)
 //! - `Value`: sum type with exact cardinality for each variant (INV-FERR-018)
 //! - `TxId`: HLC timestamp proving causal ordering (INV-FERR-015, INV-FERR-016)
 //! - `Schema`: attribute definitions proving validation at transact (INV-FERR-009)

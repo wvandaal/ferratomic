@@ -7,6 +7,7 @@
     INV-FERR-008  WAL ordering (fsync happens-before snapshot publish)
     INV-FERR-011  Observer monotonicity (epochs never regress)
     INV-FERR-013  Checkpoint equivalence (serialization roundtrip)
+    INV-FERR-014  Crash recovery (monotone prefix: recover(prefix(WAL)) ⊆ recover(WAL))
     INV-FERR-015  HLC monotonicity (tick always advances)
     INV-FERR-016  HLC causality (receive > both local and remote)
     INV-FERR-017  Shard equivalence (partition union = original)
@@ -532,3 +533,97 @@ theorem transaction_atomic_visibility (s : DatomStore) (tx_datoms : List Datom)
   · right
     have hlt : snap_epoch < tx_epoch := Nat.lt_of_not_le hle
     exact transaction_all_invisible s tx_datoms tx_epoch snap_epoch hlt hfresh
+
+/-! ## INV-FERR-014: Crash Recovery
+
+  Two complementary models:
+
+  **Point recovery**: `recover(committed, wal) = committed ∪ wal`.
+  Three algebraic facts:
+  1. `committed ⊆ recover(committed, wal)` — no committed data lost
+  2. `d ∈ recover(committed, wal) → d ∈ committed ∨ d ∈ wal` — no phantoms
+  3. `recover(committed, ∅) = committed` — clean recovery is identity
+
+  **WAL prefix**: `recover_wal(prefix(WAL)) ⊆ recover_wal(WAL)`.
+  Crash truncates the WAL to a prefix; recovery via fold-union on the
+  prefix produces a subset of recovery on the full WAL.
+
+  INV-FERR-014 is tagged V:MODEL, not V:LEAN. These proofs capture the
+  algebraic core — recovery is set union, and union is monotonic. The crash
+  non-determinism (which WAL entries survived) is verified by Stateright. -/
+
+/-- Point recovery: merge checkpoint with WAL delta via set union. -/
+abbrev recover_point (committed wal_delta : DatomStore) : DatomStore :=
+  committed ∪ wal_delta
+
+/-- INV-FERR-014: Recovery preserves all committed data.
+    `committed ⊆ committed ∪ wal` — no committed datom is lost. -/
+theorem recovery_preserves_committed (committed wal_delta : DatomStore) :
+    committed ⊆ recover_point committed wal_delta :=
+  Finset.subset_union_left
+
+/-- INV-FERR-014: Recovery introduces no phantom datoms.
+    Every datom in the recovered store was either committed or in the WAL. -/
+theorem recovery_no_phantoms (committed wal_delta : DatomStore) (d : Datom) :
+    d ∈ recover_point committed wal_delta → d ∈ committed ∨ d ∈ wal_delta :=
+  Finset.mem_union.mp
+
+/-- INV-FERR-014: Clean recovery (empty WAL) is the identity.
+    `recover(committed, ∅) = committed`. -/
+theorem recovery_idempotent_clean (committed : DatomStore) :
+    recover_point committed ∅ = committed :=
+  Finset.union_empty committed
+
+/-! ### WAL Prefix Theorem
+
+  The WAL is a free monoid over transactions. Recovery folds the WAL with
+  set-union. A crash truncates the WAL to a prefix. The algebraic guarantee:
+
+    `recover(prefix(WAL)) ⊆ recover(WAL)`
+
+  This is the universal crash-recovery correctness theorem. It holds for
+  ALL WAL lengths, ALL crash timings, ALL datom types — because set-union
+  is monotone on subsets. The Stateright model verifies a bounded instance;
+  this Lean theorem proves the universal property. -/
+
+/-- Recover a WAL by folding transactions via set-union.
+    Each transaction is a finite set of datoms. -/
+def recover_wal (wal : List DatomStore) : DatomStore :=
+  wal.foldl (· ∪ ·) ∅
+
+/-- Lemma: the accumulator is always a subset of foldl union's result.
+    `acc ⊆ foldl (· ∪ ·) acc xs` for any list of stores.
+    This is the key monotonicity lemma: folding with union only grows. -/
+private theorem foldl_union_acc_subset (acc : DatomStore) :
+    ∀ (xs : List DatomStore), acc ⊆ xs.foldl (· ∪ ·) acc := by
+  intro xs
+  induction xs generalizing acc with
+  | nil => exact Finset.Subset.refl acc
+  | cons x xs ih =>
+    simp only [List.foldl_cons]
+    exact (Finset.subset_union_left).trans (ih (acc ∪ x))
+
+/-- INV-FERR-014: Crash recovery monotone prefix theorem.
+
+    A crash truncates the WAL to a prefix (the fsynced entries).
+    Recovery via set-union fold on the prefix produces a subset of
+    recovery on the full WAL:
+
+      `recover(prefix(WAL)) ⊆ recover(WAL)`
+
+    Proof: decompose `wal = take n ++ drop n`, then:
+      `foldl ∅ wal = foldl (foldl ∅ (take n)) (drop n)`
+    By `foldl_union_acc_subset`:
+      `foldl ∅ (take n) ⊆ foldl (foldl ∅ (take n)) (drop n)`
+
+    This is the algebraic core of crash-recovery correctness. It holds
+    for ALL WAL lengths, ALL crash timings, ALL datom types — because
+    set-union is monotone. The Stateright model verifies bounded instances;
+    this theorem proves the universal property. -/
+theorem crash_recovery_monotone_prefix
+    (wal : List DatomStore) (n : Nat) :
+    recover_wal (wal.take n) ⊆ recover_wal wal := by
+  unfold recover_wal
+  conv_rhs => rw [← List.take_append_drop n wal]
+  rw [List.foldl_append]
+  exact foldl_union_acc_subset _ _

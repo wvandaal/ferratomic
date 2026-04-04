@@ -64,6 +64,12 @@ method NOT in the spec tags, justify why — or don't add it.
 | **Kani** | A bounded Rust code-path property verifiable by exhaustive small-input enumeration | A property requiring unbounded inputs, real I/O, or timing |
 | **Proptest** | A concrete Rust implementation conformance check (does the code match the spec?) | A universal algebraic proof (use Lean) or a concurrency property (use Stateright) |
 | **V:TYPE** | Enforced by the Rust compiler at compile time (trait bounds, Result, forbid(unsafe)) | A runtime behavioral property |
+| **V:MIRI** | Undefined behavior detection | When bead touches unsafe code, FFI boundaries, or pointer arithmetic | `cargo +nightly miri test` |
+| **V:FUZZ** | Edge case discovery via coverage-guided fuzzing | Deserialization, WAL parsing, checkpoint loading, wire type decoding | `cargo fuzz run <target> -- -max_total_time=60` |
+| **V:MUTANT** | Test strength verification via mutation analysis | Any bead with proptest coverage — verifies assertions catch defects | `cargo mutants --file <path>` |
+| **V:FAULT** | Adversarial storage fault tolerance | Durability, recovery, checkpoint integrity under TornWrite/PowerCut/IoError/DiskFull/BitFlip | FaultInjectingBackend in proptest |
+
+See GOALS.md §6 for the full defensive engineering standard.
 
 **The test**: If you're about to write "Lean proof for INV-FERR-NNN," ask: does the
 Lean `DatomStore := Finset Datom` model have a concept that corresponds to this

@@ -1,10 +1,20 @@
 //! Storage backend trait and implementations (INV-FERR-024).
 //!
 //! The [`StorageBackend`] trait decouples cold-start recovery from any
-//! specific storage substrate. Two implementations are provided:
+//! specific storage substrate. The core engine operates identically
+//! regardless of which backend is active — correctness depends only on
+//! the trait contract, never on implementation details of the substrate.
+//!
+//! Two implementations are provided:
 //!
 //! - [`FsBackend`] — filesystem-backed (production)
 //! - [`InMemoryBackend`] — in-memory (testing)
+//!
+//! INV-FERR-013 (checkpoint equivalence) and INV-FERR-014 (recovery
+//! correctness) are upheld by the checkpoint/WAL protocol that operates
+//! *through* this trait. The trait itself provides the I/O surface;
+//! serialization format and recovery logic live in the `checkpoint` and
+//! `wal` modules.
 
 use std::{
     io::{Cursor, Read as IoRead, Seek, Write as IoWrite},
@@ -31,47 +41,131 @@ impl<T: IoWrite + Seek> WriteSeek for T {}
 // StorageBackend trait
 // ---------------------------------------------------------------------------
 
-/// Storage backend abstraction (INV-FERR-024).
+/// Substrate-agnostic persistence abstraction (INV-FERR-024).
 ///
-/// Implementations provide durable storage for checkpoints and WAL.
-/// The trait decouples cold-start recovery from any specific storage
-/// substrate (filesystem, in-memory, object store, etc.).
+/// Provides the I/O surface through which the checkpoint and WAL
+/// modules read and write durable state. The core engine operates
+/// identically on any implementation of this trait -- correctness
+/// depends only on the contract below, not on whether bytes land on
+/// a filesystem, in memory, or in an object store.
+///
+/// # Invariant relationships
+///
+/// - **INV-FERR-024 (substrate agnosticism)**: switching implementations
+///   changes durability characteristics but not engine semantics. All
+///   store algebraic properties (INV-FERR-001 through INV-FERR-005)
+///   hold regardless of backend.
+/// - **INV-FERR-013 (checkpoint equivalence)**: the checkpoint writer
+///   and reader form a round-trip pair. The checkpoint module serializes
+///   store state `S` through [`open_checkpoint_writer`](Self::open_checkpoint_writer),
+///   and [`open_checkpoint_reader`](Self::open_checkpoint_reader) yields
+///   bytes from which `load(checkpoint(S)) = S` is reconstructed.
+/// - **INV-FERR-014 (recovery correctness)**: the WAL writer and reader
+///   form a durable-append pair. The recovery module replays WAL entries
+///   through [`open_wal_reader`](Self::open_wal_reader) to reconstruct
+///   at least the last committed state: `recover(crash(S)) >= last_committed(S)`.
+///
+/// # Contract
+///
+/// Implementors guarantee:
+/// - **Writer isolation**: checkpoint writes truncate prior data;
+///   subsequent reads see only the new content.
+/// - **WAL append semantics**: WAL writes append without truncation.
+///   The reader sees all previously written entries.
+/// - **Existence consistency**: `checkpoint_exists()` returns `true`
+///   only after at least one successful checkpoint write. `wal_exists()`
+///   returns `true` only when WAL data is present.
 pub trait StorageBackend {
-    /// Open a writer for the checkpoint file, truncating any existing data.
+    /// Open a writer whose content, once completed, replaces any previous
+    /// checkpoint data.
+    ///
+    /// The returned writer receives the serialized store snapshot.
+    /// The replacement is atomic: partial old data never contaminates
+    /// a new checkpoint (`FsBackend` uses truncate-on-open;
+    /// `InMemoryBackend` swaps on flush).
+    ///
+    /// INV-FERR-013: this is the write half of the checkpoint round-trip.
+    /// After the writer is flushed/dropped and a subsequent call to
+    /// [`open_checkpoint_reader`](Self::open_checkpoint_reader) succeeds,
+    /// the reader yields the bytes written here.
     ///
     /// # Errors
     ///
-    /// Returns `FerraError` if the writer cannot be created.
+    /// Returns `FerraError` if the writer cannot be created (e.g.,
+    /// missing directory, permission denied, mutex poisoned).
     fn open_checkpoint_writer(&self) -> Result<Box<dyn IoWrite>, FerraError>;
 
     /// Open a reader for the existing checkpoint file.
     ///
+    /// The returned reader yields the bytes from the most recent
+    /// successful checkpoint write. The checkpoint module deserializes
+    /// these bytes to reconstruct the store.
+    ///
+    /// INV-FERR-013: this is the read half of the checkpoint round-trip.
+    /// `load(checkpoint(S)) = S` holds when the bytes read here are
+    /// exactly those produced by the corresponding write.
+    ///
     /// # Errors
     ///
-    /// Returns `FerraError` if the reader cannot be opened.
+    /// Returns `FerraError` if the reader cannot be opened (e.g.,
+    /// file does not exist, permission denied, mutex poisoned).
     fn open_checkpoint_reader(&self) -> Result<Box<dyn IoRead>, FerraError>;
 
-    /// Check whether a checkpoint file exists.
+    /// Check whether a checkpoint file exists and contains data.
+    ///
+    /// Returns `true` only after at least one successful checkpoint
+    /// write. The cold-start recovery path uses this to decide whether
+    /// to load from checkpoint or start from genesis (INV-FERR-031).
     fn checkpoint_exists(&self) -> bool;
 
-    /// Open a writer for the WAL file.
+    /// Open a seekable writer for the WAL file.
+    ///
+    /// The WAL writer appends transaction entries without truncating
+    /// existing data. Seek capability is required for length queries
+    /// and position management during append.
+    ///
+    /// INV-FERR-014: this is the write half of the WAL durability
+    /// contract. Entries written here persist across process restarts
+    /// (for durable backends) and are readable via
+    /// [`open_wal_reader`](Self::open_wal_reader) during recovery.
     ///
     /// # Errors
     ///
     /// Returns `FerraError` if the writer cannot be created.
     fn open_wal_writer(&self) -> Result<Box<dyn WriteSeek>, FerraError>;
 
-    /// Open a reader for the existing WAL file.
+    /// Open a seekable reader for the existing WAL file.
+    ///
+    /// The returned reader yields all WAL entries written since the
+    /// last checkpoint. The recovery module replays these entries to
+    /// reconstruct committed transactions.
+    ///
+    /// INV-FERR-014: this is the read half of the WAL durability
+    /// contract. `recover(crash(S)) >= last_committed(S)` holds when
+    /// the reader yields all entries that were durably appended via
+    /// the corresponding writer.
     ///
     /// # Errors
     ///
     /// Returns `FerraError` if the reader cannot be opened.
     fn open_wal_reader(&self) -> Result<Box<dyn ReadSeek>, FerraError>;
 
-    /// Check whether a WAL file exists.
+    /// Check whether a WAL file exists and contains data.
+    ///
+    /// Returns `true` only when WAL entries are present. The cold-start
+    /// recovery path uses this to decide whether WAL replay is needed
+    /// after loading the checkpoint (INV-FERR-014).
     fn wal_exists(&self) -> bool;
 
     /// Ensure the storage directory structure exists.
+    ///
+    /// Creates any missing directories required by the backend. Must
+    /// be called before the first write operation. Subsequent calls
+    /// are idempotent.
+    ///
+    /// INV-FERR-024: directory creation is the only substrate-specific
+    /// setup step. After this call, all other trait methods operate
+    /// uniformly regardless of backend.
     ///
     /// # Errors
     ///

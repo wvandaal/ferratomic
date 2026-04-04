@@ -121,6 +121,10 @@ Must correspond to the Level 0 algebraic law, not a different property.>
 If there is no Stateright model for this invariant, do not list `V:MODEL`.
 If you write a `sorry` in Lean, still list `V:LEAN` but note the sorry
 in the theorem block.
+New verification tags from GOALS.md §6: `V:MIRI` (MIRI UB detection),
+`V:FUZZ` (fuzz testing), `V:MUTANT` (mutation testing), `V:FAULT`
+(FaultInjectingBackend). Use these when the invariant touches unsafe
+boundaries, deserialization, or durability paths.
 
 **Stage**: 0 = required for current phase (Phase 4a). 1 = required for
 production (Phase 4b+). 2 = designed now, implemented later. Stage determines

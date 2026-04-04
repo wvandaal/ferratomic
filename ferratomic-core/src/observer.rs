@@ -18,24 +18,47 @@ use crate::store::{Snapshot, Store};
 /// history before falling back to store replay.
 pub(crate) const DEFAULT_OBSERVER_BUFFER: usize = 1024;
 
-/// A push-based consumer of committed datom batches.
+/// A push-based consumer that receives notifications when datom batches
+/// are committed to the store.
 ///
-/// INV-FERR-011: delivery is at-least-once with epoch-based deduplication.
-/// Implementations must therefore treat `epoch` as an idempotency key.
+/// INV-FERR-011: observer monotonicity — for any observer `alpha`,
+/// `forall i, j where i < j: epoch_seq(alpha)[i] <= epoch_seq(alpha)[j]`.
+/// The broadcast infrastructure delivers epochs in non-decreasing order.
+/// Delivery is at-least-once: the same epoch may be delivered more than
+/// once (e.g., after a catch-up replay), so implementations treat `epoch`
+/// as an idempotency key and tolerate duplicate delivery.
+///
+/// The trait requires `Send + Sync` because the `ObserverBroadcast`
+/// infrastructure invokes observer methods from the committing thread,
+/// which may differ from the thread that registered the observer.
 pub trait DatomObserver: Send + Sync {
-    /// Deliver the datoms for one freshly committed epoch (INV-FERR-011).
+    /// Receive the datoms for a single freshly committed epoch.
     ///
-    /// Called once per successfully committed transaction on all registered
-    /// observers. The `epoch` serves as an idempotency key.
+    /// INV-FERR-011: `epoch` is monotonically non-decreasing across
+    /// successive calls on the same observer. The broadcast layer skips
+    /// delivery when `epoch <= last_seen_epoch` for this observer,
+    /// ensuring the monotonicity invariant. Implementations use `epoch`
+    /// as an idempotency key — if a datom batch for epoch `e` has
+    /// already been processed, the call is a no-op.
     fn on_commit(&self, epoch: u64, datoms: &[Datom]);
 
-    /// Deliver a catch-up batch for all epochs after `from_epoch` (INV-FERR-011).
+    /// Receive a catch-up batch containing datoms from all epochs after
+    /// `from_epoch` up to the current store state.
     ///
-    /// Called when an observer falls behind and needs to catch up to the
-    /// current store state. May be called at registration time.
+    /// INV-FERR-011: called when an observer has fallen behind (either
+    /// at registration time or when the gap between `last_seen_epoch`
+    /// and the current epoch exceeds 1). The batch may originate from
+    /// the bounded in-memory history or, if the observer has fallen
+    /// beyond the buffer window, from a full store replay. Delivery
+    /// is at-least-once — `datoms` may include datoms the observer
+    /// has already seen. Implementors must be idempotent: receiving
+    /// previously-processed datoms in a catchup batch is a no-op.
     fn on_catchup(&self, from_epoch: u64, datoms: &[Datom]);
 
-    /// Stable human-readable observer name for diagnostics (INV-FERR-011).
+    /// Return a stable, human-readable name for this observer.
+    ///
+    /// INV-FERR-011: the name is fixed at construction time and used
+    /// for diagnostic logging. It does not affect delivery semantics.
     fn name(&self) -> &str;
 }
 
@@ -156,6 +179,11 @@ fn full_store_catchup(store: &Store) -> Vec<Datom> {
 ///
 /// `Observer` is `Send + Sync` by construction: `AgentId` is `Copy`
 /// and `AtomicU64` is the standard thread-safe counter.
+///
+/// # Visibility
+///
+/// `pub` because verification tests in `ferratomic-verify` exercise
+/// observer monotonicity properties (INV-FERR-011 conformance testing).
 pub struct Observer {
     /// The agent identity of this observer.
     agent: AgentId,

@@ -28,32 +28,86 @@ use im::OrdMap;
 ///
 /// INV-FERR-025: all index backends are interchangeable. Switching
 /// backends changes performance characteristics but not correctness.
-/// Every implementation must provide ordered-map semantics: insert,
-/// lookup, iteration in key order, and length.
+/// Every implementation provides ordered-map semantics: insert,
+/// lookup, iteration in key order, and length. Inserting the same
+/// datom set in any order produces identical index state -- the
+/// resulting ordered map is determined solely by the set of
+/// key-value pairs, not by insertion sequence.
+///
+/// INV-FERR-005: the store maintains four secondary indexes in
+/// bijection with the primary datom set. Each `IndexBackend`
+/// instance backs one of those indexes (EAVT, AEVT, VAET, AVET).
+/// Correct bijection requires that every datom inserted into the
+/// primary set is also inserted into every index backend, and that
+/// no index backend contains entries absent from the primary set.
 ///
 /// `im::OrdMap` is the default backend (ADR-FERR-001), providing O(1)
 /// clone via structural sharing. Alternative backends (B-tree, LSM,
 /// `RocksDB`) can be substituted without changing store semantics.
+///
+/// # Contract
+///
+/// Implementors guarantee:
+/// - **Determinism**: `backend_get` returns the most recently inserted
+///   value for a given key. After sorting (if applicable), iteration
+///   order is uniquely determined by key `Ord`.
+/// - **Totality**: `backend_len` reflects the exact count of distinct
+///   keys. `backend_values` yields exactly `backend_len` items.
+/// - **Order independence** (INV-FERR-025): two instances that receive
+///   the same set of `(K, V)` pairs (in any order) compare as
+///   equivalent after any deferred sorting.
 pub trait IndexBackend<K: Ord, V>: Clone + Default + std::fmt::Debug {
     /// Insert a key-value pair into the map.
     ///
     /// For persistent data structures (like `im::OrdMap`), the receiver
     /// is mutated in place with structural sharing. For owned structures,
     /// this is a standard insert.
+    ///
+    /// INV-FERR-005: callers insert into all four index backends for
+    /// every datom added to the primary set, maintaining bijection.
+    ///
+    /// # Postcondition
+    ///
+    /// After `backend_insert(k, v)`, `backend_get(&k)` returns `Some(&v)`
+    /// (immediately for sorted backends; after `sort()` for deferred-sort
+    /// backends like [`SortedVecBackend`]).
     fn backend_insert(&mut self, key: K, value: V);
 
-    /// Look up a value by exact key.
+    /// Look up a value by exact key match.
+    ///
+    /// Returns `Some(&V)` if the key exists, `None` otherwise. For
+    /// deferred-sort backends, the backing array must be sorted before
+    /// this method produces correct results (see [`SortedVecBackend::sort`]).
+    ///
+    /// INV-FERR-025: all backends provide O(log n) lookup.
+    /// INV-FERR-027: this is the interface through which read latency
+    /// bounds are upheld.
     fn backend_get(&self, key: &K) -> Option<&V>;
 
     /// Number of entries in the map.
+    ///
+    /// INV-FERR-005: after a well-formed bulk load or sequence of
+    /// inserts, all four index backends report the same `backend_len`
+    /// as the primary datom set's cardinality. A mismatch indicates
+    /// a bijection violation.
     fn backend_len(&self) -> usize;
 
     /// Whether the map contains no entries.
+    ///
+    /// Equivalent to `self.backend_len() == 0`. Provided as a default
+    /// implementation; backends may override for efficiency.
     fn backend_is_empty(&self) -> bool {
         self.backend_len() == 0
     }
 
     /// Iterate over all values in key order.
+    ///
+    /// Yields exactly `backend_len` items. Iteration order follows the
+    /// `Ord` implementation of `K`, which encodes the index-specific
+    /// sort order (EAVT, AEVT, VAET, or AVET per INV-FERR-005).
+    ///
+    /// INV-FERR-027: ordered iteration enables O(log n + k) range
+    /// scans for each index's access pattern.
     fn backend_values(&self) -> Box<dyn Iterator<Item = &V> + '_>;
 }
 
@@ -100,6 +154,12 @@ impl<K: Ord + Clone + std::fmt::Debug, V: Clone + std::fmt::Debug> IndexBackend<
 ///
 /// INV-FERR-025: behavioral equivalence with `im::OrdMap` for all operations.
 /// INV-FERR-027: O(log n) lookups with cache-optimal memory layout.
+///
+/// # Visibility
+///
+/// `pub` because verification tests in `ferratomic-verify` exercise
+/// backend equivalence properties between `SortedVecBackend` and
+/// `OrdMap` (INV-FERR-025 conformance testing).
 #[derive(Clone, Debug)]
 pub struct SortedVecBackend<K: Ord, V> {
     entries: Vec<(K, V)>,
@@ -136,6 +196,11 @@ impl<K: Ord + Clone + std::fmt::Debug, V: Clone + std::fmt::Debug> IndexBackend<
     }
 
     fn backend_values(&self) -> Box<dyn Iterator<Item = &V> + '_> {
+        debug_assert!(
+            self.sorted,
+            "INV-FERR-071: iteration on unsorted SortedVecBackend — \
+             call sort() or ensure_indexes_sorted() before querying"
+        );
         Box::new(self.entries.iter().map(|(_, v)| v))
     }
 }
@@ -367,6 +432,11 @@ impl
     ///
     /// Must be called after [`from_datoms`](GenericIndexes::from_datoms)
     /// to enable binary-search lookups. O(n log n) for n datoms.
+    ///
+    /// INV-FERR-005: after sorting, all four indexes are in their
+    /// correct per-index order and binary search produces correct results.
+    /// INV-FERR-025: behavioral equivalence with `im::OrdMap` is
+    /// maintained after this call.
     pub fn sort_all(&mut self) {
         self.eavt.sort();
         self.aevt.sort();

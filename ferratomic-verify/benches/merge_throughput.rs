@@ -67,5 +67,35 @@ fn bench_merge_throughput(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_merge_throughput);
+/// INV-FERR-001: benchmark merging two disjoint 10K-datom stores.
+///
+/// Both stores contain 10,000 datoms with no overlap (disjoint entity
+/// ranges). The merged result must contain exactly 20,000 datoms,
+/// confirming set union cardinality on non-overlapping inputs.
+fn bench_merge_10k_x_10k(c: &mut Criterion) {
+    let mut group = c.benchmark_group("inv_ferr_001_merge_10k_x_10k");
+
+    let datom_count: usize = 10_000;
+    let left = build_store(datom_count);
+    let right = build_shifted_store(datom_count, datom_count);
+    let expected_len = datom_count * 2;
+
+    group.throughput(Throughput::Elements(expected_len as u64));
+    group.bench_function("merge_10k_x_10k", |b| {
+        b.iter(|| {
+            let merged = merge(black_box(&left), black_box(&right))
+                .expect("schemas compatible in benchmark");
+            assert_eq!(
+                merged.len(),
+                expected_len,
+                "INV-FERR-001: disjoint 10K merge must yield 20K datoms",
+            );
+            black_box(merged);
+        });
+    });
+
+    group.finish();
+}
+
+criterion_group!(benches, bench_merge_throughput, bench_merge_10k_x_10k);
 criterion_main!(benches);

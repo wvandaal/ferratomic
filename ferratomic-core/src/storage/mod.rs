@@ -47,10 +47,19 @@ pub(crate) const WAL_FILENAME: &str = "wal.log";
 /// Result of a cold start, including which recovery path was used (INV-FERR-014).
 ///
 /// INV-FERR-028: Cold start selects the fastest available recovery path.
+/// INV-FERR-024: Works with any [`StorageBackend`] implementation via
+/// [`cold_start_with_backend`].
 pub struct ColdStartResult {
     /// The recovered (or freshly created) database, ready for reads and writes.
+    ///
+    /// INV-FERR-014: Contains the last committed state as reconstructed by
+    /// the recovery cascade. INV-FERR-006: snapshot isolation is immediately
+    /// available on the returned database.
     pub database: Database,
     /// Which recovery level was used to produce this database.
+    ///
+    /// INV-FERR-028: indicates which cascade level succeeded, useful for
+    /// diagnostics and operational monitoring.
     pub level: RecoveryLevel,
 }
 

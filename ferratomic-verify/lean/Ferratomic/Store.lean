@@ -11,6 +11,7 @@
     INV-FERR-010  Merge convergence (strong eventual consistency)
     INV-FERR-012  Content-addressed identity
     INV-FERR-018  Append-only
+    INV-FERR-030  Read replica subset (replica ⊆ leader)
 
   Spec: spec/01-core-invariants.md §23.1
   Foundation: spec/00-preamble.md §23.0.4
@@ -388,3 +389,32 @@ theorem causal_live_homomorphism (A B : DatomStore)
     (p : Datom → Prop) [DecidablePred p] :
     (merge A B).filter p = merge (A.filter p) (B.filter p) :=
   causal_live_filter_union A B p
+
+/-! ## INV-FERR-030: Read Replica Subset
+
+  `∀ replica Rᵢ: replica(Rᵢ) ⊆ leader(S)`
+
+  A replica that receives datoms only via merge from the leader is always
+  a subset of the leader. This follows from the monotonicity of set union:
+  if `replica ⊆ leader` and `delta ⊆ leader`, then `replica ∪ delta ⊆ leader`.
+
+  The base case is `∅ ⊆ leader` (fresh replica). The inductive step uses
+  `Finset.union_subset`: if both operands are subsets of X, their union
+  is a subset of X. -/
+
+/-- INV-FERR-030: Replica subset preservation.
+    If a replica is a subset of the leader, and the merge delta is also a
+    subset of the leader, then the merged replica remains a subset. -/
+theorem replica_subset_preserved (replica leader delta : DatomStore)
+    (h_rep : replica ⊆ leader) (h_delta : delta ⊆ leader) :
+    merge replica delta ⊆ leader :=
+  Finset.union_subset h_rep h_delta
+
+/-- INV-FERR-030: Full catch-up produces the leader store.
+    Merging a replica with the entire leader produces exactly the leader
+    (since `leader ∪ leader = leader` by idempotency, and any datoms in
+    the replica are already in the leader by the subset precondition). -/
+theorem replica_catches_up (replica leader : DatomStore)
+    (h_rep : replica ⊆ leader) :
+    merge replica leader = leader :=
+  Finset.union_eq_right.mpr h_rep

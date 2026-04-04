@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 //! Stateright backpressure-safety model for INV-FERR-021.
 //!
 //! Models the `WriteLimiter` as a bounded queue with concurrent submitters.

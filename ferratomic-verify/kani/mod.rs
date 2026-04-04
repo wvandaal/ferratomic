@@ -25,7 +25,7 @@ mod kani {
     pub fn assume(_condition: bool) {}
 }
 
-/// Concrete datom construction helpers for Kani harnesses.
+/// Concrete proof-surface helpers for Kani harnesses.
 ///
 /// `kani::any::<BTreeSet<Datom>>()` doesn't work because `Datom` contains
 /// `Arc<str>` which doesn't implement `kani::Arbitrary`. Instead, harnesses
@@ -33,17 +33,62 @@ mod kani {
 /// Kani explores different index values, providing bounded model checking
 /// over the datom space.
 pub(crate) mod helpers {
-    use std::collections::BTreeSet;
+    use std::{
+        collections::BTreeSet,
+        sync::atomic::{AtomicUsize, Ordering},
+    };
 
-    use ferratom::{Attribute, Datom, EntityId, Op, TxId, Value};
+    use ferratom::{Attribute, ClockSource, Datom, EntityId, Op, TxId, Value};
+
+    /// Deterministic clock source for Kani harnesses.
+    ///
+    /// The harness supplies a bounded sequence of wall-clock readings and the
+    /// real `HybridClock` algorithm consumes them through the production
+    /// `ClockSource` boundary. This keeps the proof target on HLC semantics
+    /// rather than on host syscalls such as `clock_gettime`.
+    pub struct KaniClock<const N: usize> {
+        samples: [u64; N],
+        cursor: AtomicUsize,
+    }
+
+    impl<const N: usize> KaniClock<N> {
+        /// Create a scripted clock from a finite list of wall-clock readings.
+        #[must_use]
+        pub fn new(samples: [u64; N]) -> Self {
+            Self {
+                samples,
+                cursor: AtomicUsize::new(0),
+            }
+        }
+    }
+
+    impl<const N: usize> ClockSource for KaniClock<N> {
+        fn now(&self) -> u64 {
+            let slot = self.cursor.fetch_add(1, Ordering::Relaxed);
+            let capped = slot.min(N.saturating_sub(1));
+            self.samples.get(capped).copied().unwrap_or_default()
+        }
+    }
+
+    /// Build a fixture `EntityId` without invoking BLAKE3.
+    ///
+    /// Kani harnesses that verify store, CRDT, or LIVE semantics do not need
+    /// to re-prove INV-FERR-012 on every fixture. They use the test-only raw
+    /// constructor so the proof target remains the invariant under test.
+    #[must_use]
+    pub fn proof_entity_id(id: u8) -> EntityId {
+        let mut bytes = [0u8; 32];
+        bytes[31] = id;
+        EntityId::from_bytes(bytes)
+    }
 
     /// Build a concrete datom from a u8 index.
     ///
     /// Deterministic: same index always produces the same datom.
-    /// Different indices produce different datoms (distinct entity hashes).
+    /// Different indices produce different datoms (distinct entity ids).
     pub fn concrete_datom(id: u8) -> Datom {
         Datom::new(
-            EntityId::from_content(&[id]),
+            proof_entity_id(id),
             Attribute::from("test/val"),
             Value::Long(i64::from(id)),
             TxId::new(u64::from(id) + 1, 0, 0),
@@ -63,6 +108,7 @@ mod clock;
 mod crdt_laws;
 mod durability;
 mod error_exhaustiveness;
+mod live_reconstruction;
 mod live_resolution;
 mod schema_identity;
 mod sharding;

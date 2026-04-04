@@ -142,5 +142,51 @@ fn bench_cold_start(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_cold_start);
+/// INV-FERR-028, INV-FERR-014: benchmark checkpoint round-trip at specific
+/// datom counts (1K and 10K).
+///
+/// Each iteration prepares a directory with a checkpoint plus WAL delta,
+/// then measures cold-start recovery latency. The recovered database must
+/// contain all seeded datoms, confirming durable round-trip fidelity.
+fn bench_checkpoint_roundtrip(c: &mut Criterion) {
+    let mut group = c.benchmark_group("inv_ferr_028_checkpoint_roundtrip");
+    group.sample_size(10);
+
+    let roundtrip_sizes: [usize; 2] = [1_000, 10_000];
+
+    for datom_count in roundtrip_sizes {
+        let dir = prepare_cold_start_dir(datom_count);
+        let label = match datom_count {
+            1_000 => "checkpoint_roundtrip_1k",
+            10_000 => "checkpoint_roundtrip_10k",
+            _ => "checkpoint_roundtrip",
+        };
+
+        group.throughput(Throughput::Elements(datom_count as u64));
+        group.bench_with_input(
+            BenchmarkId::new(label, datom_count),
+            &datom_count,
+            |b, &_datom_count| {
+                b.iter(|| {
+                    let result = storage::cold_start(dir.path()).expect("cold start benchmark");
+                    assert_eq!(
+                        result.level,
+                        RecoveryLevel::CheckpointPlusWal,
+                        "INV-FERR-028: roundtrip fixture must exercise checkpoint+WAL recovery",
+                    );
+                    let recovered = result.database.snapshot().datoms().count();
+                    assert!(
+                        recovered >= datom_count,
+                        "INV-FERR-014: recovered fixture must contain all seeded datoms",
+                    );
+                    black_box(recovered);
+                });
+            },
+        );
+    }
+
+    group.finish();
+}
+
+criterion_group!(benches, bench_cold_start, bench_checkpoint_roundtrip);
 criterion_main!(benches);

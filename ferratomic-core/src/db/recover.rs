@@ -34,9 +34,6 @@ impl Database<Ready> {
     /// INV-FERR-014: Recovery replays all complete WAL entries into a
     /// genesis store, producing the last committed state.
     ///
-    /// TODO(bd-nwva): migrate to `Store::batch_replay()` for single
-    /// promote/demote cycle instead of N individual `replay_entry` calls.
-    ///
     /// # Errors
     ///
     /// Returns `FerraError` if the WAL cannot be opened or recovery fails.
@@ -67,9 +64,6 @@ impl Database<Ready> {
     /// INV-FERR-013: Loads the checkpoint as the base state.
     /// INV-FERR-014: Replays only WAL entries with epoch > checkpoint epoch.
     /// This is the full three-level recovery path: checkpoint -> WAL delta -> ready.
-    ///
-    /// TODO(bd-nwva): migrate to `Store::batch_replay()` for single
-    /// promote/demote cycle instead of N individual `replay_entry` calls.
     ///
     /// # Errors
     ///

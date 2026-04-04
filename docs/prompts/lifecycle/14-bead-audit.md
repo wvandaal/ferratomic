@@ -217,6 +217,9 @@ How to confirm the postconditions hold. Specific enough to execute mechanically.
 2. **Build**: `CARGO_TARGET_DIR=/data/cargo-target cargo check --workspace`
 3. **Lint**: `CARGO_TARGET_DIR=/data/cargo-target cargo clippy --workspace -- -D warnings`
 4. **Cross-check**: Read `spec/NN-section.md` INV-FERR-NNN Level 2 and confirm code matches.
+5. **MIRI**: `cargo +nightly miri test <test_name>` (if bead touches unsafe or deserialization)
+6. **Fuzz**: `cargo fuzz run <target> -- -max_total_time=60` (if bead touches parsing/deserialization)
+7. **Full gates**: GOALS.md §6.8 (all 11 gates must pass)
 
 ## Files  [T]
 Exact paths that will be created or modified, with a one-line summary of what
@@ -388,7 +391,11 @@ algebraic structure matches the method's domain of validity:
 | **Stateright** | Properties under concurrent/crash interleavings: convergence under message reordering, recovery correctness under crash timing, state machine safety and liveness. Properties that require exploring ALL action sequences. | Algebraic identities provable by Finset rewriting (use Lean). Properties of a single deterministic computation (use proptest). |
 | **Kani** | Bounded model checking of Rust code paths: exhaustive verification of small input spaces, path coverage for error handling, contract verification with `kani::any()`. | Properties that require unbounded inputs, real I/O, or timing. Properties already provable by Lean at the algebraic level (Kani adds implementation-level confidence, not algebraic proof). |
 | **Proptest** | Statistical confidence on concrete Rust implementations: 10K+ random inputs verify the implementation matches the spec's algebraic law. The conformance bridge between Lean model and Rust code. | Universal proofs (use Lean). Properties expressible as `A ∪ B = B ∪ A` where Finset.union_comm is a one-liner — don't spend 10K random cases on a rewriting identity. |
-| **V:TYPE** | Rust compiler enforces it: trait bounds, `Result<T,E>` totality, `#![forbid(unsafe_code)]`, type-state patterns. Zero runtime verification needed — the compiler IS the verifier. | Runtime behavior, algebraic properties, performance characteristics. |
+| **V:TYPE** | Rust compiler enforces it: trait bounds, `Result<T,E>` totality, safe callable surface per GOALS.md §6.2, type-state patterns. Zero runtime verification needed — the compiler IS the verifier. | Runtime behavior, algebraic properties, performance characteristics. |
+| **V:MIRI** | Undefined behavior detection | When bead touches unsafe code, FFI boundaries, or pointer arithmetic | `cargo +nightly miri test` |
+| **V:FUZZ** | Edge case discovery via coverage-guided fuzzing | Deserialization, WAL parsing, checkpoint loading, wire type decoding | `cargo fuzz run <target> -- -max_total_time=60` |
+| **V:MUTANT** | Test strength verification via mutation analysis | Any bead with proptest coverage — verifies assertions catch defects | `cargo mutants --file <path>` |
+| **V:FAULT** | Adversarial storage fault tolerance | Durability, recovery, checkpoint integrity under TornWrite/PowerCut/IoError/DiskFull/BitFlip | FaultInjectingBackend in proptest |
 
 **A bead FAILS epistemic fit if:**
 - It prescribes Lean for a property the Finset model cannot encode (rate limiting,
@@ -407,7 +414,7 @@ algebraic structure matches the method's domain of validity:
 7 were epistemically wrong. They would have produced compilable-but-vacuous theorems:
 - INV-FERR-019 (error exhaustiveness): Lean can't verify Rust's type system
 - INV-FERR-021 (backpressure): Lean has no concept of rate or time
-- INV-FERR-023 (no unsafe): Lean can't verify `#![forbid(unsafe_code)]`
+- INV-FERR-023 (no unsafe): Lean can't verify the GOALS.md §6.2 containment policy
 - INV-FERR-024 (substrate agnosticism): vacuously true — Finset IS substrate-agnostic
 
 The correct action for a mismatched bead: reclassify it to the RIGHT method,

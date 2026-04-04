@@ -1,13 +1,16 @@
 //! Hybrid clock Kani harnesses.
 //!
 //! Covers INV-FERR-015 and INV-FERR-016.
+//!
+//! The harnesses inject a deterministic verification clock rather than using
+//! `SystemClock`, so Kani proves the real HLC transition logic without
+//! reaching host syscalls such as `clock_gettime`.
 
 use ferratom::{AgentId, HybridClock};
 
+use super::helpers::KaniClock;
 #[cfg(not(kani))]
 use super::kani;
-
-type Hlc = HybridClock;
 
 /// INV-FERR-015: every tick must advance the local HLC.
 #[cfg_attr(kani, kani::proof)]
@@ -15,7 +18,16 @@ type Hlc = HybridClock;
 #[cfg_attr(not(kani), test)]
 #[cfg_attr(not(kani), ignore = "requires Kani verifier")]
 fn hlc_monotonicity() {
-    let mut hlc = Hlc::new(AgentId::from_bytes([1u8; 16]));
+    let mut hlc = HybridClock::with_clock(
+        AgentId::from_bytes([1u8; 16]),
+        KaniClock::new([
+            kani::any(),
+            kani::any(),
+            kani::any(),
+            kani::any(),
+            kani::any(),
+        ]),
+    );
     let mut prev = hlc.tick();
 
     for _ in 0..kani::any::<u8>().min(4) {
@@ -31,8 +43,14 @@ fn hlc_monotonicity() {
 #[cfg_attr(not(kani), test)]
 #[cfg_attr(not(kani), ignore = "requires Kani verifier")]
 fn hlc_causality() {
-    let mut sender = Hlc::new(AgentId::from_bytes([1u8; 16]));
-    let mut receiver = Hlc::new(AgentId::from_bytes([2u8; 16]));
+    let mut sender = HybridClock::with_clock(
+        AgentId::from_bytes([1u8; 16]),
+        KaniClock::new([kani::any()]),
+    );
+    let mut receiver = HybridClock::with_clock(
+        AgentId::from_bytes([2u8; 16]),
+        KaniClock::new([kani::any(), kani::any()]),
+    );
 
     let send_hlc = sender.tick();
 

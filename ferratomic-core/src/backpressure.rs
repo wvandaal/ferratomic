@@ -26,6 +26,12 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 /// Configuration for write backpressure policy.
 ///
 /// INV-FERR-021: defines the bounds that prevent unbounded write queuing.
+/// NEG-FERR-005: prevents unbounded memory growth from pending writes.
+///
+/// # Visibility
+///
+/// `pub` because verification tests exercise backpressure behavior
+/// with custom policies (e.g., `max_concurrent_writes = 1`).
 #[derive(Debug, Clone)]
 pub struct BackpressurePolicy {
     /// Maximum number of concurrent `transact()` attempts.
@@ -45,15 +51,21 @@ impl Default for BackpressurePolicy {
     }
 }
 
-/// Concurrency limiter for write backpressure.
+/// RAII guard for a write slot in the concurrency limiter.
 ///
 /// INV-FERR-021: tracks the number of active `transact()` attempts.
 /// When the count reaches `max_concurrent_writes`, new attempts are
 /// rejected with `Err(Backpressure)`.
 ///
-/// INV-FERR-021: the guard pattern ensures the active count is always
-/// decremented, even on early returns or panics. This is a lightweight
-/// semaphore implemented with `AtomicUsize`.
+/// The guard pattern ensures the active count is always decremented,
+/// even on early returns or panics. This is a lightweight semaphore
+/// implemented with `AtomicUsize`.
+///
+/// # Visibility
+///
+/// `pub` because `Database::transact` holds the guard across the
+/// transaction lifecycle, and verification tests in `ferratomic-verify`
+/// exercise the limiter's acquire/release semantics directly.
 pub struct WriteGuard<'g> {
     limiter: &'g WriteLimiter,
 }
@@ -64,11 +76,19 @@ impl Drop for WriteGuard<'_> {
     }
 }
 
-/// Atomic counter for concurrent write attempts.
+/// Atomic counter for concurrent write attempts (INV-FERR-021).
 ///
-/// INV-FERR-021: the limiter is lock-free and wait-free. It uses
-/// `fetch_add` and `fetch_sub` with `Ordering::AcqRel` for correct
-/// visibility across threads.
+/// Lock-free and wait-free. Uses `fetch_add` and `fetch_sub` with
+/// `Ordering::AcqRel` for correct visibility across threads.
+///
+/// NEG-FERR-005: by bounding the number of concurrent `transact()`
+/// attempts, the limiter prevents unbounded memory growth from
+/// pending write buffers.
+///
+/// # Visibility
+///
+/// `pub` because `Database` holds a `WriteLimiter` field and
+/// verification tests exercise acquire/release semantics directly.
 pub struct WriteLimiter {
     active: AtomicUsize,
     max: usize,

@@ -271,6 +271,12 @@ CARGO_TARGET_DIR=/data/cargo-target cargo test -p ferratomic-verify
 CARGO_TARGET_DIR=/data/cargo-target cargo clippy --workspace -- -D warnings
 ```
 
+**Additional verification for federation code:**
+- Run fuzz targets for wire type deserialization: `cargo fuzz run fuzz_wire_datom -- -max_total_time=60`
+- Verify fault injection coverage: FaultInjectingBackend tests for TornWrite, PowerCut, IoError, DiskFull, BitFlip (GOALS.md §6.1)
+- MIRI on pure-logic federation tests: `cargo +nightly miri test` for merge/filter/provenance paths
+- Full gate chain: see GOALS.md §6.8
+
 ---
 
 ## Filing Findings

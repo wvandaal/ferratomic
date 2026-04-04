@@ -1453,7 +1453,8 @@ theorem epoch_monotone (s : DatomStore) (e1 e2 : Nat) (h : e1 ≤ e2) :
 
 **Traces to**: SEED.md 4 Axiom 1 (Identity), C2, INV-STORE-003,
 ADR-FERR-010 (Deserialization Trust Boundary)
-**Referenced by**: INV-FERR-076 (positional content addressing)
+**Referenced by**: INV-FERR-076 (positional content addressing),
+NEG-FERR-007 (FM-Index inapplicability — BLAKE3 maximum entropy)
 **Verification**: `V:TYPE`, `V:PROP`, `V:KANI`, `V:LEAN`
 **Stage**: 0
 

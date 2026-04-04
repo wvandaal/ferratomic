@@ -92,10 +92,24 @@ CARGO_TARGET_DIR=/data/cargo-target cargo clippy --workspace -- -D warnings
 br close <id> --reason "Fixed: <one-line summary>"
 ```
 
+**Full gate verification** (if the fix is non-trivial):
+```bash
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo clippy --workspace --lib -- -D warnings \
+  -D clippy::unwrap_used -D clippy::expect_used -D clippy::panic
+cargo test --workspace
+cargo deny check
+```
+
 ### 6. Regression Guard
 
 Every bug fix MUST include a test named `test_bug_<issue_id>_<description>`.
 This test must fail without the fix and pass with it. No exceptions.
+
+- **Fuzz corpus**: If the bug was found via fuzzing, add the crashing input to `fuzz/corpus/`. If the bug is in a deserialization/WAL/checkpoint path, consider adding a fuzz target if one doesn't exist.
+
+See GOALS.md §6.9 for the full regression discipline.
 
 ---
 

@@ -44,6 +44,26 @@ New prompt needed? → 15-prompt-forge.md
 Session end → 09-continuation.md
 ```
 
+## Defensive Engineering Standards
+
+All prompts that produce code reference **GOALS.md §6** — the canonical defensive
+engineering standard. Key requirements embedded across prompts:
+
+| Standard | Where Enforced | Prompts |
+|----------|---------------|---------|
+| 11 CI gates (GOALS.md §6.8) | Quality Gates sections | 04, 05, 07, 09, 13 |
+| MIRI UB detection | Dynamic analysis | 03, 05, 06, 08, 11, 13, 14 |
+| Fuzz testing (5 targets) | Deserialization/WAL/checkpoint paths | 03, 06, 07, 08, 11, 14 |
+| Mutation testing (>80% kill rate) | Test strength verification | 03, 06, 08, 13, 14 |
+| Coverage thresholds (90%/80%) | Coverage ratchet | 03, 06, 13 |
+| Unsafe containment (§6.2) | Hard constraints, review phases | 05, 06, 09, 13, 14 |
+| Supply chain (cargo-deny) | CI gates | 05, 06, 07, 09, 13 |
+| Regression discipline (§6.9) | Bug triage, review | 06, 07 |
+| Verification tags (V:MIRI/FUZZ/MUTANT/FAULT) | Bead and spec authoring | 08, 14, 16, 17 |
+
+When in doubt, GOALS.md §6 is the source of truth. These prompts are the
+operational application of that standard.
+
 ## Skill Loading
 
 Each prompt specifies which `ms` skills to load. The general pattern:

@@ -133,14 +133,6 @@ impl CrdtModel {
 
         Some(state.nodes[from].clone())
     }
-
-    #[cfg(test)]
-    fn canonical_nodes(nodes: &[BTreeSet<Datom>]) -> Vec<Vec<Datom>> {
-        nodes
-            .iter()
-            .map(|node| node.iter().cloned().collect::<Vec<_>>())
-            .collect()
-    }
 }
 
 impl Default for CrdtModel {
@@ -263,6 +255,43 @@ impl Model for CrdtModel {
                     true
                 },
             ),
+            // INV-FERR-004: Monotonic Growth.
+            // ∀ S, d: S ⊆ apply(S, d) — no datom is ever lost.
+            // Verified by checking: every datom that a node has received
+            // (via direct write or merge delivery) is still present in the
+            // node's state. received_writes tracks causal history independently
+            // of node state, so a broken merge that loses datoms would cause
+            // received_writes[i] ⊄ nodes[i].
+            Property::always(
+                "inv_ferr_004_monotonic_growth",
+                |_: &CrdtModel, state: &CrdtState| {
+                    state
+                        .nodes
+                        .iter()
+                        .zip(state.received_writes.iter())
+                        .all(|(node, received)| received.is_subset(node))
+                },
+            ),
+            // INV-FERR-018: Append-Only (CRDT dimension — traceability alias).
+            // ∀ S, op: ∀ d ∈ S: d ∈ op(S, args). No operation removes a datom.
+            // For G-Set CRDTs, append-only (INV-FERR-018) and monotonic growth
+            // (INV-FERR-004) are algebraically equivalent: both reduce to
+            // S ⊆ S' after any operation. This predicate is IDENTICAL to
+            // inv_ferr_004_monotonic_growth — it adds zero independent
+            // falsification power. It exists solely for spec traceability.
+            // The meaningful INV-FERR-018 Stateright verification is
+            // inv_ferr_018_append_only_recovery on crash_recovery_model.rs,
+            // which verifies committed data survives recovery.
+            Property::always(
+                "inv_ferr_018_append_only",
+                |_: &CrdtModel, state: &CrdtState| {
+                    state
+                        .nodes
+                        .iter()
+                        .zip(state.received_writes.iter())
+                        .all(|(node, received)| received.is_subset(node))
+                },
+            ),
             // Liveness: a converged quiescent state is reachable.
             Property::sometimes(
                 "inv_ferr_010_convergence_reachable",
@@ -290,13 +319,20 @@ mod tests {
         seeds.iter().copied().map(datom).collect()
     }
 
+    fn canonical_nodes(nodes: &[BTreeSet<Datom>]) -> Vec<Vec<Datom>> {
+        nodes
+            .iter()
+            .map(|node| node.iter().cloned().collect::<Vec<_>>())
+            .collect()
+    }
+
     fn collect_final_orders(
         model: &CrdtModel,
         state: CrdtState,
         finals: &mut Vec<Vec<Vec<Datom>>>,
     ) {
         if state.in_flight.is_empty() {
-            finals.push(CrdtModel::canonical_nodes(&state.nodes));
+            finals.push(canonical_nodes(&state.nodes));
             return;
         }
 
@@ -394,7 +430,46 @@ mod tests {
 
         checker.assert_no_discovery("inv_ferr_010_in_flight_payloads_stay_in_domain");
         checker.assert_no_discovery("inv_ferr_010_sec_convergence");
+        checker.assert_no_discovery("inv_ferr_004_monotonic_growth");
+        checker.assert_no_discovery("inv_ferr_018_append_only");
         checker.assert_any_discovery("inv_ferr_010_convergence_reachable");
+    }
+
+    #[test]
+    fn inv_ferr_004_received_datoms_always_present_after_merge() {
+        // Write datom to node 0, merge to node 1, verify received ⊆ nodes.
+        let model = CrdtModel::default();
+        let s0 = model.init_states().remove(0);
+        let d = datom(0);
+        let s1 = model
+            .next_state(&s0, CrdtAction::Write(0, d.clone()))
+            .expect("INV-FERR-004: write must succeed");
+        // received_writes[0] must contain the datom
+        assert!(
+            s1.received_writes[0].contains(&d),
+            "INV-FERR-004: received_writes must track the write"
+        );
+        // nodes[0] must contain the datom
+        assert!(
+            s1.nodes[0].contains(&d),
+            "INV-FERR-004: node must contain the written datom"
+        );
+        // Merge from 0 to 1
+        let s2 = model
+            .next_state(&s1, CrdtAction::InitMerge(0, 1))
+            .expect("INV-FERR-004: merge init must succeed");
+        let s3 = model
+            .next_state(&s2, CrdtAction::DeliverMerge(0))
+            .expect("INV-FERR-004: merge delivery must succeed");
+        // After merge, node 1 must contain the datom
+        assert!(
+            s3.nodes[1].contains(&d),
+            "INV-FERR-004: merged datom must be in target node"
+        );
+        assert!(
+            s3.received_writes[1].is_subset(&s3.nodes[1]),
+            "INV-FERR-004: received_writes must be subset of nodes after merge"
+        );
     }
 
     #[test]
@@ -405,11 +480,8 @@ mod tests {
 
         collect_final_orders(&model, initial, &mut finals);
 
-        let expected = CrdtModel::canonical_nodes(&[
-            set_of(&[0, 1, 2]),
-            set_of(&[0, 1, 2]),
-            set_of(&[0, 1, 2]),
-        ]);
+        let expected =
+            canonical_nodes(&[set_of(&[0, 1, 2]), set_of(&[0, 1, 2]), set_of(&[0, 1, 2])]);
 
         assert!(
             !finals.is_empty(),

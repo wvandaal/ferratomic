@@ -504,6 +504,17 @@ impl Store {
     }
 }
 
+/// Proof-friendly card-one LIVE selection hook.
+///
+/// Exposes the exact selection kernel used by `Store::live_resolve` without
+/// requiring proof harnesses to construct a full store. This is a verification
+/// boundary only; production callers use `Store::live_resolve`.
+#[cfg(any(test, feature = "test-utils"))]
+#[must_use]
+pub fn select_latest_live_value_for_test(entries: &[(Value, (TxId, Op))]) -> Option<&Value> {
+    query::select_latest_live_value_for_test(entries)
+}
+
 // ---------------------------------------------------------------------------
 // Trait implementations
 // ---------------------------------------------------------------------------

@@ -25,7 +25,7 @@ Every module is guilty until proven innocent by evidence
 
 ---
 
-## 8 Review Phases
+## 9 Review Phases
 
 Execute in order. Each phase produces findings or a clean bill.
 Do not skip phases even if earlier ones found nothing.
@@ -93,6 +93,10 @@ Can the system fail gracefully? Is static analysis uncompromised?
 - **Are there any `#[allow(clippy::...)]` or `#[allow(dead_code)]` in production
   code?** Zero suppressions is a hard constraint. Every suppression is a defect.
   If clippy is wrong, restructure the code — do not silence the lint.
+- **Unsafe containment**: If any `unsafe` code exists, does it comply with
+  GOALS.md §6.2? (Firewalled behind a safe API, mission-critical justification,
+  ADR-documented.) `#![forbid(unsafe_code)]` remains the default for all crates;
+  any exception requires the full containment protocol.
 
 ### Phase 7: Documentation
 
@@ -106,6 +110,23 @@ Does the documentation match reality?
 ### Phase 8: Defect Register
 
 Compile all findings into a defect register. Every finding gets a record.
+
+### Phase 9: Defensive Engineering Compliance (GOALS.md §6)
+
+- **Coverage**: Are line coverage (>=90%) and branch coverage (>=80%) thresholds
+  met for changed crates? Has coverage decreased since the last measurement?
+- **MIRI**: Do all pure-logic tests pass under `cargo +nightly miri test`?
+  Are there new unsafe sites that lack MIRI coverage?
+- **Fuzz targets**: Do deserialization, WAL, checkpoint, and wire-type code paths
+  have fuzz targets? Are seed corpora up to date with any new crash artifacts?
+- **Mutation testing**: Is the mutation kill rate >80% for changed modules?
+  Are there surviving mutants that indicate weak assertions?
+- **Supply chain**: Does `cargo deny check` pass? Have any new dependencies
+  been added without license/advisory/unsafe audit?
+- **Unsafe containment**: For any new `unsafe` code: is it firewalled behind a
+  safe API, mission-critical, and ADR-documented per GOALS.md §6.2?
+- **Regression discipline**: Does every fixed bug have a regression test?
+  Does every fuzz crash have a seed corpus entry?
 
 ---
 
@@ -199,7 +220,7 @@ CRITICAL = P0. MAJOR = P1. MINOR = P2. STYLE = P3.
 ## What NOT To Do
 
 - Do not confirm correctness. Find defects.
-- Do not stop after finding one bug. Complete all 8 phases.
+- Do not stop after finding one bug. Complete all 9 phases.
 - Do not suggest improvements that aren't defects. This is a review, not a wishlist.
 - Do not file defects without evidence. "This looks wrong" is not a finding.
   Show the input that triggers the bug or the spec clause that is violated.

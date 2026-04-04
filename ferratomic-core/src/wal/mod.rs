@@ -57,29 +57,58 @@ pub(crate) const MIN_FRAME_SIZE: usize = HEADER_SIZE + CRC_SIZE;
 /// A single recovered WAL entry (INV-FERR-008).
 ///
 /// Each entry represents one committed transaction that was durably
-/// written before its epoch became visible to readers.
+/// written before its epoch became visible to readers. Recovery replays
+/// entries in epoch order to reconstruct the last committed store state
+/// (INV-FERR-014). The payload is deserialized through the ADR-FERR-010
+/// trust boundary (`WireDatom` -> `into_trusted()` -> `Datom`).
+///
+/// Fields are `pub` because the recovery cascade in `storage::recovery`
+/// and `db::recover` must inspect epoch ordering and deserialize payloads.
 #[derive(Debug)]
 pub struct WalEntry {
-    /// The epoch at which this transaction was committed (INV-FERR-007).
+    /// The epoch at which this transaction was committed.
+    ///
+    /// INV-FERR-007: epochs are strictly monotonically increasing within
+    /// a single WAL file. Recovery uses this to skip entries already
+    /// covered by a checkpoint (INV-FERR-014).
     pub epoch: u64,
-    /// The serialized transaction payload: bincode-encoded `Vec<Datom>`.
+    /// The serialized transaction payload: bincode-encoded `Vec<WireDatom>`.
+    ///
+    /// INV-FERR-008: contains the post-stamp datoms (with real `TxId`s)
+    /// so that recovery produces identical state to the pre-crash store.
+    /// ADR-FERR-010: deserialized as `Vec<WireDatom>`, then converted
+    /// through the trust boundary via `into_trusted()`.
     pub payload: Vec<u8>,
 }
 
 /// Write-ahead log for durable transaction storage.
 ///
-/// INV-FERR-008: Transactions are appended to the WAL and fsynced
-/// before the in-memory store advances. Recovery replays complete
-/// entries and truncates incomplete ones.
+/// INV-FERR-008: `durable(WAL(T)) BEFORE visible(SNAP(e))`. Transactions
+/// are appended to the WAL and fsynced before the in-memory store advances
+/// and the epoch becomes visible to readers.
+///
+/// INV-FERR-014: Recovery replays complete entries (verified by CRC32) and
+/// truncates incomplete ones at the first invalid frame boundary.
+///
+/// The WAL uses a frame-based format with 22 bytes of overhead per entry
+/// (magic + version + epoch + length + CRC32). See the module-level
+/// documentation for the wire format.
+///
+/// # Visibility
+///
+/// Fields are `pub(crate)` because `db::recover` and `db::transact`
+/// interact directly with the WAL handle. The public API surface is
+/// limited to `create`, `open`, `append`, `fsync`, `recover`,
+/// `last_synced_epoch`, and `path`.
 pub struct Wal {
-    /// Path to the WAL file on disk.
+    /// Path to the WAL file on disk (INV-FERR-008).
     pub(crate) path: PathBuf,
-    /// Open file handle for both reading and writing.
+    /// Open file handle for both reading and writing (INV-FERR-008).
     pub(crate) file: File,
-    /// The epoch of the last entry confirmed durable via fsync.
+    /// The epoch of the last entry confirmed durable via fsync (INV-FERR-007).
     pub(crate) last_synced_epoch: u64,
     /// ME-012: The highest epoch written since last fsync. Updated to
-    /// `last_synced_epoch` on successful `fsync()`.
+    /// `last_synced_epoch` on successful `fsync()` (INV-FERR-007).
     pub(crate) pending_epoch: u64,
 }
 
