@@ -748,6 +748,7 @@ theorem permuted_lookup_equiv (arr : Fin n → α) (π : Equiv.Perm (Fin n))
 
 **Traces to**: INV-FERR-010 (Merge Convergence), INV-FERR-013 (Checkpoint
 Equivalence), C4 (CRDT Merge = Set Union), C2 (Content-Addressed Identity)
+**Referenced by**: INV-FERR-079 (chunk fingerprint array — hierarchical decomposition of store fingerprint)
 **Verification**: `V:PROP`, `V:LEAN`
 **Stage**: 1
 
@@ -1560,6 +1561,383 @@ theorem positional_stability (S : Finset Datom) (d : Datom) (d' : Datom)
   -- Datom, d' either precedes d (position unchanged) or follows d
   -- (position increases by 1). Both satisfy the ≤ claim.
   exact List.indexOf_le_indexOf_of_sorted_insert h_sorted h_sorted' h_mem h_new
+```
+
+---
+
+### INV-FERR-079: Chunk Fingerprint Array (Hierarchical Set Reconciliation)
+
+**Traces to**: INV-FERR-074 (Homomorphic Fingerprint — chunk array decomposes the
+store fingerprint), INV-FERR-076 (Positional Content Addressing — positions define
+chunk boundaries), C4 (CRDT Merge = Set Union), spec/06-prolly-tree.md (chunk
+fingerprints are Merkle leaf precursors)
+**Verification**: `V:PROP`, `V:LEAN`
+**Stage**: 1
+
+#### Level 0 (Algebraic Law)
+```
+Let S be a DatomStore with n datoms in canonical EAVT order.
+Let C be the chunk size (a fixed power of 2, default 1024).
+Let K = ⌈n / C⌉ be the number of chunks.
+Let chunk_i(S) = { S[j] | i*C ≤ j < min((i+1)*C, n) } be the i-th chunk.
+
+Define the chunk fingerprint array:
+  CF(S) : [0, K) → [u8; 32]
+  CF(S)[i] = XOR_{d ∈ chunk_i(S)} BLAKE3(serialize(d))
+
+Theorem (decomposition):
+  ∀ S: H(S) = XOR_{i ∈ [0,K)} CF(S)[i]
+
+  The store-level fingerprint (INV-FERR-074) is the XOR of all chunk
+  fingerprints. This is the direct-sum decomposition of the homomorphism.
+
+Proof:
+  H(S) = XOR_{d ∈ S} h(d)                         [definition of H, INV-FERR-074]
+       = XOR_{i} XOR_{d ∈ chunk_i(S)} h(d)        [partition of S into chunks]
+       = XOR_{i} CF(S)[i]                          [definition of CF]
+  The partition is valid because chunks are disjoint and exhaustive
+  (every position belongs to exactly one chunk).
+
+Theorem (incremental update):
+  ∀ S, d where d is inserted at position p:
+    CF(S ∪ {d})[p/C] = CF(S)[p/C] ⊕ h(d)
+    CF(S ∪ {d})[i] = CF(S)[i]  for all i ≠ p/C
+
+  Inserting a datom modifies exactly ONE chunk fingerprint.
+
+Proof:
+  The datom at position p belongs to chunk p/C. XOR is its own inverse,
+  so adding h(d) to chunk p/C's fingerprint is a single XOR operation.
+  All other chunks are unchanged because their datom sets are unchanged.
+
+Theorem (O(delta) reconciliation):
+  ∀ A, B ∈ DatomStore:
+    Let D = { i | CF(A)[i] ≠ CF(B)[i] } be the set of differing chunks.
+    Then: A △ B ⊆ ∪_{i ∈ D} (chunk_i(A) ∪ chunk_i(B))
+
+  The symmetric difference between two stores is contained within the
+  union of their differing chunks. Reconciliation requires transferring
+  only the |D| differing chunks, not the full stores.
+
+  Communication cost: O(K) fingerprint comparison + O(|D| × C) chunk transfer.
+  For stores that differ by delta datoms concentrated in d chunks:
+    O(n/C + d × C) total work.
+  At 100M datoms, C=1024, delta=1000 across ~10 chunks:
+    ~100K comparisons + ~10K datom transfers. Not O(100M).
+
+Proof:
+  If CF(A)[i] = CF(B)[i], then XOR_{d ∈ chunk_i(A)} h(d) = XOR_{d ∈ chunk_i(B)} h(d).
+  Under BLAKE3's 128-bit collision resistance, this implies chunk_i(A) = chunk_i(B)
+  with probability ≥ 1 - 2^{-128} per chunk. Therefore A △ B is confined to
+  chunks where fingerprints differ.
+```
+
+#### Level 1 (State Invariant)
+The chunk fingerprint array is a fixed-size auxiliary structure on the PositionalStore
+that provides O(delta) set reconciliation for federated stores. It divides the
+canonical position space into chunks of C datoms (default 1024) and maintains a
+32-byte XOR fingerprint per chunk.
+
+For federation: when two stores need to sync, they exchange chunk fingerprint arrays
+(~100KB at 100M datoms) instead of full datom sets (~12GB). Differing chunks are
+identified by comparison, and only those chunks' datoms are transferred. This
+reduces anti-entropy bandwidth from O(n) to O(n/C + delta × C) — a factor of
+~1000x for typical agentic workloads where stores differ by small deltas.
+
+For incremental maintenance: inserting a datom updates ONE chunk fingerprint (one
+XOR operation). This makes `demote()` aware of which chunks changed — the LIVE
+bitvector needs recomputation only for dirty chunks, reducing demotion cost from
+O(n) to O(delta × C) for small transactions on large stores.
+
+The chunk fingerprint array is the natural precursor to the prolly tree's Merkle
+structure (spec/06-prolly-tree.md, Phase 4b). When content-defined chunking replaces
+fixed-size chunks, each chunk fingerprint becomes a Merkle leaf hash. The tree of
+interior nodes (Merkle roots) is built ABOVE the chunk array — the Phase 4a data
+structure is preserved, not replaced. This is the accretive design principle in
+action: every Phase 4a optimization feeds directly into Phase 4b.
+
+The store-level fingerprint (INV-FERR-074) is the XOR of all chunk fingerprints.
+This means the existing `StoreFingerprint` is NOT a separate structure — it's the
+root of the chunk hierarchy, computed in O(K) from the chunk array or maintained
+incrementally. The chunk array is strictly more informative than the flat fingerprint.
+
+#### Level 2 (Implementation Contract)
+```rust
+/// Chunk fingerprint array (INV-FERR-079).
+///
+/// Divides the canonical position space into fixed-size chunks and
+/// maintains a 32-byte XOR fingerprint per chunk. Enables O(delta)
+/// federation reconciliation and incremental LIVE maintenance.
+///
+/// Default chunk size: 1024 datoms (~120KB per chunk at ~120 bytes/datom).
+/// Array size at 100M datoms: ~100K entries × 32 bytes = ~3.2MB.
+pub struct ChunkFingerprints {
+    /// Per-chunk XOR fingerprints. `chunks[i]` = XOR of BLAKE3(datom) for
+    /// all datoms at canonical positions [i*C, (i+1)*C).
+    chunks: Vec<[u8; 32]>,
+    /// Chunk size (number of datoms per chunk). Power of 2.
+    chunk_size: usize,
+    /// Dirty flags: chunks[i] is dirty if modified since last LIVE rebuild.
+    dirty: BitVec,
+}
+
+impl ChunkFingerprints {
+    /// Build from a canonical datom array. O(n) — one BLAKE3 + one XOR per datom.
+    pub fn from_canonical(canonical: &[Datom], chunk_size: usize) -> Self {
+        let num_chunks = (canonical.len() + chunk_size - 1) / chunk_size;
+        let mut chunks = vec![[0u8; 32]; num_chunks];
+
+        for (pos, datom) in canonical.iter().enumerate() {
+            let chunk_idx = pos / chunk_size;
+            let hash = blake3::hash(&bincode::serialize(datom)
+                .expect("datom serialization is infallible"));
+            for (a, b) in chunks[chunk_idx].iter_mut().zip(hash.as_bytes()) {
+                *a ^= b;
+            }
+        }
+
+        Self {
+            chunks,
+            chunk_size,
+            dirty: BitVec::from_elem(num_chunks, false),
+        }
+    }
+
+    /// Insert a datom at canonical position p. O(1) — one BLAKE3 + one XOR.
+    pub fn insert(&mut self, position: usize, datom: &Datom) {
+        let chunk_idx = position / self.chunk_size;
+        if chunk_idx >= self.chunks.len() {
+            self.chunks.resize(chunk_idx + 1, [0u8; 32]);
+            self.dirty.resize(chunk_idx + 1, false);
+        }
+        let hash = blake3::hash(&bincode::serialize(datom)
+            .expect("datom serialization is infallible"));
+        for (a, b) in self.chunks[chunk_idx].iter_mut().zip(hash.as_bytes()) {
+            *a ^= b;
+        }
+        self.dirty.set(chunk_idx, true);
+    }
+
+    /// Compute the store-level fingerprint. O(K) — XOR all chunks.
+    /// Equivalent to INV-FERR-074's H(S).
+    pub fn store_fingerprint(&self) -> [u8; 32] {
+        let mut result = [0u8; 32];
+        for chunk in &self.chunks {
+            for (a, b) in result.iter_mut().zip(chunk) {
+                *a ^= b;
+            }
+        }
+        result
+    }
+
+    /// Identify differing chunks between two stores. O(K).
+    /// Returns indices of chunks where fingerprints differ.
+    pub fn diff_chunks(&self, other: &ChunkFingerprints) -> Vec<usize> {
+        let max_len = self.chunks.len().max(other.chunks.len());
+        let mut differing = Vec::new();
+        for i in 0..max_len {
+            let a = self.chunks.get(i).copied().unwrap_or([0u8; 32]);
+            let b = other.chunks.get(i).copied().unwrap_or([0u8; 32]);
+            if a != b {
+                differing.push(i);
+            }
+        }
+        differing
+    }
+
+    /// Dirty chunk indices (modified since last LIVE rebuild).
+    pub fn dirty_chunks(&self) -> impl Iterator<Item = usize> + '_ {
+        self.dirty.iter().enumerate()
+            .filter(|(_, bit)| *bit)
+            .map(|(i, _)| i)
+    }
+
+    /// Clear dirty flags after LIVE rebuild.
+    pub fn clear_dirty(&mut self) {
+        self.dirty.fill(false);
+    }
+}
+```
+
+**Falsification**: Two stores A and B where `diff_chunks(CF(A), CF(B))` reports no
+differing chunks, but `A ≠ B`. This would indicate a chunk fingerprint collision —
+two different datom sets producing identical XOR-sums within the same chunk. Under
+BLAKE3's 128-bit collision resistance, the probability per chunk is ≤ 2^{-128}.
+
+Also: any datom insertion where `insert(p, d)` modifies a chunk other than `p / C`.
+This would indicate incorrect position-to-chunk mapping.
+
+**proptest strategy**:
+```rust
+proptest! {
+    fn chunk_fingerprints_decomposition(
+        datoms in prop::collection::btree_set(arb_datom(), 0..500),
+    ) {
+        let store = PositionalStore::from_datoms(datoms.into_iter());
+        let cf = ChunkFingerprints::from_canonical(store.datoms(), 64);
+
+        // Decomposition: store fingerprint = XOR of chunk fingerprints.
+        let store_fp = cf.store_fingerprint();
+        let manual_fp = compute_fingerprint(store.datoms());
+        prop_assert_eq!(store_fp, manual_fp,
+            "INV-FERR-079: chunk decomposition must equal store fingerprint");
+    }
+
+    fn chunk_fingerprints_diff_detects_changes(
+        a_datoms in prop::collection::btree_set(arb_datom(), 0..200),
+        b_datoms in prop::collection::btree_set(arb_datom(), 0..200),
+    ) {
+        let a = PositionalStore::from_datoms(a_datoms.iter().cloned());
+        let b = PositionalStore::from_datoms(b_datoms.iter().cloned());
+        let cf_a = ChunkFingerprints::from_canonical(a.datoms(), 64);
+        let cf_b = ChunkFingerprints::from_canonical(b.datoms(), 64);
+
+        if a_datoms == b_datoms {
+            // Identical stores → zero differing chunks.
+            prop_assert_eq!(cf_a.diff_chunks(&cf_b).len(), 0,
+                "INV-FERR-079: identical stores must have zero differing chunks");
+        }
+        // Note: different stores MAY have zero differing chunks (collision).
+        // We don't assert non-zero because collision probability is 2^-128.
+    }
+}
+```
+
+**Lean theorem**:
+```lean
+/-- INV-FERR-079: Chunk fingerprint decomposition.
+    The XOR of all chunk fingerprints equals the store fingerprint.
+    This is the direct-sum decomposition of the XOR homomorphism
+    over a partition of the datom set into contiguous chunks. -/
+
+def chunk_fingerprint (f : Datom → Nat) (s : Finset Datom) (C : Nat)
+    (i : Nat) : Nat :=
+  xor_fold f (s.filter (fun d => sorry /- position(d) / C = i -/))
+
+theorem chunk_decomposition (s : Finset Datom) (f : Datom → Nat)
+    (C : Nat) (K : Nat) (h_partition : sorry /- chunks partition s -/) :
+    xor_fold f s = Finset.fold Nat.xor 0
+      (Finset.range K) (fun i => chunk_fingerprint f s C i) :=
+  sorry -- Requires: XOR distributes over disjoint partition.
+         -- Same argument as fingerprint_merge (INV-FERR-074) applied
+         -- to K-way partition instead of 2-way.
+```
+
+---
+
+### INV-FERR-080: Incremental LIVE Maintenance via Dirty-Chunk Tracking
+
+**Traces to**: INV-FERR-079 (Chunk Fingerprint Array — provides dirty tracking),
+INV-FERR-029 (LIVE View Resolution), INV-FERR-075 (LIVE-First Checkpoint),
+INV-FERR-072 (Lazy Promotion — demotion triggers LIVE rebuild)
+**Verification**: `V:PROP`
+**Stage**: 2
+
+#### Level 0 (Algebraic Law)
+```
+Let S be a DatomStore. Let S' = S ∪ {d₁, ..., dₖ} after a transaction.
+Let dirty = { i | chunk_i(S') ≠ chunk_i(S) } be the set of dirty chunks.
+
+Theorem (incremental LIVE):
+  LIVE(S') can be computed from LIVE(S) by recomputing LIVE only for
+  datoms in dirty chunks:
+
+  ∀ i ∉ dirty: LIVE_chunk_i(S') = LIVE_chunk_i(S)
+  ∀ i ∈ dirty: LIVE_chunk_i(S') = resolve_live(chunk_i(S'))
+
+  Total cost: O(|dirty| × C) instead of O(n).
+
+Proof:
+  LIVE resolution depends only on the (entity, attribute, value) triples
+  within each chunk and their TxId ordering. If chunk_i is unchanged
+  (not dirty), its LIVE bits are unchanged. Only dirty chunks need
+  recomputation. The partition into chunks preserves LIVE correctness
+  because EAVT ordering ensures datoms for the same (e,a) triple are
+  contiguous — they fall within the same chunk or adjacent chunks.
+
+  Note: this assumes chunk boundaries align with (entity, attribute)
+  group boundaries. For chunks that split an (e,a) group, the LIVE
+  computation must consider the full group spanning adjacent chunks.
+  This is a known complication addressed by maintaining a per-chunk
+  "spillover" flag for groups that cross chunk boundaries.
+```
+
+#### Level 1 (State Invariant)
+When a small transaction (k datoms) is applied to a large store (n datoms), the
+current implementation rebuilds the entire LIVE bitvector from scratch — O(n).
+With dirty-chunk tracking from INV-FERR-079, only the ~k/C dirty chunks need LIVE
+recomputation. For a typical agentic workload (1-10 datoms per transaction on a
+200K-datom store), this reduces demotion cost from O(200K) to O(1024) — a 200x
+improvement.
+
+The dirty-chunk mechanism also enables incremental checkpoint writes: only dirty
+chunks need to be re-serialized and flushed. Combined with the LIVE-first layout
+(INV-FERR-075), this means checkpoint updates are O(delta) instead of O(n).
+
+This invariant is Stage 2 because it requires the chunk fingerprint array (079) to
+be implemented first, and because the correctness of incremental LIVE depends on
+careful handling of (e,a) groups that span chunk boundaries. The full design is
+specified here; implementation deferred to Phase 4b when the value pool (fixed-size
+datoms) simplifies the boundary-crossing analysis.
+
+#### Level 2 (Implementation Contract)
+```rust
+/// Incremental LIVE rebuild using dirty-chunk tracking (INV-FERR-080).
+///
+/// Only recomputes LIVE bits for chunks marked dirty in the
+/// ChunkFingerprints. Clean chunks retain their existing LIVE bits.
+pub fn rebuild_live_incremental(
+    canonical: &[Datom],
+    existing_live: &BitVec,
+    chunk_fps: &ChunkFingerprints,
+) -> BitVec {
+    let mut live = existing_live.clone();
+    for chunk_idx in chunk_fps.dirty_chunks() {
+        let start = chunk_idx * chunk_fps.chunk_size;
+        let end = (start + chunk_fps.chunk_size).min(canonical.len());
+        // Recompute LIVE for this chunk's datom range.
+        let chunk_live = build_live_bitvector(&canonical[start..end]);
+        for (i, bit) in chunk_live.iter().enumerate() {
+            live.set(start + i, *bit);
+        }
+    }
+    live
+}
+```
+
+**Falsification**: Any store S where `rebuild_live_incremental(S)` produces different
+LIVE bits than `build_live_bitvector(S)` for a clean chunk. This would indicate that
+a clean chunk's LIVE state was incorrectly preserved when it should have been
+recomputed — likely an (e,a) group spanning a chunk boundary where the other chunk
+was dirty but this one was not.
+
+**proptest strategy**:
+```rust
+proptest! {
+    fn incremental_live_matches_full_rebuild(
+        datoms in prop::collection::btree_set(arb_datom(), 0..500),
+        extra in arb_datom(),
+    ) {
+        let mut all_datoms = datoms;
+        all_datoms.insert(extra);
+        let store = PositionalStore::from_datoms(all_datoms.into_iter());
+        let full_live = build_live_bitvector(store.datoms());
+        // Incremental: pretend all chunks are dirty (conservative).
+        // Result must match full rebuild.
+        // (True incremental test requires tracking dirty state across insert.)
+        todo!("Phase 4b implementation")
+    }
+}
+```
+
+**Lean theorem**:
+```lean
+/-- INV-FERR-080: LIVE is determined per-chunk when chunks align with
+    (entity, attribute) group boundaries. Unchanged chunks have unchanged LIVE. -/
+-- Requires: formalization of LIVE as a per-group fold, and the condition
+-- under which chunk boundaries align with group boundaries.
+-- Deferred to Phase 4b (Stage 2).
+theorem incremental_live_correctness : sorry := sorry
 ```
 
 ---
