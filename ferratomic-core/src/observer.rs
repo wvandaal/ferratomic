@@ -232,12 +232,11 @@ impl Observer {
         // in the store or database layer (e.g., snapshot regression).
         // debug_assert catches this in test/debug builds without panicking
         // in production, where fetch_max safely ignores the lower value.
+        let last_epoch = self.last_epoch.load(Ordering::Acquire);
         debug_assert!(
-            current_epoch >= self.last_epoch.load(Ordering::Acquire),
-            "INV-FERR-011: store epoch ({}) < observer last_epoch ({}): \
+            current_epoch >= last_epoch,
+            "INV-FERR-011: store epoch ({current_epoch}) < observer last_epoch ({last_epoch}): \
              monotonicity violation — store snapshot regressed",
-            current_epoch,
-            self.last_epoch.load(Ordering::Acquire),
         );
 
         // Monotonic advance: only update if current is greater.

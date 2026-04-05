@@ -360,9 +360,17 @@ fn test_inv_ferr_014_double_crash() {
 
     // Phase 4: second cold_start recovery
     let result2 = cold_start(&data_dir).expect("INV-FERR-014: second cold_start must succeed");
-    assert!(
-        result2.level == RecoveryLevel::CheckpointPlusWal
-            || result2.level == RecoveryLevel::WalOnly,
+    // bd-auqy: After crash 2, the checkpoint from Phase 1 still exists and
+    // the WAL contains post-checkpoint transactions from Phase 3. Recovery
+    // MUST use CheckpointPlusWal to replay the WAL delta on top of the
+    // checkpoint. WalOnly would discard the checkpoint; CheckpointOnly would
+    // lose the post-checkpoint transactions.
+    assert_eq!(
+        result2.level,
+        RecoveryLevel::CheckpointPlusWal,
+        "INV-FERR-014: recovery 2 must use CheckpointPlusWal (checkpoint exists \
+         with post-checkpoint WAL delta from Phase 3), got {:?}",
+        result2.level
     );
     assert_dc_entities_present(&result2.database, 6, "INV-FERR-014 recovery 2");
     let epoch2 = result2.database.epoch();
@@ -733,7 +741,7 @@ fn test_inv_ferr_014_power_cut_atomic_rename() {
         {
             // Use store_for_checkpoint() — the same correct pattern as the
             // primary write_checkpoint_from_db helper. Avoids the genesis+insert
-            // anti-pattern that produces epoch-0 checkpoints (DEFECT-E001).
+            // anti-pattern that produces epoch-0 checkpoints (now fixed via store_for_checkpoint()).
             let temp_store = db.store_for_checkpoint();
             let temp_file = std::fs::File::create(&temp_checkpoint_path)
                 .expect("test setup: create temp checkpoint file");

@@ -131,7 +131,10 @@ fn test_inv_ferr_005_bijection_after_transact() {
         store.promote();
         store.ensure_indexes_sorted();
         assert!(
-            store.indexes().unwrap().verify_bijection(),
+            store
+                .indexes()
+                .expect("INV-FERR-005: indexes must be available after promote")
+                .verify_bijection(),
             "INV-FERR-005: index bijection violated after transact"
         );
     }
@@ -141,10 +144,26 @@ fn test_inv_ferr_005_bijection_after_transact() {
     store.promote();
     store.ensure_indexes_sorted();
     let primary_count = store.len();
-    let eavt_count = store.indexes().unwrap().eavt_datoms().count();
-    let aevt_count = store.indexes().unwrap().aevt_datoms().count();
-    let vaet_count = store.indexes().unwrap().vaet_datoms().count();
-    let avet_count = store.indexes().unwrap().avet_datoms().count();
+    let eavt_count = store
+        .indexes()
+        .expect("INV-FERR-005: indexes must be available after promote")
+        .eavt_datoms()
+        .count();
+    let aevt_count = store
+        .indexes()
+        .expect("INV-FERR-005: indexes must be available after promote")
+        .aevt_datoms()
+        .count();
+    let vaet_count = store
+        .indexes()
+        .expect("INV-FERR-005: indexes must be available after promote")
+        .vaet_datoms()
+        .count();
+    let avet_count = store
+        .indexes()
+        .expect("INV-FERR-005: indexes must be available after promote")
+        .avet_datoms()
+        .count();
 
     assert_eq!(
         eavt_count, primary_count,
@@ -854,7 +873,10 @@ fn test_inv_ferr_025_index_backend_trait() {
     store.promote();
     store.ensure_indexes_sorted();
     assert!(
-        store.indexes().unwrap().verify_bijection(),
+        store
+            .indexes()
+            .expect("INV-FERR-005: indexes must be available after promote")
+            .verify_bijection(),
         "INV-FERR-025: index bijection violated after 5 transactions"
     );
 }

@@ -253,7 +253,7 @@ pub const CATALOG: &[Invariant] = &[
         id: "INV-FERR-014",
         name: "Recovery Correctness",
         stage: Stage::Stage0,
-        lean_theorem: None,
+        lean_theorem: Some("crash_recovery_monotone_prefix"),
         proptest_fn: Some("inv_ferr_014_wal_recovery_correctness"),
         kani_harness: Some("recovery_superset"),
         stateright_model: Some("inv_ferr_014_committed_data_survives_crash"),

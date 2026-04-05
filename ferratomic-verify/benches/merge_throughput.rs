@@ -147,6 +147,9 @@ fn bench_merge_mixed_repr(c: &mut Criterion) {
     let right_ord = build_shifted_store_ordmap(datom_count, datom_count);
     let min_expected = left_pos.len().max(right_ord.len());
 
+    // Throughput denominator is the sum of input sizes. The actual merged
+    // output may differ due to metadata datoms, but this is a stable proxy
+    // for comparing merge implementations at the same scale.
     group.throughput(Throughput::Elements(
         (left_pos.len() + right_ord.len()) as u64,
     ));
