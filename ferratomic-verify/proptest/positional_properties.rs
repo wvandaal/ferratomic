@@ -4,7 +4,7 @@
 //! `OrdSet`/`OrdMap`-based `Store` for all operations. Tests the five
 //! acceptance criteria from the session 007 execution plan.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 
 use ferratom::{Datom, EntityId};
 use ferratomic_core::{
@@ -320,9 +320,10 @@ proptest! {
         let ps = PositionalStore::from_datoms(datoms.into_iter());
         let absent = EntityId::from_bytes(absent_bytes);
 
-        // Only test if this entity is actually absent.
-        let is_present = ps.datoms().iter().any(|d| d.entity() == absent);
-        if !is_present {
+        // bd-zp8g: Use HashSet for O(1) entity presence check instead of
+        // linear scan via `.any()`.
+        let entity_set: HashSet<EntityId> = ps.datoms().iter().map(|d| d.entity()).collect();
+        if !entity_set.contains(&absent) {
             prop_assert_eq!(
                 ps.entity_lookup(&absent),
                 None,
@@ -529,8 +530,10 @@ proptest! {
         let ps = PositionalStore::from_datoms(datoms.into_iter());
         let absent = EntityId::from_bytes(absent_bytes);
 
-        let is_present = ps.datoms().iter().any(|d| d.entity() == absent);
-        if !is_present {
+        // bd-zp8g: Use HashSet for O(1) entity presence check instead of
+        // linear scan via `.any()`.
+        let entity_set: HashSet<EntityId> = ps.datoms().iter().map(|d| d.entity()).collect();
+        if !entity_set.contains(&absent) {
             prop_assert!(
                 !ps.entity_exists(&absent),
                 "INV-FERR-027: entity_exists returned true for absent entity"

@@ -487,10 +487,11 @@ impl PositionalStore {
     ///
     /// INV-FERR-076: Zero-construction cold start for V3 checkpoint
     /// deserialization. The caller guarantees `canonical` is sorted and
-    /// `live_bits.len() == canonical.len()`. Checked via `debug_assert`
-    /// only — release builds do not validate. Callers loading from
-    /// untrusted sources must verify integrity independently (e.g.,
-    /// BLAKE3 per ADR-FERR-010). Permutation arrays are deferred
+    /// deduplicated (strictly increasing EAVT order, no duplicate datoms)
+    /// and that `live_bits.len() == canonical.len()`. Checked via
+    /// `debug_assert` only — release builds do not validate. Callers
+    /// loading from untrusted sources must verify integrity independently
+    /// (e.g., BLAKE3 per ADR-FERR-010). Permutation arrays are deferred
     /// (`OnceLock::new()`).
     #[must_use]
     pub(crate) fn from_sorted_with_live(
@@ -887,6 +888,18 @@ pub(crate) fn merge_sort_dedup(a: &[Datom], b: &[Datom]) -> Vec<Datom> {
 /// Uses the first 8 bytes of `EntityId` as a u64 interpolation key.
 /// Falls back to midpoint when all entities in the current range share
 /// the same 8-byte prefix (same-entity block or division-by-zero guard).
+///
+/// # Overflow safety
+///
+/// The interpolation formula `lo + (key - lo_val) * (hi - lo) / (hi_val - lo_val)`
+/// uses `u128` arithmetic to prevent overflow. `key_val`, `lo_val`, and `hi_val`
+/// are `u64` values (8-byte entity prefixes), and `hi - lo` is at most
+/// `u32::MAX` because INV-FERR-076 constrains the canonical array length
+/// to `u32` (checked via `debug_assert` in all constructors). The widest
+/// intermediate product is `u64 * u64 = u128`, which fits without overflow.
+/// The final `usize::try_from(ratio).unwrap_or(hi)` safely degrades to a
+/// midpoint-like fallback if the ratio exceeds `usize::MAX` (impossible in
+/// practice given the `u32` length constraint, but defensive).
 fn interpolation_search<'a>(canonical: &'a [Datom], key: &EavtKey) -> Option<&'a Datom> {
     if canonical.is_empty() {
         return None;

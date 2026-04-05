@@ -345,6 +345,10 @@ fn substrate_agnosticism_in_memory() {
 /// WAL frame overhead: magic(4) + version(2) + epoch(8) + length(4) + CRC(4) = 22 bytes.
 /// Cross-reference: `ferratomic-core::wal::HEADER_SIZE` (18) + `CRC_SIZE` (4) = 22.
 /// If the WAL frame format changes, this constant must be updated to match.
+///
+/// bd-pu4t: This value also appears in the proptest doc comment at
+/// `ferratomic-verify/proptest/wal_properties.rs` (INV-FERR-026 test).
+/// Both must stay in sync with `ferratomic-core::wal::{HEADER_SIZE, CRC_SIZE}`.
 const WAL_FRAME_OVERHEAD: usize = 22;
 
 /// INV-FERR-026: WAL write amplification <= 10x.
@@ -434,7 +438,11 @@ fn cold_start_checkpoint_roundtrip() {
     // bd-h2fz: from_checkpoint builds Positional. Promote to verify bijection.
     loaded.promote();
     assert!(
-        loaded.indexes().unwrap().verify_bijection(),
+        // bd-oett: descriptive expect instead of bare unwrap.
+        loaded
+            .indexes()
+            .expect("INV-FERR-028: indexes must be available after promote")
+            .verify_bijection(),
         "INV-FERR-028: indexes must be bijective after cold start"
     );
 }

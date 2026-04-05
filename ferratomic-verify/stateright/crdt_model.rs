@@ -8,6 +8,11 @@ use stateright::{Model, Property};
 ///
 /// The Stateright model uses a finite synthetic datom domain derived from a
 /// seed so the checker can explore all message orderings over a bounded space.
+///
+/// All fields are `pub` intentionally: this is a simplified verification model
+/// type, not the production `Datom`. The model needs direct field access for
+/// `from_seed` construction and `BTreeSet` ordering. The production `Datom`
+/// in `ferratom/` enforces encapsulation through content-addressed constructors.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct Datom {
     /// Content-addressed entity identifier.
@@ -283,7 +288,7 @@ impl Model for CrdtModel {
             // inv_ferr_018_append_only_recovery on crash_recovery_model.rs,
             // which verifies committed data survives recovery.
             Property::always(
-                "inv_ferr_018_append_only",
+                "inv_ferr_018_append_only_crdt_alias",
                 |_: &CrdtModel, state: &CrdtState| {
                     state
                         .nodes
@@ -431,7 +436,7 @@ mod tests {
         checker.assert_no_discovery("inv_ferr_010_in_flight_payloads_stay_in_domain");
         checker.assert_no_discovery("inv_ferr_010_sec_convergence");
         checker.assert_no_discovery("inv_ferr_004_monotonic_growth");
-        checker.assert_no_discovery("inv_ferr_018_append_only");
+        checker.assert_no_discovery("inv_ferr_018_append_only_crdt_alias");
         checker.assert_any_discovery("inv_ferr_010_convergence_reachable");
     }
 

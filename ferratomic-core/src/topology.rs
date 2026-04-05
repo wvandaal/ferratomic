@@ -23,6 +23,15 @@ use ferratom::Datom;
 /// The trait requires `Send + Sync` because filters are evaluated during
 /// merge and anti-entropy operations that may span thread boundaries.
 /// `AcceptAll` is the default (full replica).
+///
+/// # Contract
+///
+/// Implementors guarantee:
+/// - **Determinism**: `accepts(d)` returns the same value for the same
+///   datom across all calls, regardless of ordering or timing.
+/// - **Purity**: the result depends only on the datom's content, not
+///   on internal mutable state or external conditions.
+/// - **Subset**: `accepted(R) ⊆ source` — a filter never invents datoms.
 pub trait ReplicaFilter: Send + Sync {
     /// Evaluate whether this replica accepts the given datom.
     ///
@@ -39,6 +48,9 @@ pub trait ReplicaFilter: Send + Sync {
 /// source` because `accepts` returns `true` for all datoms. This is the
 /// default for single-node operation, where the node holds the complete
 /// datom set with no subset projection.
+///
+/// Phase 4c will replace this with real topology management and
+/// selective replication filters.
 ///
 /// # Visibility
 ///

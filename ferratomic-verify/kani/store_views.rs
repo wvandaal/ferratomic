@@ -31,7 +31,10 @@ fn index_bijection() {
     store.promote();
 
     let primary: BTreeSet<&Datom> = store.datoms().collect();
-    let indexes = store.indexes().unwrap();
+    // bd-oett: descriptive expect instead of bare unwrap.
+    let indexes = store
+        .indexes()
+        .expect("INV-FERR-005: indexes must be available after promote");
     let eavt: BTreeSet<&Datom> = indexes.eavt_datoms().collect();
     let aevt: BTreeSet<&Datom> = indexes.aevt_datoms().collect();
     let vaet: BTreeSet<&Datom> = indexes.vaet_datoms().collect();
@@ -181,8 +184,13 @@ fn index_backend_order_independence() {
     );
 
     // All four index iterators must yield the same datoms.
-    let idx_ab = store_ab.indexes().unwrap();
-    let idx_ba = store_ba.indexes().unwrap();
+    // bd-oett: descriptive expect instead of bare unwrap.
+    let idx_ab = store_ab
+        .indexes()
+        .expect("INV-FERR-025: indexes must be available after promote (store_ab)");
+    let idx_ba = store_ba
+        .indexes()
+        .expect("INV-FERR-025: indexes must be available after promote (store_ba)");
     let eavt_ab: Vec<_> = idx_ab.eavt_datoms().collect();
     let eavt_ba: Vec<_> = idx_ba.eavt_datoms().collect();
     assert_eq!(eavt_ab, eavt_ba, "INV-FERR-025: EAVT must match");
@@ -234,7 +242,10 @@ fn eavt_lookup_correctness() {
 
     // For every datom in the committed transaction, the EAVT index
     // must return that exact datom when queried by its key.
-    let indexes = store.indexes().unwrap();
+    // bd-oett: descriptive expect instead of bare unwrap.
+    let indexes = store
+        .indexes()
+        .expect("INV-FERR-027: indexes must be available after transact_test");
     for datom in &committed_datoms {
         let key = EavtKey::from_datom(datom);
         let found = indexes.eavt().backend_get(&key);

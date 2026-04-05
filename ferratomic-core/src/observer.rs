@@ -31,6 +31,17 @@ pub(crate) const DEFAULT_OBSERVER_BUFFER: usize = 1024;
 /// The trait requires `Send + Sync` because the `ObserverBroadcast`
 /// infrastructure invokes observer methods from the committing thread,
 /// which may differ from the thread that registered the observer.
+///
+/// # Contract
+///
+/// Implementors guarantee:
+/// - **Idempotency**: receiving the same epoch twice is a no-op.
+///   `on_commit` and `on_catchup` use `epoch` as a deduplication key.
+/// - **Thread safety**: methods may be called from any thread; internal
+///   state must be `Send + Sync`-safe.
+/// - **No panics**: observer callbacks must not panic. A panicking
+///   observer would unwind through the broadcast infrastructure and
+///   prevent delivery to other registered observers.
 pub trait DatomObserver: Send + Sync {
     /// Receive the datoms for a single freshly committed epoch.
     ///
@@ -215,6 +226,19 @@ impl Observer {
     pub fn observe(&self, store: &Store) -> Snapshot {
         let snap = store.snapshot();
         let current_epoch = snap.epoch();
+
+        // INV-FERR-011: the store's epoch should never be less than what
+        // this observer has already seen. A lower epoch indicates a bug
+        // in the store or database layer (e.g., snapshot regression).
+        // debug_assert catches this in test/debug builds without panicking
+        // in production, where fetch_max safely ignores the lower value.
+        debug_assert!(
+            current_epoch >= self.last_epoch.load(Ordering::Acquire),
+            "INV-FERR-011: store epoch ({}) < observer last_epoch ({}): \
+             monotonicity violation — store snapshot regressed",
+            current_epoch,
+            self.last_epoch.load(Ordering::Acquire),
+        );
 
         // Monotonic advance: only update if current is greater.
         // fetch_max returns the previous value; we don't need it.

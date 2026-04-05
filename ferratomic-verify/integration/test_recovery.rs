@@ -588,10 +588,15 @@ fn test_inv_ferr_014_triple_crash_wal_truncation() {
     let recovery2_epoch;
     {
         let result2 = cold_start(&data_dir).expect("INV-FERR-014: second cold_start must succeed");
-        assert!(
-            result2.level == RecoveryLevel::CheckpointPlusWal
-                || result2.level == RecoveryLevel::CheckpointOnly,
-            "INV-FERR-014: recovery 2 must use checkpoint path, got {:?}",
+        // bd-auqy: Recovery 2 follows a WAL truncation (crash 2 + truncation
+        // in Phase 3). The checkpoint alone predates the WAL delta, so
+        // recovery MUST replay the (truncated) WAL to reconstruct state.
+        // `CheckpointOnly` would silently lose all post-checkpoint datoms.
+        assert_eq!(
+            result2.level,
+            RecoveryLevel::CheckpointPlusWal,
+            "INV-FERR-014: recovery 2 must use CheckpointPlusWal (WAL delta \
+             exists after truncation), got {:?}",
             result2.level
         );
         assert_tc_entities_present(&result2.database, 5, "INV-FERR-014 recovery 2");

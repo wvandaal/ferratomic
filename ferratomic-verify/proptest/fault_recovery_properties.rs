@@ -30,9 +30,10 @@ fn store_with_datoms(n: usize) -> Store {
                 Value::String(format!("v-{i}").into()),
             )
             .commit_unchecked();
+        // bd-s0kt: `.expect()` is idiomatic for this pattern.
         store
             .transact_test(tx)
-            .unwrap_or_else(|e| panic!("transact {i}: {e}"));
+            .expect("INV-FERR-056: transact must succeed in test setup");
     }
     store
 }

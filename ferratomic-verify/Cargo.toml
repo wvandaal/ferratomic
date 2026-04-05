@@ -26,6 +26,18 @@ serde_json = { workspace = true }
 unexpected_cfgs = { level = "allow", check-cfg = ['cfg(kani)'] }
 
 # --- Property-based test suites (proptest/) ---
+#
+# bd-n58h: Regression seed status (2 of 12 modules have seeds):
+#
+#   HAS seeds:  crdt_properties, wal_properties
+#   NO seeds:   index_properties, schema_properties, durability_properties,
+#               clock_properties, append_only_properties, fault_recovery_properties,
+#               positional_properties, conformance, isomorphism_properties,
+#               refinement
+#
+# Absence of seeds means no regressions have been discovered in those modules
+# yet. Seeds are generated automatically by proptest when a failure is found
+# and shrunk. Do NOT create fake seed files — they would be meaningless.
 
 [[test]]
 name = "proptest_crdt"

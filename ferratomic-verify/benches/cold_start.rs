@@ -128,10 +128,15 @@ fn bench_cold_start(c: &mut Criterion) {
                         RecoveryLevel::CheckpointPlusWal,
                         "INV-FERR-028: prepared fixture must exercise checkpoint+WAL recovery",
                     );
+                    // bd-tnkm: The fixture seeds `datom_count` user datoms,
+                    // but each transaction also adds 2 metadata datoms
+                    // (`:tx/time`, `:tx/agent`), so recovered count > datom_count.
+                    // Assert `>=` as a lower bound on set-union fidelity.
                     let recovered = result.database.snapshot().datoms().count();
                     assert!(
                         recovered >= datom_count,
-                        "INV-FERR-014: recovered fixture must contain all seeded datoms",
+                        "INV-FERR-014: recovered fixture must contain at least \
+                         {datom_count} user datoms, got {recovered}",
                     );
                     black_box(recovered);
                 });
@@ -174,10 +179,13 @@ fn bench_checkpoint_roundtrip(c: &mut Criterion) {
                         RecoveryLevel::CheckpointPlusWal,
                         "INV-FERR-028: roundtrip fixture must exercise checkpoint+WAL recovery",
                     );
+                    // bd-tnkm: Same rationale as cold_start benchmark above.
+                    // Metadata datoms inflate the count beyond `datom_count`.
                     let recovered = result.database.snapshot().datoms().count();
                     assert!(
                         recovered >= datom_count,
-                        "INV-FERR-014: recovered fixture must contain all seeded datoms",
+                        "INV-FERR-014: recovered roundtrip must contain at least \
+                         {datom_count} user datoms, got {recovered}",
                     );
                     black_box(recovered);
                 });

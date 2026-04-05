@@ -245,7 +245,8 @@ proptest! {
     ///
     /// Write N datoms via WAL, measure the on-disk WAL size vs the logical
     /// payload size (bincode-serialized datoms). The ratio (WA) must be
-    /// less than 10x. WAL frame overhead is 22 bytes per entry (header + CRC);
+    /// less than 10x. WAL frame overhead is 22 bytes per entry (header + CRC,
+    /// see `WAL_FRAME_OVERHEAD` in `ferratomic-verify/kani/durability.rs`);
     /// the rest is the payload. For non-trivial payloads, this overhead is
     /// small relative to the datom data, so WA << 10x.
     ///

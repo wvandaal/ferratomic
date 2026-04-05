@@ -548,9 +548,11 @@ theorem transaction_atomic_visibility (s : DatomStore) (tx_datoms : List Datom)
   Crash truncates the WAL to a prefix; recovery via fold-union on the
   prefix produces a subset of recovery on the full WAL.
 
-  INV-FERR-014 is tagged V:MODEL, not V:LEAN. These proofs capture the
-  algebraic core — recovery is set union, and union is monotonic. The crash
-  non-determinism (which WAL entries survived) is verified by Stateright. -/
+  INV-FERR-014 is tagged V:MODEL (primary verification is Stateright).
+  These Lean proofs provide bonus V:LEAN coverage of the algebraic core:
+  recovery is set union, and union is monotonic. The crash non-determinism
+  (which WAL entries survived) is verified by Stateright's bounded model
+  checker, while these theorems prove the universal algebraic properties. -/
 
 /-- Point recovery: merge checkpoint with WAL delta via set union. -/
 abbrev recover_point (committed wal_delta : DatomStore) : DatomStore :=

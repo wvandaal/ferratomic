@@ -23,9 +23,19 @@ use crate::store::Store;
 /// commutative, associative, and idempotent — repeated or reordered
 /// diff/apply exchanges converge to the same state.
 ///
+/// # Contract
+///
+/// Implementors guarantee:
+/// - **Convergence**: repeated `diff`/`apply_diff` exchanges between
+///   any two stores eventually produce identical datom sets.
+/// - **Idempotency**: applying the same diff twice leaves the store
+///   unchanged (inherited from INV-FERR-003).
+/// - **Monotonicity**: `apply_diff` never removes datoms from the
+///   receiving store (inherited from INV-FERR-004).
+///
 /// # Errors
 ///
-/// Methods return `FerraError` on transport or serialization failures.
+/// Methods return [`FerraError`] on transport or serialization failures.
 /// Transport errors are retryable; the protocol is idempotent, so
 /// retrying a failed exchange is always safe.
 pub trait AntiEntropy {
@@ -64,13 +74,14 @@ pub trait AntiEntropy {
 /// configuration there is no remote store, so the union identity
 /// `apply_diff(B, diff(A, B)) >= A u B` holds trivially.
 ///
-/// Phase 4c replaces this with a real implementation backed by the
+/// Phase 4c will replace this with a real implementation backed by the
 /// prolly tree block store.
 ///
 /// # Visibility
 ///
 /// `pub` because verification tests in `ferratomic-verify` exercise
 /// anti-entropy round-trip properties (INV-FERR-022 conformance testing).
+/// Phase 4c will add prolly-tree-backed implementations.
 #[derive(Debug, Default, Clone)]
 pub struct NullAntiEntropy;
 
@@ -83,6 +94,11 @@ impl AntiEntropy for NullAntiEntropy {
     /// In single-node mode, receiving a non-empty diff is harmless — there
     /// is no remote store to reconcile with. Phase 4c real implementations
     /// will validate payload structure.
+    ///
+    /// NOTE(Phase 4c): This silently discards non-empty payloads. A real
+    /// anti-entropy implementation must deserialize and merge the diff
+    /// contents. Revisit when implementing prolly-tree-backed sync
+    /// (INV-FERR-022, Phase 4c federation transport).
     fn apply_diff(&self, _store: &mut Store, _diff: &[u8]) -> Result<(), FerraError> {
         Ok(())
     }

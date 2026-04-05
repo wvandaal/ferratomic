@@ -675,18 +675,26 @@ mod tests {
         // First write + commit: datom 0 at epoch 1.
         let s1 = model
             .next_state(&state0, SnapshotAction::StartWrite(vec![0]))
-            .unwrap();
-        let s2 = model.next_state(&s1, SnapshotAction::CommitWrite).unwrap();
+            .expect("INV-FERR-006: starting first write must succeed from genesis");
+        let s2 = model
+            .next_state(&s1, SnapshotAction::CommitWrite)
+            .expect("INV-FERR-006: committing first write must succeed");
         // Observer 0 captures at epoch 1.
-        let s3 = model.next_state(&s2, SnapshotAction::StartRead(0)).unwrap();
+        let s3 = model
+            .next_state(&s2, SnapshotAction::StartRead(0))
+            .expect("INV-FERR-006: observer 0 read at epoch 1 must succeed");
 
         // Second write + commit: datom 1 at epoch 2.
         let s4 = model
             .next_state(&s3, SnapshotAction::StartWrite(vec![1]))
-            .unwrap();
-        let s5 = model.next_state(&s4, SnapshotAction::CommitWrite).unwrap();
+            .expect("INV-FERR-006: starting second write must succeed");
+        let s5 = model
+            .next_state(&s4, SnapshotAction::CommitWrite)
+            .expect("INV-FERR-006: committing second write must succeed");
         // Observer 1 captures at epoch 2.
-        let s6 = model.next_state(&s5, SnapshotAction::StartRead(1)).unwrap();
+        let s6 = model
+            .next_state(&s5, SnapshotAction::StartRead(1))
+            .expect("INV-FERR-006: observer 1 read at epoch 2 must succeed");
 
         let (epoch_r1, ref datoms_r1) = s6.reader_snapshots[0];
         let (epoch_r2, ref datoms_r2) = s6.reader_snapshots[1];
@@ -736,10 +744,14 @@ mod tests {
         // Write + commit at epoch 1.
         let s1 = model
             .next_state(&s0, SnapshotAction::StartWrite(vec![0]))
-            .unwrap();
-        let s2 = model.next_state(&s1, SnapshotAction::CommitWrite).unwrap();
+            .expect("INV-FERR-011: starting a write must succeed from genesis");
+        let s2 = model
+            .next_state(&s1, SnapshotAction::CommitWrite)
+            .expect("INV-FERR-011: committing a pending write must succeed");
         // Observer 0 takes snapshot at epoch 1.
-        let s3 = model.next_state(&s2, SnapshotAction::StartRead(0)).unwrap();
+        let s3 = model
+            .next_state(&s2, SnapshotAction::StartRead(0))
+            .expect("INV-FERR-011: starting a read at epoch 1 must succeed");
         assert_eq!(
             s3.observer_epoch_history[0],
             vec![1],

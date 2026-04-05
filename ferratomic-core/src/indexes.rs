@@ -191,6 +191,12 @@ impl<K: Ord + Clone + std::fmt::Debug, V: Clone + std::fmt::Debug> IndexBackend<
             debug_assert!(false, "INV-FERR-071: lookup on unsorted backend");
             return None;
         }
+        // NOTE: `binary_search_by` returns an arbitrary match when duplicate
+        // keys exist. This is safe because `sort()` calls `dedup_by` after
+        // sorting (INV-FERR-071), guaranteeing keys are unique in the sorted
+        // state. Index keys contain all 5 datom fields, so key equality
+        // implies datom equality (INV-FERR-012). Therefore the "arbitrary"
+        // match IS the unique match in any correctly constructed backend.
         self.entries
             .binary_search_by(|(k, _)| k.cmp(key))
             .ok()

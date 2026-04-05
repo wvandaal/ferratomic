@@ -5,6 +5,12 @@
 **Scope**: 37 beads closed during session 012, covering Stateright models, Kani harnesses, trait documentation, bug fixes, durability tests, proptest configuration, Criterion benchmarks, and Lean theorems.
 **Protocol**: 9-phase cleanroom review per `docs/prompts/lifecycle/06-cleanroom-review.md`
 
+> **Format note**: This historical review uses round-based narrative with summary
+> tables. Future reviews should use the per-defect format from
+> `docs/prompts/lifecycle/06-cleanroom-review.md`:
+> `[SEVERITY] DEFECT-NNN: Short title` with Location, Traces to, Evidence,
+> Expected, and Fix fields for each individual defect.
+
 ---
 
 ## Review Rounds
@@ -80,6 +86,6 @@
 | Layer | Artifact | Status |
 |-------|----------|--------|
 | Lean (universal) | `crash_recovery_monotone_prefix`, `recovery_preserves_committed`, `recovery_no_phantoms`, `recovery_idempotent_clean` | Proven, zero sorry |
-| Stateright (bounded) | crash_recovery_model with Fsynced phase, 10 properties, 3 liveness | All BFS-verified |
+| Stateright (bounded) | crash_recovery_model with Fsynced phase, 11 properties, 3 liveness | All BFS-verified |
 | Proptest (statistical) | `durability_properties.rs`, 10K cases | Passing |
 | Integration (concrete) | 10 tests: triple-crash, power-cut, ENOSPC, snapshot+crash | All passing |

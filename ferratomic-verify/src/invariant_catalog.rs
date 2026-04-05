@@ -900,6 +900,13 @@ mod tests {
     use super::*;
 
     /// ADR-FERR-013: catalog must contain all 61 invariants (59 INV + 2 CI).
+    ///
+    /// Breakdown: 12 core (001-012) + 12 concurrency (013-024) +
+    /// 8 performance (025-032) + 4 decisions (033-036) +
+    /// 8 federation (037-044) + 6 prolly (045-050) +
+    /// 5 VKN (051-055) + 4 verification (056-059) + 2 CI-FERR (001-002).
+    ///
+    /// Update this count and breakdown if the spec adds or removes invariants.
     #[test]
     fn test_catalog_count() {
         assert_eq!(
