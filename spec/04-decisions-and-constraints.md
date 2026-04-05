@@ -498,6 +498,16 @@ ferratomic-datalog (query: Datalog parser + evaluator)
 
 ---
 
+### ADR-FERR-020: Localized Unsafe for Performance-Critical Cold Start
+
+See [spec/09-performance-architecture.md](09-performance-architecture.md) §23.13.
+Localized `unsafe` in `ferratomic-core/src/mmap.rs` for memory-mapped checkpoint
+loading, firewalled behind a safe API with BLAKE3 128-bit integrity guard.
+`ferratomic-core` uses `#![deny(unsafe_code)]` (not `forbid`) to allow this
+single exception. All other crates use `#![forbid(unsafe_code)]`.
+
+---
+
 ## 23.5 Negative Cases
 
 ### NEG-FERR-001: No Panics in Production Code

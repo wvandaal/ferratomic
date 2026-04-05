@@ -532,7 +532,9 @@ fn test_inv_ferr_019_error_display_all_variants() {
 /// bd-oizy: raises INV-FERR-023 verification depth to 4+ layers.
 #[test]
 fn test_inv_ferr_023_forbid_unsafe_code() {
+    // All five crate lib.rs files that must enforce unsafe code policy.
     let lib_files = [
+        concat!(env!("CARGO_MANIFEST_DIR"), "/../ferratom-clock/src/lib.rs"),
         concat!(env!("CARGO_MANIFEST_DIR"), "/../ferratom/src/lib.rs"),
         concat!(env!("CARGO_MANIFEST_DIR"), "/../ferratomic-core/src/lib.rs"),
         concat!(

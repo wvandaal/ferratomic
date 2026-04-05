@@ -242,6 +242,9 @@ pub const CATALOG: &[Invariant] = &[
         lean_theorem: Some("checkpoint_roundtrip"),
         proptest_fn: Some("inv_ferr_013_checkpoint_roundtrip"),
         kani_harness: Some("checkpoint_roundtrip"),
+        // No Stateright model: checkpoint round-trip is a deterministic
+        // property (serialize + deserialize = identity), not a concurrent/crash
+        // interleaving property. Verified by proptest (10K cases) and Lean proof.
         stateright_model: None,
         integration_test: Some("test_inv_ferr_013_checkpoint_corruption"),
         type_level: None,
@@ -295,6 +298,10 @@ pub const CATALOG: &[Invariant] = &[
         name: "Append-Only",
         stage: Stage::Stage0,
         lean_theorem: Some("append_only_merge_left"),
+        // Note: overlaps with INV-FERR-004 proptest (both verify transact grows store).
+        // INV-004 targets merge cardinality (|merge| >= max), INV-018 targets
+        // append-only durability (no committed datom is ever lost). The proptest
+        // properties are structurally similar but trace to different spec invariants.
         proptest_fn: Some("inv_ferr_018_transact_monotonic_growth"),
         kani_harness: Some("append_only"),
         stateright_model: Some("inv_ferr_018_append_only_recovery"),
@@ -839,8 +846,8 @@ pub fn coverage_by_stage() -> [(Stage, usize, usize); 3] {
 ///
 /// Returns `[("lean", n), ("proptest", n), ("kani", n), ("stateright", n), ("integration", n)]`.
 #[must_use]
-pub fn coverage_by_layer() -> [(&'static str, usize); 5] {
-    let (mut lean, mut prop, mut kani, mut sr, mut integ) = (0, 0, 0, 0, 0);
+pub fn coverage_by_layer() -> [(&'static str, usize); 6] {
+    let (mut lean, mut prop, mut kani, mut sr, mut integ, mut type_lvl) = (0, 0, 0, 0, 0, 0);
     for inv in CATALOG {
         if inv.lean_theorem.is_some() {
             lean += 1;
@@ -857,6 +864,9 @@ pub fn coverage_by_layer() -> [(&'static str, usize); 5] {
         if inv.integration_test.is_some() {
             integ += 1;
         }
+        if inv.type_level.is_some() {
+            type_lvl += 1;
+        }
     }
     [
         ("lean", lean),
@@ -864,6 +874,7 @@ pub fn coverage_by_layer() -> [(&'static str, usize); 5] {
         ("kani", kani),
         ("stateright", sr),
         ("integration", integ),
+        ("type_level", type_lvl),
     ]
 }
 

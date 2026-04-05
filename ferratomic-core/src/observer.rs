@@ -147,7 +147,7 @@ fn buffered_delta_since(recent: &VecDeque<BroadcastEntry>, from_epoch: u64) -> O
     let mut delta = Vec::new();
     for entry in recent {
         if entry.epoch > from_epoch {
-            delta.extend(entry.datoms.clone());
+            delta.extend_from_slice(&entry.datoms);
         }
     }
     Some(delta)

@@ -112,6 +112,10 @@ impl Model for HlcModel {
     type Action = HlcAction;
 
     fn init_states(&self) -> Vec<Self::State> {
+        // Initial state: (0,0) sentinel representing "no tick has occurred yet."
+        // wall_clock=0 means the physical clock hasn't been read.
+        // prev_physical=0, prev_logical=0 means no prior HLC timestamp exists.
+        // The first tick() call will advance from this sentinel to a real timestamp.
         vec![HlcState {
             wall_clock: 0,
             prev_physical: 0,

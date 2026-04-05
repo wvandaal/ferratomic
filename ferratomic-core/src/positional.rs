@@ -966,4 +966,87 @@ mod tests {
         assert_eq!(pos_b, ps.entity_lookup(&eid_b));
         assert_eq!(pos_absent, ps.entity_lookup(&eid_absent));
     }
+
+    // -----------------------------------------------------------------------
+    // merge_sort_dedup regression tests (DEFECT-005, GOALS.md §6.9)
+    // -----------------------------------------------------------------------
+
+    /// Helper: build a sorted datom from entity seed + tx wall clock.
+    fn make_datom(entity_seed: u8, tx_wall: u64) -> Datom {
+        Datom::new(
+            EntityId::from_content(&[entity_seed]),
+            Attribute::from("db/doc"),
+            Value::String(std::sync::Arc::from("v")),
+            TxId::new(tx_wall, 0, 0),
+            Op::Assert,
+        )
+    }
+
+    /// Sort and dedup a vec of datoms (test helper).
+    fn sorted_deduped(mut datoms: Vec<Datom>) -> Vec<Datom> {
+        datoms.sort();
+        datoms.dedup();
+        datoms
+    }
+
+    #[test]
+    fn test_inv_ferr_001_merge_sort_dedup_both_empty() {
+        let result = super::merge_sort_dedup(&[], &[]);
+        assert!(result.is_empty(), "INV-FERR-001: empty + empty = empty");
+    }
+
+    #[test]
+    fn test_inv_ferr_001_merge_sort_dedup_one_empty() {
+        let a = sorted_deduped(vec![make_datom(1, 0), make_datom(2, 0)]);
+        let result_left = super::merge_sort_dedup(&a, &[]);
+        let result_right = super::merge_sort_dedup(&[], &a);
+        assert_eq!(result_left, a, "INV-FERR-001: a + empty = a");
+        assert_eq!(result_right, a, "INV-FERR-001: empty + a = a");
+    }
+
+    #[test]
+    fn test_inv_ferr_001_merge_sort_dedup_full_overlap() {
+        let a = sorted_deduped(vec![make_datom(1, 0), make_datom(2, 0)]);
+        let result = super::merge_sort_dedup(&a, &a);
+        assert_eq!(result, a, "INV-FERR-003: a + a = a (idempotent)");
+    }
+
+    #[test]
+    fn test_inv_ferr_001_merge_sort_dedup_full_disjoint() {
+        let a = sorted_deduped(vec![make_datom(1, 0), make_datom(3, 0)]);
+        let b = sorted_deduped(vec![make_datom(2, 0), make_datom(4, 0)]);
+        let result = super::merge_sort_dedup(&a, &b);
+        let expected = sorted_deduped(vec![
+            make_datom(1, 0),
+            make_datom(2, 0),
+            make_datom(3, 0),
+            make_datom(4, 0),
+        ]);
+        assert_eq!(result, expected, "INV-FERR-001: disjoint merge = union");
+    }
+
+    #[test]
+    fn test_inv_ferr_001_merge_sort_dedup_single_element() {
+        let a = sorted_deduped(vec![make_datom(1, 0)]);
+        let b = sorted_deduped(vec![make_datom(2, 0)]);
+        let result = super::merge_sort_dedup(&a, &b);
+        assert_eq!(result.len(), 2);
+        // Commutativity.
+        let result_rev = super::merge_sort_dedup(&b, &a);
+        assert_eq!(result, result_rev, "INV-FERR-001: commutativity");
+    }
+
+    #[test]
+    fn test_inv_ferr_001_merge_sort_dedup_partial_overlap() {
+        let a = sorted_deduped(vec![make_datom(1, 0), make_datom(2, 0), make_datom(3, 0)]);
+        let b = sorted_deduped(vec![make_datom(2, 0), make_datom(3, 0), make_datom(4, 0)]);
+        let result = super::merge_sort_dedup(&a, &b);
+        let expected = sorted_deduped(vec![
+            make_datom(1, 0),
+            make_datom(2, 0),
+            make_datom(3, 0),
+            make_datom(4, 0),
+        ]);
+        assert_eq!(result, expected, "INV-FERR-001: partial overlap = union");
+    }
 }
