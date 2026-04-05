@@ -101,8 +101,11 @@ fn h3(eid: &EntityId) -> u64 {
 ///
 /// Computes in u64 to avoid truncation on 32-bit targets.
 /// Result < modulus <= `usize::MAX`, so `try_from` always succeeds.
-/// The `unwrap_or(0)` is a NEG-FERR-001 safety net (no panics in production);
-/// `debug_assert` catches the "impossible" path in test/debug builds.
+/// The `unwrap_or(0)` is dead code: the result is mathematically bounded
+/// by modulus (a usize), so the conversion cannot fail. The `debug_assert`
+/// verifies this in test builds. In the impossible event it fires in
+/// release, `entity_position`'s canonical verification rejects the lookup
+/// (wrong entity at position 0), so no silent corruption propagates.
 fn reduce_hash(hash_val: u64, modulus: usize) -> usize {
     let result = hash_val % (modulus as u64);
     debug_assert!(
@@ -160,11 +163,11 @@ impl MphBackend for ChdBackend {
             sorted_keys.windows(2).all(|w| w[0] < w[1]),
             "ChdBackend::build requires strictly sorted, unique EntityIds"
         );
-        debug_assert!(
-            sorted_keys.len() < u32::MAX as usize,
-            "ChdBackend::build: key count {} exceeds u32 position space",
-            sorted_keys.len()
-        );
+        // Production guard: key count must fit in u32 position space.
+        // Returns None (fallback to binary search) rather than panicking.
+        if sorted_keys.len() >= u32::MAX as usize {
+            return None;
+        }
         let n = sorted_keys.len();
         if n == 0 {
             return Some(Self {

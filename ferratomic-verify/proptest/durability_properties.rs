@@ -408,9 +408,9 @@ proptest! {
             "INV-FERR-075: LIVE-first round-trip epoch mismatch"
         );
         prop_assert_eq!(
-            loaded.schema().len(),
-            store.schema().len(),
-            "INV-FERR-013: LIVE-first round-trip schema length mismatch"
+            loaded.schema(),
+            store.schema(),
+            "INV-FERR-013: LIVE-first round-trip schema mismatch"
         );
     }
 
@@ -432,7 +432,7 @@ proptest! {
         let bytes = ferratomic_core::checkpoint::serialize_live_first_bytes(&store)
             .expect("INV-FERR-075: serialize must succeed");
 
-        let partial = ferratomic_core::checkpoint::v3::deserialize_v3_live_first_partial(&bytes)
+        let partial = ferratomic_core::checkpoint::deserialize_live_first_partial(&bytes)
             .expect("INV-FERR-075: partial deserialize must succeed");
 
         let full = partial.load_historical();
@@ -443,9 +443,9 @@ proptest! {
             "INV-FERR-075: partial -> load_historical datom set mismatch"
         );
         prop_assert_eq!(
-            full.schema().len(),
-            store.schema().len(),
-            "INV-FERR-013: partial -> load_historical schema length mismatch"
+            full.schema(),
+            store.schema(),
+            "INV-FERR-013: partial -> load_historical schema mismatch"
         );
     }
 }

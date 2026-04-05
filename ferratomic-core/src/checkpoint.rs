@@ -58,7 +58,7 @@ use serde::Serialize;
 
 use crate::store::Store;
 
-pub mod v3;
+pub(crate) mod v3;
 
 #[cfg(test)]
 mod tests;
@@ -150,6 +150,22 @@ pub(crate) fn serialize_checkpoint_bytes(store: &Store) -> Result<Vec<u8>, Ferra
 pub fn serialize_live_first_bytes(store: &Store) -> Result<Vec<u8>, FerraError> {
     v3::serialize_v3_live_first(store)
 }
+
+/// Deserialize a LIVE-first V3 checkpoint into a partial store (INV-FERR-075).
+///
+/// Returns a `PartialStore` with LIVE-only data. Call `live_store()` for
+/// current-state queries or `load_historical()` to merge retained
+/// historical datoms into the full store.
+///
+/// # Errors
+///
+/// Returns `FerraError::CheckpointCorrupted` on integrity or format errors.
+pub fn deserialize_live_first_partial(data: &[u8]) -> Result<v3::PartialStore, FerraError> {
+    v3::deserialize_v3_live_first_partial(data)
+}
+
+/// Re-export `PartialStore` for public API consumers (INV-FERR-075).
+pub use v3::PartialStore;
 
 /// Serialize a store to V2 checkpoint bytes (in-memory).
 ///

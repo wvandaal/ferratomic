@@ -398,8 +398,8 @@ fn test_inv_ferr_075_live_first_roundtrip() {
     );
     assert_eq!(loaded.epoch(), store.epoch());
     assert_eq!(
-        loaded.schema().len(),
-        store.schema().len(),
+        loaded.schema(),
+        store.schema(),
         "INV-FERR-013: schema must be preserved in LIVE-first round-trip"
     );
 }
@@ -442,6 +442,19 @@ fn test_inv_ferr_075_partial_store_live_only() {
     // Verify via partial path: load LIVE-only, then merge historical.
     let partial = v3::deserialize_v3_live_first_partial(&bytes).expect("partial load");
 
+    // Compute expected LIVE count independently from the full store.
+    let expected_live_count = {
+        let ps = crate::positional::PositionalStore::from_datoms(store.datoms().cloned());
+        ps.live_count()
+    };
+
+    // The partial store's LIVE-only store must have exactly the LIVE datom count.
+    assert_eq!(
+        partial.live_store().len(),
+        expected_live_count,
+        "INV-FERR-075: partial LIVE-only store must have exactly {expected_live_count} datoms"
+    );
+
     // The partial store should have fewer datoms than the full store
     // because the retracted entity-1 datoms are historical.
     let full = partial.load_historical();
@@ -451,10 +464,6 @@ fn test_inv_ferr_075_partial_store_live_only() {
         "INV-FERR-075: load_historical must recover full datom set"
     );
     // The full store has more datoms than LIVE (assert+retract = 2 non-LIVE datoms).
-    let expected_live_count = {
-        let ps = crate::positional::PositionalStore::from_datoms(store.datoms().cloned());
-        ps.live_count()
-    };
     assert!(
         expected_live_count < store.len(),
         "INV-FERR-075: LIVE count ({expected_live_count}) must be < full count ({})",

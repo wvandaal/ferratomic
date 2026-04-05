@@ -693,12 +693,14 @@ pub(crate) fn merge_sort_dedup(a: &[Datom], b: &[Datom]) -> Vec<Datom> {
 // Internal: interpolation search on EAVT canonical array (INV-FERR-027)
 // ---------------------------------------------------------------------------
 
-/// Interpolation search on EAVT-sorted canonical array (INV-FERR-027).
+/// Interpolation search on EAVT-sorted canonical array (contributes to INV-FERR-027).
 ///
-/// O(log log n) expected for uniformly distributed `EntityId` (BLAKE3).
+/// O(log log n) expected for inter-entity lookup (BLAKE3 uniformity).
+/// Within a same-entity block (multiple datoms per entity), degrades to
+/// O(log k) binary search where k = datoms sharing the entity prefix.
 /// Uses the first 8 bytes of `EntityId` as a u64 interpolation key.
 /// Falls back to midpoint when all entities in the current range share
-/// the same 8-byte prefix (division-by-zero guard).
+/// the same 8-byte prefix (same-entity block or division-by-zero guard).
 fn interpolation_search<'a>(canonical: &'a [Datom], key: &EavtKey) -> Option<&'a Datom> {
     if canonical.is_empty() {
         return None;
@@ -901,5 +903,61 @@ mod tests {
             live_positions_from_sorted_run_keys_for_test(&proof_entries),
             "INV-FERR-029: canonical datom grouping must preserve the proof-kernel result"
         );
+    }
+
+    /// INV-FERR-027: binary search fallback path produces correct results.
+    ///
+    /// Tests `first_datom_position_for_entity` which is the fallback when
+    /// MPH build fails. Verifies it returns the same positions as
+    /// `entity_lookup` (which uses the MPH path).
+    #[test]
+    fn test_inv_ferr_027_binary_search_fallback() {
+        use std::sync::Arc;
+
+        use super::PositionalStore;
+
+        let attr = Attribute::from("db/doc");
+        let datoms = vec![
+            Datom::new(
+                EntityId::from_content(b"a"),
+                attr.clone(),
+                Value::String(Arc::from("v1")),
+                TxId::new(0, 0, 0),
+                Op::Assert,
+            ),
+            Datom::new(
+                EntityId::from_content(b"b"),
+                attr.clone(),
+                Value::String(Arc::from("v2")),
+                TxId::new(0, 0, 0),
+                Op::Assert,
+            ),
+            Datom::new(
+                EntityId::from_content(b"c"),
+                attr,
+                Value::String(Arc::from("v3")),
+                TxId::new(0, 0, 0),
+                Op::Assert,
+            ),
+        ];
+        let ps = PositionalStore::from_datoms(datoms.into_iter());
+
+        // Test the binary search fallback directly.
+        let eid_a = EntityId::from_content(b"a");
+        let eid_b = EntityId::from_content(b"b");
+        let eid_absent = EntityId::from_content(b"absent");
+
+        let pos_a = ps.first_datom_position_for_entity(&eid_a);
+        let pos_b = ps.first_datom_position_for_entity(&eid_b);
+        let pos_absent = ps.first_datom_position_for_entity(&eid_absent);
+
+        assert!(pos_a.is_some(), "entity a must be found by binary search");
+        assert!(pos_b.is_some(), "entity b must be found by binary search");
+        assert_eq!(pos_absent, None, "absent entity must return None");
+
+        // Binary search must agree with MPH path.
+        assert_eq!(pos_a, ps.entity_lookup(&eid_a));
+        assert_eq!(pos_b, ps.entity_lookup(&eid_b));
+        assert_eq!(pos_absent, ps.entity_lookup(&eid_absent));
     }
 }

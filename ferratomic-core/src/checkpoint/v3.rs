@@ -339,6 +339,13 @@ pub(crate) fn serialize_v3_live_first(store: &Store) -> Result<Vec<u8>, FerraErr
 
     // Partition datoms by LIVE status. Both partitions are EAVT-sorted
     // (subsequences of the canonical order).
+    //
+    // Refinement note: the spec (INV-FERR-075 Level 0) defines LIVE_datoms(S)
+    // as ALL datoms whose (e,a,v) triple is in the LIVE set. This implementation
+    // uses the narrower witness-only partition: only the single latest-Assert
+    // datom per (e,a,v) group is placed in live_datoms. This is correct because
+    // the LIVE functional property eval(Q, S) = eval(Q, LIVE_datoms(S)) holds
+    // for the witness-only subset — the witness alone determines the LIVE view.
     let mut live_datoms = Vec::new();
     let mut hist_datoms = Vec::new();
     for (i, datom) in datoms.into_iter().enumerate() {
@@ -410,8 +417,9 @@ impl PartialStore {
 
     /// Merge LIVE + HISTORICAL datoms into complete Store (INV-FERR-075).
     ///
-    /// O(n) merge-sort + O(n) LIVE rebuild. Uses `from_checkpoint_v3` to
-    /// avoid redundant O(n log n) re-sort on already-sorted merge output.
+    /// Four O(n) passes: merge-sort, LIVE bitvector, `live_causal` rebuild,
+    /// `live_set` derivation. Uses `from_checkpoint_v3` to avoid redundant
+    /// O(n log n) re-sort on already-sorted merge output.
     #[must_use]
     pub fn load_historical(self) -> Store {
         let live_datoms: Vec<Datom> = self.store.datoms().cloned().collect();
@@ -442,7 +450,7 @@ impl PartialStore {
 ///
 /// Returns `FerraError::CheckpointCorrupted` on checksum mismatch, version
 /// mismatch, or deserialization failure.
-pub fn deserialize_v3_live_first_partial(data: &[u8]) -> Result<PartialStore, FerraError> {
+pub(crate) fn deserialize_v3_live_first_partial(data: &[u8]) -> Result<PartialStore, FerraError> {
     let content = verify_v3_checksum(data)?;
     let (epoch, genesis_agent, version) = parse_v3_header_versioned(content)?;
     if version != V3_LIVE_FIRST_VERSION {
@@ -466,6 +474,13 @@ pub fn deserialize_v3_live_first_partial(data: &[u8]) -> Result<PartialStore, Fe
         .into_iter()
         .map(ferratom::wire::WireDatom::into_trusted)
         .collect();
+
+    // Sort-order integrity: both live_datoms and hist_datoms are subsequences of
+    // the serialized canonical EAVT order. BLAKE3 verification (above) guarantees
+    // payload integrity with 2^-128 collision probability (ADR-FERR-010).
+    // merge_sort_dedup's debug_assert validates sort order in test/debug builds.
+    // An O(n) production sort-order check is omitted: BLAKE3 is the sole defense,
+    // consistent with the standard V3 deserialization path.
 
     // Build LIVE-only Store via zero-construction path. LIVE datoms are already
     // EAVT-sorted (subsequence of canonical). All bits are true (every datom in
