@@ -58,7 +58,7 @@ use serde::Serialize;
 
 use crate::store::Store;
 
-pub(crate) mod v3;
+pub mod v3;
 
 #[cfg(test)]
 mod tests;
@@ -137,6 +137,20 @@ pub(crate) fn serialize_checkpoint_bytes(store: &Store) -> Result<Vec<u8>, Ferra
     v3::serialize_v3_bytes(store)
 }
 
+/// Serialize a store to LIVE-first V3 checkpoint bytes (INV-FERR-075).
+///
+/// LIVE datoms are stored first, historical datoms second. Version field
+/// 0x0103 distinguishes from standard V3. Use `deserialize_checkpoint_bytes`
+/// (which handles version dispatch) or `deserialize_live_first_partial` for
+/// LIVE-only cold start.
+///
+/// # Errors
+///
+/// Returns `FerraError::CheckpointWrite` if serialization fails.
+pub fn serialize_live_first_bytes(store: &Store) -> Result<Vec<u8>, FerraError> {
+    v3::serialize_v3_live_first(store)
+}
+
 /// Serialize a store to V2 checkpoint bytes (in-memory).
 ///
 /// INV-FERR-013: Legacy V2 format. Used in tests for V2/V3 equivalence
@@ -185,7 +199,7 @@ fn serialize_v2_bytes(store: &Store) -> Result<Vec<u8>, FerraError> {
 ///
 /// Returns `FerraError::CheckpointCorrupted` on unknown magic, checksum
 /// mismatch, format errors, or deserialization failure.
-pub(crate) fn deserialize_checkpoint_bytes(data: &[u8]) -> Result<Store, FerraError> {
+pub fn deserialize_checkpoint_bytes(data: &[u8]) -> Result<Store, FerraError> {
     if data.len() < 4 {
         return Err(FerraError::CheckpointCorrupted {
             expected: "at least 4 bytes for magic".to_string(),
@@ -202,7 +216,25 @@ pub(crate) fn deserialize_checkpoint_bytes(data: &[u8]) -> Result<Store, FerraEr
 
     match magic {
         CHECKPOINT_MAGIC => deserialize_v2_bytes(data),
-        V3_MAGIC => v3::deserialize_v3_bytes(data),
+        V3_MAGIC => {
+            // V3 family: dispatch by version field.
+            // 0x0003 = standard V3, 0x0103 = LIVE-first V3 (INV-FERR-075).
+            if data.len() < 6 {
+                return Err(FerraError::CheckpointCorrupted {
+                    expected: "at least 6 bytes for version".to_string(),
+                    actual: format!("{} bytes", data.len()),
+                });
+            }
+            let version = u16::from_le_bytes([data[4], data[5]]);
+            match version {
+                3 => v3::deserialize_v3_bytes(data),
+                v3::V3_LIVE_FIRST_VERSION => v3::deserialize_v3_live_first_full(data),
+                _ => Err(FerraError::CheckpointCorrupted {
+                    expected: "V3 version 0x0003 or 0x0103".to_string(),
+                    actual: format!("version {version:#06x}"),
+                }),
+            }
+        }
         _ => Err(FerraError::CheckpointCorrupted {
             expected: "CHKP or CHK3".to_string(),
             actual: String::from_utf8_lossy(&magic).to_string(),
@@ -305,6 +337,45 @@ pub fn write_checkpoint(store: &Store, path: &Path) -> Result<(), FerraError> {
 
     // HI-003: fsync parent directory to ensure the new directory entry
     // is durable. Required on ext4/XFS for metadata durability.
+    fsync_parent_dir(parent)?;
+
+    Ok(())
+}
+
+/// Write a LIVE-first V3 checkpoint to a file (INV-FERR-075).
+///
+/// Same atomic write pattern as `write_checkpoint` (HI-001, HI-003).
+/// LIVE datoms are stored first for partial cold start.
+///
+/// # Errors
+///
+/// Returns `FerraError::CheckpointWrite` if serialization, write, or
+/// fsync fails.
+pub fn write_checkpoint_live_first(store: &Store, path: &Path) -> Result<(), FerraError> {
+    let buf = serialize_live_first_bytes(store)?;
+
+    let parent = path
+        .parent()
+        .ok_or_else(|| FerraError::CheckpointWrite("path has no parent directory".to_string()))?;
+    let tmp_path = parent.join(".checkpoint_lf.tmp");
+
+    {
+        let file =
+            File::create(&tmp_path).map_err(|e| FerraError::CheckpointWrite(e.to_string()))?;
+        let mut writer = BufWriter::new(file);
+        writer
+            .write_all(&buf)
+            .map_err(|e| FerraError::CheckpointWrite(e.to_string()))?;
+        writer
+            .flush()
+            .map_err(|e| FerraError::CheckpointWrite(e.to_string()))?;
+        writer
+            .get_ref()
+            .sync_all()
+            .map_err(|e| FerraError::CheckpointWrite(e.to_string()))?;
+    }
+
+    std::fs::rename(&tmp_path, path).map_err(|e| FerraError::CheckpointWrite(e.to_string()))?;
     fsync_parent_dir(parent)?;
 
     Ok(())

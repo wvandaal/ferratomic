@@ -29,6 +29,43 @@ fn arb_transactions(count: usize) -> impl Strategy<Value = Vec<Vec<(EntityId, At
     prop::collection::vec(prop::collection::vec(arb_genesis_datom(), 1..=5), 1..=count)
 }
 
+/// Build a store with assert transactions then retract a fraction of them.
+///
+/// Returns a store with a mix of LIVE and historical datoms suitable for
+/// testing LIVE-first checkpoint partitioning (INV-FERR-075).
+fn build_store_with_retractions(
+    assert_batches: &[Vec<(EntityId, Attribute, Value)>],
+    retract_fraction: f64,
+) -> Store {
+    let agent = AgentId::from_bytes([75u8; 16]);
+    let mut store = Store::genesis();
+
+    // Phase 1: assert datoms.
+    let mut asserted: Vec<(EntityId, Attribute, Value)> = Vec::new();
+    for batch in assert_batches {
+        let mut tx = Transaction::new(agent);
+        for (entity, attr, val) in batch {
+            tx = tx.assert_datom(*entity, attr.clone(), val.clone());
+            asserted.push((*entity, attr.clone(), val.clone()));
+        }
+        let committed = tx.commit_unchecked();
+        let _ = store.transact_test(committed);
+    }
+
+    // Phase 2: retract some datoms (deterministic selection based on fraction).
+    let retract_count = (asserted.len() as f64 * retract_fraction) as usize;
+    if retract_count > 0 {
+        let mut tx = Transaction::new(agent);
+        for (entity, attr, val) in asserted.iter().take(retract_count) {
+            tx = tx.retract_datom(*entity, attr.clone(), val.clone());
+        }
+        let committed = tx.commit_unchecked();
+        let _ = store.transact_test(committed);
+    }
+
+    store
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(10_000))]
 
@@ -331,6 +368,84 @@ proptest! {
             loaded.schema().len(), store.schema().len(),
             "INV-FERR-028 violated: schema length differs. original={}, loaded={}",
             store.schema().len(), loaded.schema().len()
+        );
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(10_000))]
+
+    /// INV-FERR-075: LIVE-first checkpoint full round-trip.
+    ///
+    /// Serialize a store with mixed LIVE/historical datoms via
+    /// `serialize_live_first_bytes`, deserialize via the version dispatch
+    /// (`deserialize_checkpoint_bytes`), and verify exact datom set equality.
+    ///
+    /// Falsification: any datom present in the original store is absent
+    /// after the LIVE-first round-trip, or vice versa.
+    #[test]
+    fn inv_ferr_075_live_first_full_roundtrip(
+        assert_batches in arb_transactions(8),
+        retract_pct in 0u8..100u8,
+    ) {
+        let fraction = f64::from(retract_pct) / 100.0;
+        let store = build_store_with_retractions(&assert_batches, fraction);
+
+        let bytes = ferratomic_core::checkpoint::serialize_live_first_bytes(&store)
+            .expect("INV-FERR-075: serialize_live_first must succeed");
+
+        let loaded = ferratomic_core::checkpoint::deserialize_checkpoint_bytes(&bytes)
+            .expect("INV-FERR-075: deserialize via version dispatch must succeed");
+
+        prop_assert_eq!(
+            loaded.datom_set(),
+            store.datom_set(),
+            "INV-FERR-075: LIVE-first full round-trip datom set mismatch"
+        );
+        prop_assert_eq!(
+            loaded.epoch(),
+            store.epoch(),
+            "INV-FERR-075: LIVE-first round-trip epoch mismatch"
+        );
+        prop_assert_eq!(
+            loaded.schema().len(),
+            store.schema().len(),
+            "INV-FERR-013: LIVE-first round-trip schema length mismatch"
+        );
+    }
+
+    /// INV-FERR-075: LIVE-first partial load then historical merge.
+    ///
+    /// Load LIVE-only via `deserialize_v3_live_first_partial`, then
+    /// `load_historical()`. The result must equal the original store.
+    ///
+    /// Falsification: `load_historical` produces a different datom set
+    /// than the original store.
+    #[test]
+    fn inv_ferr_075_live_first_partial_then_historical(
+        assert_batches in arb_transactions(8),
+        retract_pct in 0u8..100u8,
+    ) {
+        let fraction = f64::from(retract_pct) / 100.0;
+        let store = build_store_with_retractions(&assert_batches, fraction);
+
+        let bytes = ferratomic_core::checkpoint::serialize_live_first_bytes(&store)
+            .expect("INV-FERR-075: serialize must succeed");
+
+        let partial = ferratomic_core::checkpoint::v3::deserialize_v3_live_first_partial(&bytes)
+            .expect("INV-FERR-075: partial deserialize must succeed");
+
+        let full = partial.load_historical();
+
+        prop_assert_eq!(
+            full.datom_set(),
+            store.datom_set(),
+            "INV-FERR-075: partial -> load_historical datom set mismatch"
+        );
+        prop_assert_eq!(
+            full.schema().len(),
+            store.schema().len(),
+            "INV-FERR-013: partial -> load_historical schema length mismatch"
         );
     }
 }

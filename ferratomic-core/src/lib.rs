@@ -180,6 +180,7 @@ pub mod db;
 pub mod indexes;
 pub mod merge;
 pub(crate) mod mmap;
+pub(crate) mod mph;
 pub mod observer;
 pub(crate) mod perm_layout;
 pub mod positional;

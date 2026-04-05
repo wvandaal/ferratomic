@@ -1049,7 +1049,7 @@ not the federation merge path.
 ///
 /// Section 1: LIVE datoms (current state — loaded at cold start)
 /// Section 2: Historical datoms (past state — loaded on demand)
-/// Section 3: Metadata (epoch, schema, fingerprint)
+/// Section 3: Metadata (epoch, schema, fingerprint — fingerprint deferred to INV-FERR-074)
 ///
 /// The boundary between sections 1 and 2 is stored in the metadata
 /// so that cold start can stop reading after section 1.
@@ -2018,7 +2018,7 @@ density and the information-theoretic minimum?
 |--------|-------------|------|------|
 | A: FM-Index | Succinct self-index over BWT-transformed datom bytes | Single structure replaces store + all indexes; O(m) pattern search | Zero compression on BLAKE3 EntityIds (NEG-FERR-007); 4-65× slower lookups |
 | B: Columnar + dictionary encoding | Per-field columnar storage with dictionary codes | Standard technique; good compression on low-cardinality fields | 5 random accesses per datom reconstruction; poor point-lookup performance |
-| C: Wavelet matrix | Per-column wavelet matrix over integer-encoded symbols | Unified storage + indexing; per-column compression approaching H₀; rank/select provides index queries in O(log σ); subsumes columnar benefits without point-lookup penalty | Requires integer symbol encoding (value pool, MMPH); complex implementation; Phase 4b prerequisites |
+| C: Wavelet matrix | Per-column wavelet matrix over integer-encoded symbols | Unified storage + indexing; per-column compression approaching H₀; rank/select provides index queries in O(log σ); subsumes columnar benefits without point-lookup penalty | Requires integer symbol encoding (value pool, O(1) rank computation); complex implementation; Phase 4b prerequisites |
 
 **Decision**: **Option C: Wavelet matrix** as the Phase 4c+ convergence target.
 
@@ -2045,7 +2045,17 @@ that further compression would require domain-specific codebooks.
 
 **Prerequisites** (all Phase 4a/4b, designed to be accretive toward this target):
 - Value-pooled deduplicated storage (bd-kt98, Phase 4b) — integer value IDs
-- Monotone Minimal Perfect Hash for EntityId symbol mapping (bd-wa5p)
+- O(1) monotone rank computation for EntityId symbol mapping (bd-wa5p).
+  The wavelet matrix requires `rank: EntityId → [0..σ_e)` in O(1) where
+  `∀ k₁ < k₂: rank(k₁) < rank(k₂)` (order-preserving). Phase 4a provides
+  this via CHD perfect hash + sorted verification table (bd-wa5p) —
+  the hash function is non-monotone but `lookup_key_index` recovers the
+  correct sorted rank in O(1). Phase 4c+ optimization target: swap CHD for
+  PtrHash (Pibiri 2025, 2.0 bits/key, 8ns, `ptr_hash` crate) which
+  eliminates the 32n-byte verification table. A true order-preserving MMPH
+  (where `h(k)` = rank directly) is NOT required — any perfect hash with
+  sorted verification provides monotone rank. The `MphBackend` trait in
+  `ferratomic-core/src/mph.rs` abstracts the swap point.
 - Attribute dictionary (genesis schema + schema evolution — already exists)
 - Prolly tree (Phase 4b, INV-FERR-045..050) — chunk boundaries for per-chunk wavelet matrices
 

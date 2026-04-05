@@ -25,6 +25,27 @@
 //! +------------------+
 //! ```
 //!
+//! # LIVE-First File Format (INV-FERR-075)
+//!
+//! ```text
+//! +------------------+
+//! | Magic    (4B)    | 0x43484B33 ("CHK3") — same as standard V3
+//! +------------------+
+//! | Version  (2B)    | 0x0103 (little-endian, LIVE-first V3)
+//! +------------------+
+//! | Epoch    (8B)    | u64 little-endian
+//! +------------------+
+//! | Genesis  (16B)   | AgentId bytes
+//! +------------------+
+//! | Payload  (N)     | bincode: V3LiveFirstPayloadWrite/Read
+//! |  schema_pairs    |   sorted (String, AttributeDef) pairs
+//! |  live_datoms     |   EAVT-sorted LIVE datoms (loaded at cold start)
+//! |  hist_datoms     |   EAVT-sorted historical datoms (loaded on demand)
+//! +------------------+
+//! | BLAKE3   (32B)   | Hash of all preceding bytes
+//! +------------------+
+//! ```
+//!
 //! ADR-FERR-010: Deserialization uses `WireDatom` for trust boundary
 //! enforcement, then converts via `into_trusted()` after BLAKE3 verification.
 
@@ -42,8 +63,15 @@ use crate::{
 /// V3 magic bytes: ASCII "CHK3".
 const V3_MAGIC: [u8; 4] = *b"CHK3";
 
-/// V3 format version.
+/// V3 standard format version.
 const V3_VERSION: u16 = 3;
+
+/// V3 LIVE-first format version (INV-FERR-075).
+///
+/// Same magic (`CHK3`) as standard V3, distinguished by version field.
+/// Stores LIVE datoms first, historical datoms second, as separate payload
+/// fields. Enables partial cold start: load LIVE-only store, defer history.
+pub(crate) const V3_LIVE_FIRST_VERSION: u16 = 0x0103;
 
 /// Fixed header size: magic(4) + version(2) + epoch(8) + genesis(16) = 30 bytes.
 const V3_HEADER_SIZE: usize = 4 + 2 + 8 + 16;
@@ -195,6 +223,33 @@ fn corrupted(expected: &str, actual: &str) -> FerraError {
     }
 }
 
+/// Parse V3 header allowing either standard or LIVE-first version.
+///
+/// Returns `(epoch, genesis_agent, version)`. Does NOT validate the version
+/// field — the caller is responsible for version dispatch.
+fn parse_v3_header_versioned(content: &[u8]) -> Result<(u64, AgentId, u16), FerraError> {
+    let magic: [u8; 4] = content[0..4]
+        .try_into()
+        .map_err(|_| corrupted("CHK3 magic", "truncated"))?;
+    if magic != V3_MAGIC {
+        return Err(corrupted("CHK3", &String::from_utf8_lossy(&magic)));
+    }
+    let version = u16::from_le_bytes(
+        content[4..6]
+            .try_into()
+            .map_err(|_| corrupted("2-byte version", "truncated"))?,
+    );
+    let epoch = u64::from_le_bytes(
+        content[6..14]
+            .try_into()
+            .map_err(|_| corrupted("8-byte epoch", "truncated"))?,
+    );
+    let genesis_bytes: [u8; 16] = content[14..30]
+        .try_into()
+        .map_err(|_| corrupted("16-byte genesis agent", "truncated"))?;
+    Ok((epoch, AgentId::from_bytes(genesis_bytes), version))
+}
+
 pub(crate) fn deserialize_v3_bytes(data: &[u8]) -> Result<Store, FerraError> {
     let content = verify_v3_checksum(data)?;
     let (epoch, genesis_agent) = parse_v3_header(content)?;
@@ -228,4 +283,210 @@ pub(crate) fn deserialize_v3_bytes(data: &[u8]) -> Result<Store, FerraError> {
         datoms,
         wire_payload.live_bits,
     ))
+}
+
+// ---------------------------------------------------------------------------
+// LIVE-first V3 variant (INV-FERR-075)
+// ---------------------------------------------------------------------------
+
+/// Serialization payload for LIVE-first V3 checkpoint (INV-FERR-075).
+///
+/// LIVE datoms are a separate field from historical datoms. Both partitions
+/// preserve EAVT sort order (subsequences of the canonical array).
+/// ADR-FERR-010: uses core `Datom` (`Serialize` only).
+#[derive(Serialize)]
+struct V3LiveFirstPayloadWrite {
+    /// Schema attributes sorted by name for deterministic output.
+    schema_pairs: Vec<(String, AttributeDef)>,
+    /// LIVE datoms in canonical EAVT order (INV-FERR-029).
+    live_datoms: Vec<Datom>,
+    /// Historical (non-LIVE) datoms in canonical EAVT order (INV-FERR-075).
+    hist_datoms: Vec<Datom>,
+}
+
+/// Deserialization payload for LIVE-first V3 checkpoint (INV-FERR-075).
+///
+/// ADR-FERR-010: uses `WireDatom` for trust boundary enforcement.
+#[derive(Deserialize)]
+struct V3LiveFirstPayloadRead {
+    /// Schema attributes (INV-FERR-075).
+    schema_pairs: Vec<(String, AttributeDef)>,
+    /// LIVE datoms in wire format (INV-FERR-075, INV-FERR-029).
+    live_datoms: Vec<ferratom::wire::WireDatom>,
+    /// Historical datoms in wire format (INV-FERR-075).
+    hist_datoms: Vec<ferratom::wire::WireDatom>,
+}
+
+/// Serialize a store to LIVE-first V3 checkpoint bytes (INV-FERR-075).
+///
+/// INV-FERR-075: LIVE datoms are the first field in the payload. Both
+/// partitions preserve EAVT sort order. The version field (0x0103)
+/// distinguishes from standard V3 (0x0003).
+///
+/// # Errors
+///
+/// Returns `FerraError::CheckpointWrite` if serialization fails.
+pub(crate) fn serialize_v3_live_first(store: &Store) -> Result<Vec<u8>, FerraError> {
+    let epoch = store.epoch();
+    let genesis_agent = store.genesis_agent();
+
+    // Build PositionalStore to get canonical order + live_bits.
+    let datoms: Vec<Datom> = store.datoms().cloned().collect();
+    let live_bits = match &store.repr {
+        StoreRepr::Positional(ps) => ps.live_bits_clone(),
+        StoreRepr::OrdMap { .. } => build_live_bitvector_pub(&datoms),
+    };
+
+    // Partition datoms by LIVE status. Both partitions are EAVT-sorted
+    // (subsequences of the canonical order).
+    let mut live_datoms = Vec::new();
+    let mut hist_datoms = Vec::new();
+    for (i, datom) in datoms.into_iter().enumerate() {
+        if live_bits.get(i).as_deref() == Some(&true) {
+            live_datoms.push(datom);
+        } else {
+            hist_datoms.push(datom);
+        }
+    }
+
+    // Sort schema pairs by attribute name for deterministic output.
+    let schema_pairs: Vec<(String, AttributeDef)> = {
+        let mut sorted: BTreeMap<String, AttributeDef> = BTreeMap::new();
+        for (attr, def) in store.schema().iter() {
+            sorted.insert(attr.as_str().to_owned(), def.clone());
+        }
+        sorted.into_iter().collect()
+    };
+
+    let payload = V3LiveFirstPayloadWrite {
+        schema_pairs,
+        live_datoms,
+        hist_datoms,
+    };
+
+    let payload_bytes =
+        bincode::serialize(&payload).map_err(|e| FerraError::CheckpointWrite(e.to_string()))?;
+
+    let total_size = V3_HEADER_SIZE + payload_bytes.len() + HASH_SIZE;
+    let mut buf = Vec::with_capacity(total_size);
+
+    // Header: same structure as standard V3, different version.
+    buf.extend_from_slice(&V3_MAGIC);
+    buf.extend_from_slice(&V3_LIVE_FIRST_VERSION.to_le_bytes());
+    buf.extend_from_slice(&epoch.to_le_bytes());
+    buf.extend_from_slice(genesis_agent.as_bytes());
+
+    buf.extend_from_slice(&payload_bytes);
+
+    let hash = blake3::hash(&buf);
+    buf.extend_from_slice(hash.as_bytes());
+
+    Ok(buf)
+}
+
+/// LIVE-only store with retained historical datoms for lazy merge (INV-FERR-075).
+///
+/// Created by `deserialize_v3_live_first_partial()`. The `store` field
+/// contains only LIVE datoms. Call `load_historical()` to merge with
+/// retained historical datoms and produce the full store.
+pub struct PartialStore {
+    /// Store built from LIVE datoms only (INV-FERR-029).
+    store: Store,
+    /// Historical datoms (already trusted — BLAKE3 verified at load).
+    hist_datoms: Vec<Datom>,
+}
+
+impl PartialStore {
+    /// Access the LIVE-only store for current-state queries (INV-FERR-075, INV-FERR-029).
+    ///
+    /// The returned store contains only LIVE datoms — the latest Assert for each
+    /// `(entity, attribute, value)` group. Sufficient for applications that need
+    /// only the current state. Call `load_historical()` to merge retained
+    /// historical datoms when temporal queries are needed.
+    #[must_use]
+    pub fn live_store(&self) -> &Store {
+        &self.store
+    }
+
+    /// Merge LIVE + HISTORICAL datoms into complete Store (INV-FERR-075).
+    ///
+    /// O(n) merge-sort + O(n) LIVE rebuild. Uses `from_checkpoint_v3` to
+    /// avoid redundant O(n log n) re-sort on already-sorted merge output.
+    #[must_use]
+    pub fn load_historical(self) -> Store {
+        let live_datoms: Vec<Datom> = self.store.datoms().cloned().collect();
+        let merged = crate::positional::merge_sort_dedup(&live_datoms, &self.hist_datoms);
+        let live_bits = build_live_bitvector_pub(&merged);
+        let schema_pairs: Vec<(String, AttributeDef)> = self
+            .store
+            .schema()
+            .iter()
+            .map(|(a, d)| (a.as_str().to_owned(), d.clone()))
+            .collect();
+        Store::from_checkpoint_v3(
+            self.store.epoch(),
+            self.store.genesis_agent(),
+            schema_pairs,
+            merged,
+            live_bits,
+        )
+    }
+}
+
+/// Deserialize a LIVE-first V3 checkpoint into a `PartialStore` (INV-FERR-075).
+///
+/// Loads LIVE datoms and builds a LIVE-only Store. Historical datoms are
+/// retained for lazy `load_historical()`. BLAKE3 verified before deserialization.
+///
+/// # Errors
+///
+/// Returns `FerraError::CheckpointCorrupted` on checksum mismatch, version
+/// mismatch, or deserialization failure.
+pub fn deserialize_v3_live_first_partial(data: &[u8]) -> Result<PartialStore, FerraError> {
+    let content = verify_v3_checksum(data)?;
+    let (epoch, genesis_agent, version) = parse_v3_header_versioned(content)?;
+    if version != V3_LIVE_FIRST_VERSION {
+        return Err(corrupted(
+            &format!("version {V3_LIVE_FIRST_VERSION:#06x} (LIVE-first)"),
+            &format!("version {version:#06x}"),
+        ));
+    }
+
+    let wire_payload: V3LiveFirstPayloadRead = bincode::deserialize(&content[V3_HEADER_SIZE..])
+        .map_err(|e| corrupted("valid V3 LIVE-first bincode payload", &e.to_string()))?;
+
+    // Trust boundary: WireDatom → Datom (BLAKE3 verified above).
+    let live_datoms: Vec<Datom> = wire_payload
+        .live_datoms
+        .into_iter()
+        .map(ferratom::wire::WireDatom::into_trusted)
+        .collect();
+    let hist_datoms: Vec<Datom> = wire_payload
+        .hist_datoms
+        .into_iter()
+        .map(ferratom::wire::WireDatom::into_trusted)
+        .collect();
+
+    // Build LIVE-only Store via zero-construction path. LIVE datoms are already
+    // EAVT-sorted (subsequence of canonical). All bits are true (every datom in
+    // the LIVE partition is live by definition).
+    let live_bits = bitvec::prelude::BitVec::repeat(true, live_datoms.len());
+    let store = Store::from_checkpoint_v3(
+        epoch,
+        genesis_agent,
+        wire_payload.schema_pairs,
+        live_datoms,
+        live_bits,
+    );
+
+    Ok(PartialStore { store, hist_datoms })
+}
+
+/// Deserialize a LIVE-first V3 checkpoint into a full Store (INV-FERR-075).
+///
+/// Convenience wrapper: loads partial, then immediately merges historical
+/// datoms. Use `deserialize_v3_live_first_partial` if you want LIVE-only access.
+pub(crate) fn deserialize_v3_live_first_full(data: &[u8]) -> Result<Store, FerraError> {
+    let partial = deserialize_v3_live_first_partial(data)?;
+    Ok(partial.load_historical())
 }

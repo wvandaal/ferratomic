@@ -6,7 +6,7 @@
 
 use std::collections::BTreeSet;
 
-use ferratom::Datom;
+use ferratom::{Datom, EntityId};
 use ferratomic_core::{
     indexes::{AevtKey, AvetKey, EavtKey, VaetKey},
     merge::merge,
@@ -238,6 +238,155 @@ proptest! {
             prop_assert_eq!(
                 avet, Some(d),
                 "INV-FERR-076: avet_get failed for datom {:?}", d.entity()
+            );
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // MPH entity lookup properties (contributes to INV-FERR-027)
+    // -----------------------------------------------------------------------
+
+    /// INV-FERR-027 / INV-FERR-076: entity_lookup finds every entity.
+    ///
+    /// For every unique entity in the store, `entity_lookup` must return
+    /// `Some(position)` where the datom at that position has the queried entity.
+    ///
+    /// Falsification: an entity present in the canonical array is not found
+    /// by `entity_lookup` (false negative).
+    #[test]
+    fn inv_ferr_027_entity_lookup_completeness(
+        datoms in prop::collection::btree_set(arb_datom(), 1..200),
+    ) {
+        let ps = PositionalStore::from_datoms(datoms.into_iter());
+        let unique = ps.unique_entity_ids();
+
+        for eid in &unique {
+            let pos = ps.entity_lookup(eid);
+            prop_assert!(
+                pos.is_some(),
+                "INV-FERR-027: entity_lookup returned None for entity present in store"
+            );
+            let p = pos.expect("just asserted Some") as usize;
+            prop_assert_eq!(
+                ps.datom_at(p as u32).map(|d| d.entity()),
+                Some(*eid),
+                "INV-FERR-027: entity_lookup returned wrong position for entity"
+            );
+        }
+    }
+
+    /// INV-FERR-027 / INV-FERR-076: entity_lookup returns first position.
+    ///
+    /// The returned position must be the FIRST canonical position for the
+    /// entity (smallest index where `canonical[i].entity() == eid`).
+    ///
+    /// Falsification: `entity_lookup` returns a position that is not the
+    /// first occurrence of the entity in canonical order.
+    #[test]
+    fn inv_ferr_027_entity_lookup_first_position(
+        datoms in prop::collection::btree_set(arb_datom(), 1..200),
+    ) {
+        let ps = PositionalStore::from_datoms(datoms.into_iter());
+
+        for eid in &ps.unique_entity_ids() {
+            if let Some(pos) = ps.entity_lookup(eid) {
+                let p = pos as usize;
+                // Must be in range.
+                prop_assert!(p < ps.len());
+                // Must have the correct entity.
+                prop_assert_eq!(ps.datom_at(pos).map(|d| d.entity()), Some(*eid));
+                // Must be the FIRST: no earlier position has this entity.
+                if p > 0 {
+                    prop_assert_ne!(
+                        ps.datom_at(pos - 1).map(|d| d.entity()),
+                        Some(*eid),
+                        "INV-FERR-027: entity_lookup did not return the first position"
+                    );
+                }
+            }
+        }
+    }
+
+    /// INV-FERR-027: entity_lookup rejects absent entities.
+    ///
+    /// An `EntityId` not present in the canonical array must return `None`.
+    ///
+    /// Falsification: `entity_lookup` returns `Some` for a non-existent entity.
+    #[test]
+    fn inv_ferr_027_entity_lookup_absent_rejected(
+        datoms in prop::collection::btree_set(arb_datom(), 0..100),
+        absent_bytes in any::<[u8; 32]>(),
+    ) {
+        let ps = PositionalStore::from_datoms(datoms.into_iter());
+        let absent = EntityId::from_bytes(absent_bytes);
+
+        // Only test if this entity is actually absent.
+        let is_present = ps.datoms().iter().any(|d| d.entity() == absent);
+        if !is_present {
+            prop_assert_eq!(
+                ps.entity_lookup(&absent),
+                None,
+                "INV-FERR-027: entity_lookup returned Some for absent entity"
+            );
+        }
+    }
+
+    /// INV-FERR-076: unique_entity_ids is sorted and unique.
+    ///
+    /// The result must be strictly sorted (no duplicates) and contain exactly
+    /// the distinct entities from the canonical array.
+    ///
+    /// Falsification: unsorted, contains duplicates, or missing/extra entities.
+    #[test]
+    fn inv_ferr_076_unique_entity_ids_correct(
+        datoms in prop::collection::btree_set(arb_datom(), 0..200),
+    ) {
+        let ps = PositionalStore::from_datoms(datoms.into_iter());
+        let unique = ps.unique_entity_ids();
+
+        // Strictly sorted.
+        prop_assert!(
+            unique.windows(2).all(|w| w[0] < w[1]),
+            "INV-FERR-076: unique_entity_ids is not strictly sorted"
+        );
+
+        // Matches the distinct entity set from canonical.
+        let expected: BTreeSet<EntityId> = ps.datoms().iter().map(|d| d.entity()).collect();
+        let actual: BTreeSet<EntityId> = unique.iter().copied().collect();
+        prop_assert_eq!(
+            actual, expected,
+            "INV-FERR-076: unique_entity_ids doesn't match canonical entity set"
+        );
+    }
+
+    /// INV-FERR-027 / INV-FERR-076: entity_lookup correct after merge.
+    ///
+    /// After merging two stores, `entity_lookup` must find every entity
+    /// in the merged result. The MPH is rebuilt from scratch on the merged
+    /// canonical array — this test verifies the rebuild is correct.
+    ///
+    /// Falsification: an entity present in the merged store is not found
+    /// by `entity_lookup` on the merged result.
+    #[test]
+    fn inv_ferr_027_entity_lookup_after_merge(
+        a_datoms in prop::collection::btree_set(arb_datom(), 0..100),
+        b_datoms in prop::collection::btree_set(arb_datom(), 0..100),
+    ) {
+        let ps_a = PositionalStore::from_datoms(a_datoms.into_iter());
+        let ps_b = PositionalStore::from_datoms(b_datoms.into_iter());
+        let merged = merge_positional(&ps_a, &ps_b);
+
+        for eid in &merged.unique_entity_ids() {
+            let pos = merged.entity_lookup(eid);
+            prop_assert!(
+                pos.is_some(),
+                "INV-FERR-027: entity_lookup failed after merge for entity"
+            );
+            let p = pos.expect("asserted Some");
+            prop_assert_eq!(
+                merged.datom_at(p).map(ferratom::Datom::entity),
+                Some(*eid),
+                "INV-FERR-027: entity_lookup returned wrong position after merge"
             );
         }
     }

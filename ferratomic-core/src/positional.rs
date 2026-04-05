@@ -13,9 +13,12 @@
 use std::sync::OnceLock;
 
 use bitvec::prelude::{BitVec, Lsb0};
-use ferratom::{Datom, Op};
+use ferratom::{Datom, EntityId, Op};
 
-use crate::indexes::{AevtKey, AvetKey, EavtKey, VaetKey};
+use crate::{
+    indexes::{AevtKey, AvetKey, EavtKey, VaetKey},
+    mph::Mph,
+};
 
 // ---------------------------------------------------------------------------
 // PositionalStore (INV-FERR-076)
@@ -59,6 +62,10 @@ pub struct PositionalStore {
     perm_avet: OnceLock<Vec<u32>>,
     /// Homomorphic fingerprint placeholder (INV-FERR-074, Stage 1).
     fingerprint: [u8; 32],
+    /// CHD perfect hash for O(1) entity existence checks (INV-FERR-076, contributes to INV-FERR-027).
+    /// Lazily built on first `entity_lookup()` call via `OnceLock`.
+    /// `None` if build fails (fallback to binary search).
+    mph: OnceLock<Option<Mph>>,
 }
 
 impl Clone for PositionalStore {
@@ -82,6 +89,11 @@ impl Clone for PositionalStore {
                 lock
             }),
             fingerprint: self.fingerprint,
+            mph: self.mph.get().map_or_else(OnceLock::new, |v| {
+                let lock = OnceLock::new();
+                let _ = lock.set(v.clone());
+                lock
+            }),
         }
     }
 }
@@ -95,6 +107,7 @@ impl std::fmt::Debug for PositionalStore {
             .field("perm_vaet_init", &self.perm_vaet.get().is_some())
             .field("perm_avet_init", &self.perm_avet.get().is_some())
             .field("fingerprint", &self.fingerprint)
+            .field("mph_init", &self.mph.get().is_some())
             .finish()
     }
 }
@@ -125,6 +138,7 @@ impl PositionalStore {
             perm_vaet: OnceLock::new(),
             perm_avet: OnceLock::new(),
             fingerprint: [0u8; 32],
+            mph: OnceLock::new(),
         }
     }
 
@@ -154,6 +168,7 @@ impl PositionalStore {
             perm_vaet: OnceLock::new(),
             perm_avet: OnceLock::new(),
             fingerprint: [0u8; 32],
+            mph: OnceLock::new(),
         }
     }
 
@@ -384,6 +399,74 @@ impl PositionalStore {
             perm_vaet: OnceLock::new(),
             perm_avet: OnceLock::new(),
             fingerprint: [0u8; 32],
+            mph: OnceLock::new(),
+        }
+    }
+
+    /// Sorted unique `EntityId`s from the canonical array (INV-FERR-076).
+    ///
+    /// Since canonical is EAVT-sorted, entities are grouped. A single O(n)
+    /// pass extracts distinct entity IDs in sorted order. Shared by
+    /// MPH (bd-wa5p) and cuckoo filter (bd-218b).
+    #[must_use]
+    pub fn unique_entity_ids(&self) -> Vec<EntityId> {
+        self.unique_entities_with_positions().0
+    }
+
+    /// Sorted unique `EntityId`s AND their first canonical positions (INV-FERR-076).
+    ///
+    /// Single O(n) pass. For each new entity encountered, records the entity
+    /// ID and the canonical index of its first datom. Used by MPH construction
+    /// to enable O(1) entity -> position lookup.
+    #[must_use]
+    fn unique_entities_with_positions(&self) -> (Vec<EntityId>, Vec<u32>) {
+        let mut keys = Vec::new();
+        let mut positions = Vec::new();
+        let mut prev: Option<EntityId> = None;
+        for (i, datom) in self.canonical.iter().enumerate() {
+            let eid = datom.entity();
+            if prev.as_ref() != Some(&eid) {
+                keys.push(eid);
+                positions.push(u32::try_from(i).unwrap_or(u32::MAX));
+                prev = Some(eid);
+            }
+        }
+        (keys, positions)
+    }
+
+    /// O(1) entity existence check + position lookup (INV-FERR-076, contributes to INV-FERR-027).
+    ///
+    /// Both positive and negative paths are O(1): MPH hash -> reverse lookup
+    /// -> key verification -> position from precomputed `entity_first_pos`.
+    ///
+    /// The MPH is lazily built on first call. If build fails (extremely
+    /// unlikely for BLAKE3 keys), falls back to binary search.
+    #[must_use]
+    pub fn entity_lookup(&self, eid: &EntityId) -> Option<u32> {
+        let mph_opt = self.mph.get_or_init(|| {
+            let (keys, positions) = self.unique_entities_with_positions();
+            Mph::build(&keys, positions)
+        });
+
+        if let Some(mph) = mph_opt {
+            return mph.entity_position(eid, &self.canonical);
+        }
+
+        // MPH build failed -> binary search fallback
+        self.first_datom_position_for_entity(eid)
+    }
+
+    /// Find the position of the first datom for a given entity (O(log n)).
+    ///
+    /// Since canonical is EAVT-sorted, all datoms for an entity are
+    /// contiguous. `partition_point` finds the first one.
+    #[must_use]
+    fn first_datom_position_for_entity(&self, eid: &EntityId) -> Option<u32> {
+        let pos = self.canonical.partition_point(|d| d.entity() < *eid);
+        if pos < self.canonical.len() && self.canonical[pos].entity() == *eid {
+            u32::try_from(pos).ok()
+        } else {
+            None
         }
     }
 }
@@ -452,6 +535,7 @@ pub fn merge_positional(a: &PositionalStore, b: &PositionalStore) -> PositionalS
         perm_vaet: OnceLock::new(),
         perm_avet: OnceLock::new(),
         fingerprint: [0u8; 32],
+        mph: OnceLock::new(),
     }
 }
 
