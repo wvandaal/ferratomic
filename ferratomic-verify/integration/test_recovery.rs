@@ -771,6 +771,15 @@ fn test_inv_ferr_014_power_cut_atomic_rename() {
             "INV-FERR-013: original checkpoint datoms must survive power-cut",
         );
 
+        // bd-w30y: Verify WAL delta replay: entities 3 and 4 (post-checkpoint
+        // transactions) must also be present. The WAL contains all 5 txns;
+        // recovery replays entries after the checkpoint epoch.
+        assert_pc_entities_present(
+            &result.database,
+            5,
+            "INV-FERR-014: WAL delta replay must recover post-checkpoint entities",
+        );
+
         // The temp file at checkpoint.chkp.tmp must NOT have been loaded.
         // Verify the original checkpoint was the one used by confirming
         // that the checkpoint file on disk is the same as the original

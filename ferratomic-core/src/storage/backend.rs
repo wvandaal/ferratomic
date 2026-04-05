@@ -75,7 +75,7 @@ impl<T: IoWrite + Seek> WriteSeek for T {}
 /// - **Existence consistency**: `checkpoint_exists()` returns `true`
 ///   only after at least one successful checkpoint write. `wal_exists()`
 ///   returns `true` only when WAL data is present.
-pub trait StorageBackend {
+pub trait StorageBackend: Send + Sync {
     /// Open a writer whose content, once completed, replaces any previous
     /// checkpoint data.
     ///
@@ -320,15 +320,20 @@ impl IoWrite for SharedBufferWriter {
             .target
             .lock()
             .map_err(|_| std::io::Error::other("mutex poisoned"))?;
-        guard.clone_from(&self.local);
+        // take() moves data to target, leaving local empty.
+        // Drop becomes a no-op if flush was already called.
+        *guard = std::mem::take(&mut self.local);
         Ok(())
     }
 }
 
 impl Drop for SharedBufferWriter {
     fn drop(&mut self) {
-        if let Ok(mut guard) = self.target.lock() {
-            *guard = std::mem::take(&mut self.local);
+        // Only write if flush was NOT called (local still has data).
+        if !self.local.is_empty() {
+            if let Ok(mut guard) = self.target.lock() {
+                *guard = std::mem::take(&mut self.local);
+            }
         }
     }
 }
@@ -347,12 +352,13 @@ impl IoWrite for SharedBufferSeekWriter {
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
-        let data = self.cursor.get_ref().clone();
         let mut guard = self
             .target
             .lock()
             .map_err(|_| std::io::Error::other("mutex poisoned"))?;
-        *guard = data;
+        // Move data to target. Cursor is left with empty vec after take.
+        // Drop becomes a no-op if flush was called.
+        *guard = std::mem::take(self.cursor.get_mut());
         Ok(())
     }
 }
@@ -365,8 +371,11 @@ impl Seek for SharedBufferSeekWriter {
 
 impl Drop for SharedBufferSeekWriter {
     fn drop(&mut self) {
-        if let Ok(mut guard) = self.target.lock() {
-            guard.clone_from(self.cursor.get_ref());
+        // Only write if flush was NOT called (cursor still has data).
+        if !self.cursor.get_ref().is_empty() {
+            if let Ok(mut guard) = self.target.lock() {
+                *guard = std::mem::take(self.cursor.get_mut());
+            }
         }
     }
 }

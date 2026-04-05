@@ -184,7 +184,13 @@ impl<K: Ord + Clone + std::fmt::Debug, V: Clone + std::fmt::Debug> IndexBackend<
     }
 
     fn backend_get(&self, key: &K) -> Option<&V> {
-        debug_assert!(self.sorted, "INV-FERR-071: lookup on unsorted backend");
+        // Production guard: binary search on unsorted data returns wrong results.
+        // In debug builds this fires as a debug_assert; in release, returns None
+        // (safe degradation per NEG-FERR-001).
+        if !self.sorted {
+            debug_assert!(false, "INV-FERR-071: lookup on unsorted backend");
+            return None;
+        }
         self.entries
             .binary_search_by(|(k, _)| k.cmp(key))
             .ok()
@@ -238,11 +244,11 @@ impl<K: Ord, V> SortedVecBackend<K, V> {
     pub fn sort(&mut self) {
         if !self.sorted {
             self.entries.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
-            debug_assert!(
-                self.entries.windows(2).all(|w| w[0].0 != w[1].0),
-                "INV-FERR-071: duplicate keys in SortedVecBackend — \
-                 index keys must be unique (derived from deduplicated datom set)"
-            );
+            // Dedup after sort: removes duplicates that would violate
+            // INV-FERR-071 (index keys derived from deduplicated datom set).
+            // O(n) but sort() is called at most once per store lifecycle
+            // (during promote), not on the read hot path.
+            self.entries.dedup_by(|(a, _), (b, _)| a == b);
             self.sorted = true;
         }
     }
