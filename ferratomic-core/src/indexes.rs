@@ -561,17 +561,15 @@ where
         {
             return false;
         }
-        // ME-003: In debug/test builds, also verify datom identity —
-        // not just cardinality. A bug that inserts different datoms into
-        // different indexes would pass the count-only check.
-        #[cfg(any(test, debug_assertions))]
-        {
-            use std::collections::BTreeSet;
-            let eavt_datoms: BTreeSet<_> = self.eavt.backend_values().collect();
-            let aevt_datoms: BTreeSet<_> = self.aevt.backend_values().collect();
-            if eavt_datoms != aevt_datoms {
-                return false;
-            }
+        // ME-003: Verify datom identity — not just cardinality. A bug
+        // that inserts different datoms into different indexes would pass
+        // the count-only check. O(n) but only called after transact, not
+        // on the read hot path. Always-on (no cfg gate) per project rule:
+        // "No #[cfg(...)] hiding code from the type checker."
+        let eavt_datoms: std::collections::BTreeSet<_> = self.eavt.backend_values().collect();
+        let aevt_datoms: std::collections::BTreeSet<_> = self.aevt.backend_values().collect();
+        if eavt_datoms != aevt_datoms {
+            return false;
         }
         true
     }
