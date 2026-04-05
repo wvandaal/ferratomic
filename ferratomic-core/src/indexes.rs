@@ -233,8 +233,8 @@ impl<K: Ord, V> SortedVecBackend<K, V> {
     /// Callers MUST NOT insert duplicate keys. Index keys contain all 5
     /// datom fields — two datoms with the same key ARE the same datom
     /// (INV-FERR-012) — so the primary datom set's uniqueness guarantee
-    /// propagates to all index backends. No dedup is performed; a
-    /// a `debug_assert` verifies uniqueness.
+    /// propagates to all index backends. A defensive `dedup_by` after
+    /// sort removes any duplicates that would violate INV-FERR-071.
     ///
     /// Uses `sort_unstable_by` — O(n log n) time, O(1) auxiliary memory.
     /// Stable sort would allocate O(n) auxiliary (~20GB at 100M datoms),
