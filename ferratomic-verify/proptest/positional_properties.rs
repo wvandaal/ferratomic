@@ -390,4 +390,160 @@ proptest! {
             );
         }
     }
+
+    // -----------------------------------------------------------------------
+    // XOR homomorphic fingerprint properties (INV-FERR-074, bd-83j4)
+    // -----------------------------------------------------------------------
+
+    /// INV-FERR-074: fingerprint determinism.
+    ///
+    /// Two constructions from the same datom set produce identical fingerprints.
+    ///
+    /// Falsification: same input → different fingerprints.
+    #[test]
+    fn inv_ferr_074_fingerprint_deterministic(
+        datoms in prop::collection::btree_set(arb_datom(), 0..200),
+    ) {
+        let ps_a = PositionalStore::from_datoms(datoms.iter().cloned());
+        let ps_b = PositionalStore::from_datoms(datoms.into_iter());
+
+        prop_assert_eq!(
+            ps_a.fingerprint(), ps_b.fingerprint(),
+            "INV-FERR-074: fingerprint determinism violated"
+        );
+    }
+
+    /// INV-FERR-074 + INV-FERR-001: merge fingerprint commutativity.
+    ///
+    /// `merge(a,b).fingerprint() == merge(b,a).fingerprint()`.
+    ///
+    /// Falsification: merge order changes fingerprint.
+    #[test]
+    fn inv_ferr_074_fingerprint_commutative(
+        a_datoms in prop::collection::btree_set(arb_datom(), 0..100),
+        b_datoms in prop::collection::btree_set(arb_datom(), 0..100),
+    ) {
+        let ps_a = PositionalStore::from_datoms(a_datoms.into_iter());
+        let ps_b = PositionalStore::from_datoms(b_datoms.into_iter());
+        let merged_ab = merge_positional(&ps_a, &ps_b);
+        let merged_ba = merge_positional(&ps_b, &ps_a);
+
+        prop_assert_eq!(
+            merged_ab.fingerprint(), merged_ba.fingerprint(),
+            "INV-FERR-074: merge fingerprint not commutative"
+        );
+    }
+
+    /// INV-FERR-074: homomorphic property over disjoint union.
+    ///
+    /// For disjoint stores A and B: `H(A ∪ B) = H(A) ⊕ H(B)`.
+    /// Disjointness is guaranteed by partitioning a single generated set.
+    ///
+    /// Falsification: XOR of individual fingerprints differs from merged.
+    #[test]
+    fn inv_ferr_074_fingerprint_homomorphic_disjoint(
+        datoms in prop::collection::btree_set(arb_datom(), 2..100),
+    ) {
+        let all: Vec<Datom> = datoms.into_iter().collect();
+        let mid = all.len() / 2;
+        let ps_a = PositionalStore::from_datoms(all[..mid].iter().cloned());
+        let ps_b = PositionalStore::from_datoms(all[mid..].iter().cloned());
+        let ps_merged = merge_positional(&ps_a, &ps_b);
+
+        let xor_fp = xor_fingerprints(ps_a.fingerprint(), ps_b.fingerprint());
+        prop_assert_eq!(
+            ps_merged.fingerprint(), &xor_fp,
+            "INV-FERR-074: homomorphic property violated for disjoint stores"
+        );
+    }
+
+    /// INV-FERR-074: non-disjoint merge fingerprint formula.
+    ///
+    /// For stores A and B with guaranteed non-empty overlap:
+    /// `H(A ∪ B) = H(A) ⊕ H(B) ⊕ H(A ∩ B)`.
+    /// Overlap is guaranteed by injecting a shared subset into both stores.
+    ///
+    /// Falsification: the non-disjoint formula produces a different result
+    /// than computing the fingerprint of the union directly.
+    #[test]
+    fn inv_ferr_074_fingerprint_nondisjoint(
+        shared in prop::collection::btree_set(arb_datom(), 1..20),
+        a_only in prop::collection::btree_set(arb_datom(), 0..30),
+        b_only in prop::collection::btree_set(arb_datom(), 0..30),
+    ) {
+        // A = shared ∪ a_only, B = shared ∪ b_only → A ∩ B ⊇ shared.
+        let a_datoms: BTreeSet<_> = shared.union(&a_only).cloned().collect();
+        let b_datoms: BTreeSet<_> = shared.union(&b_only).cloned().collect();
+        let union_datoms: BTreeSet<_> = a_datoms.union(&b_datoms).cloned().collect();
+        let inter_datoms: BTreeSet<_> = a_datoms.intersection(&b_datoms).cloned().collect();
+
+        let ps_a = PositionalStore::from_datoms(a_datoms.into_iter());
+        let ps_b = PositionalStore::from_datoms(b_datoms.into_iter());
+        let ps_union = PositionalStore::from_datoms(union_datoms.into_iter());
+        let ps_inter = PositionalStore::from_datoms(inter_datoms.into_iter());
+
+        // H(A ∪ B) = H(A) ⊕ H(B) ⊕ H(A ∩ B)
+        let combined = xor_fingerprints(
+            &xor_fingerprints(ps_a.fingerprint(), ps_b.fingerprint()),
+            ps_inter.fingerprint(),
+        );
+        prop_assert_eq!(
+            ps_union.fingerprint(), &combined,
+            "INV-FERR-074: non-disjoint fingerprint formula violated"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Bloom filter entity_exists properties (INV-FERR-027, bd-218b)
+    // -----------------------------------------------------------------------
+
+    /// INV-FERR-027: entity_exists has zero false negatives.
+    ///
+    /// For every entity present in the store, `entity_exists` must return `true`.
+    ///
+    /// Falsification: an entity present in the canonical array returns `false`.
+    #[test]
+    fn inv_ferr_027_entity_exists_no_false_negatives(
+        datoms in prop::collection::btree_set(arb_datom(), 1..200),
+    ) {
+        let ps = PositionalStore::from_datoms(datoms.into_iter());
+
+        for eid in &ps.unique_entity_ids() {
+            prop_assert!(
+                ps.entity_exists(eid),
+                "INV-FERR-027: entity_exists false negative for present entity"
+            );
+        }
+    }
+
+    /// INV-FERR-027: entity_exists rejects absent entities.
+    ///
+    /// An `EntityId` not in the store must return `false`.
+    ///
+    /// Falsification: `entity_exists` returns `true` for a non-existent entity.
+    #[test]
+    fn inv_ferr_027_entity_exists_absent_rejected(
+        datoms in prop::collection::btree_set(arb_datom(), 0..100),
+        absent_bytes in any::<[u8; 32]>(),
+    ) {
+        let ps = PositionalStore::from_datoms(datoms.into_iter());
+        let absent = EntityId::from_bytes(absent_bytes);
+
+        let is_present = ps.datoms().iter().any(|d| d.entity() == absent);
+        if !is_present {
+            prop_assert!(
+                !ps.entity_exists(&absent),
+                "INV-FERR-027: entity_exists returned true for absent entity"
+            );
+        }
+    }
+}
+
+/// XOR two 32-byte fingerprints (test helper for INV-FERR-074).
+fn xor_fingerprints(a: &[u8; 32], b: &[u8; 32]) -> [u8; 32] {
+    let mut result = [0u8; 32];
+    for (r, (x, y)) in result.iter_mut().zip(a.iter().zip(b.iter())) {
+        *r = x ^ y;
+    }
+    result
 }

@@ -74,8 +74,12 @@ impl Store {
 ///
 /// bd-9ecq: mixed-variant merge now uses `merge_sort_dedup` for O(n+m)
 /// instead of the previous `from_datoms(chain)` which was O(n log n).
-/// Both `PositionalStore::datoms()` and `OrdSet::iter()` yield datoms in
-/// EAVT sort order, so the inputs to `merge_sort_dedup` are pre-sorted.
+///
+/// **Coupling (DEFECT-017)**: Both `PositionalStore::datoms()` and
+/// `OrdSet::iter()` yield datoms in `Datom::Ord` order, which is EAVT
+/// (entity → attribute → value → tx → op) because `Ord` is derived from
+/// the struct field declaration order. `merge_sort_dedup` relies on this.
+/// See `Datom` doc comment for the field-order invariant.
 fn merge_repr(a: &StoreRepr, b: &StoreRepr) -> PositionalStore {
     match (a, b) {
         (StoreRepr::Positional(pa), StoreRepr::Positional(pb)) => merge_positional(pa, pb),

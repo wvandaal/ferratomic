@@ -45,6 +45,15 @@ pub enum Op {
 /// INV-FERR-018: Immutable after creation. All fields are private. There
 /// are no `&mut self` methods. The only way to "modify" a datom is to
 /// create a new one.
+///
+/// # Field order invariant (DEFECT-017)
+///
+/// `Ord` is derived, so comparison is lexicographic over fields in
+/// **declaration order**: entity → attribute → value → tx → op. This
+/// is EAVT order. `merge_sort_dedup` and `PositionalStore::canonical`
+/// depend on `Datom::Ord` matching EAVT. **Do not reorder these fields.**
+/// The regression test `test_defect_017_datom_ord_is_eavt` enforces this.
+///
 /// ADR-FERR-010: `Deserialize` is intentionally NOT derived. `Datom` contains
 /// `EntityId`, so deserialization must go through `WireDatom` in the `wire`
 /// module to enforce the trust boundary.
@@ -280,6 +289,63 @@ mod tests {
         assert_eq!(
             a, b,
             "INV-FERR-012: datoms with identical 5-tuples must be equal"
+        );
+    }
+
+    /// DEFECT-017 regression: `Datom::Ord` (derived) MUST be EAVT order.
+    ///
+    /// `merge_sort_dedup` and `PositionalStore::canonical` assume that
+    /// `Datom::cmp` sorts by entity first, then attribute, then value,
+    /// then tx, then op — matching the struct field declaration order.
+    /// If anyone reorders the fields, this test fails and merge breaks.
+    #[test]
+    fn test_defect_017_datom_ord_is_eavt() {
+        let e1 = EntityId::from_content(b"aaa");
+        let e2 = EntityId::from_content(b"zzz");
+        let a1 = Attribute::from("a/first");
+        let a2 = Attribute::from("z/last");
+        let v1 = Value::Long(1);
+        let v2 = Value::Long(2);
+        let tx1 = TxId::new(1, 0, 0);
+        let tx2 = TxId::new(2, 0, 0);
+
+        // Entity is the primary sort key.
+        // All other fields are identical — only entity differs.
+        let (elo, ehi) = if e1 < e2 { (e1, e2) } else { (e2, e1) };
+        let entity_lo = Datom::new(elo, a1.clone(), v1.clone(), tx1, Op::Assert);
+        let entity_hi = Datom::new(ehi, a1.clone(), v1.clone(), tx1, Op::Assert);
+        assert!(
+            entity_lo < entity_hi,
+            "entity must be the primary sort key (all other fields identical)"
+        );
+
+        // Attribute breaks entity ties.
+        let attr_lo = Datom::new(e1, a1.clone(), v2.clone(), tx2, Op::Retract);
+        let attr_hi = Datom::new(e1, a2.clone(), v1.clone(), tx1, Op::Assert);
+        assert!(
+            attr_lo < attr_hi,
+            "attribute must be the secondary sort key (a/first < z/last)"
+        );
+
+        // Value breaks (entity, attribute) ties.
+        let val_lo = Datom::new(e1, a1.clone(), v1.clone(), tx2, Op::Retract);
+        let val_hi = Datom::new(e1, a1.clone(), v2.clone(), tx1, Op::Assert);
+        assert!(
+            val_lo < val_hi,
+            "value must be the tertiary sort key (1 < 2)"
+        );
+
+        // Tx breaks (entity, attribute, value) ties.
+        let tx_lo = Datom::new(e1, a1.clone(), v1.clone(), tx1, Op::Retract);
+        let tx_hi = Datom::new(e1, a1.clone(), v1.clone(), tx2, Op::Assert);
+        assert!(tx_lo < tx_hi, "tx must be the quaternary sort key");
+
+        // Op breaks all other ties.
+        let op_assert = Datom::new(e1, a1.clone(), v1.clone(), tx1, Op::Assert);
+        let op_retract = Datom::new(e1, a1, v1, tx1, Op::Retract);
+        assert!(
+            op_assert < op_retract,
+            "op must be the final sort key (Assert < Retract)"
         );
     }
 

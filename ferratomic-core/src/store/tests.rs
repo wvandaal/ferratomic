@@ -343,3 +343,129 @@ fn test_content_addressed_trait_bound() {
         "bd-20j: ContentAddressed must produce non-zero hash"
     );
 }
+
+// -----------------------------------------------------------------------
+// INV-FERR-074: XOR homomorphic store fingerprint (bd-83j4)
+// -----------------------------------------------------------------------
+
+/// bd-83j4: empty store fingerprint is XOR identity [0; 32].
+#[test]
+fn test_inv_ferr_074_fingerprint_empty() {
+    let store = Store::from_datoms(BTreeSet::new());
+    assert_eq!(
+        store.fingerprint(),
+        Some(&[0u8; 32]),
+        "INV-FERR-074: empty store fingerprint must be XOR identity"
+    );
+}
+
+/// bd-83j4: non-empty store fingerprint is non-zero.
+#[test]
+fn test_inv_ferr_074_fingerprint_nonempty() {
+    let mut datoms = BTreeSet::new();
+    datoms.insert(sample_datom("fp-test"));
+    let store = Store::from_datoms(datoms);
+    let fp = store.fingerprint();
+    assert!(
+        fp.is_some(),
+        "INV-FERR-074: Positional store must have fingerprint"
+    );
+    assert_ne!(
+        fp,
+        Some(&[0u8; 32]),
+        "INV-FERR-074: non-empty store fingerprint must not be zero"
+    );
+}
+
+/// bd-83j4: `Store::fingerprint()` dispatch — `Some` for Positional, `None` for `OrdMap`.
+#[test]
+fn test_inv_ferr_074_fingerprint_dispatch() {
+    let mut datoms = BTreeSet::new();
+    datoms.insert(sample_datom("dispatch"));
+    let mut store = Store::from_datoms(datoms);
+
+    // Positional: fingerprint available.
+    assert!(
+        store.fingerprint().is_some(),
+        "Positional must have fingerprint"
+    );
+
+    // Promote to OrdMap: fingerprint unavailable.
+    store.promote();
+    assert!(
+        store.fingerprint().is_none(),
+        "OrdMap must not have fingerprint"
+    );
+
+    // Demote back: fingerprint recomputed.
+    store.demote();
+    assert!(
+        store.fingerprint().is_some(),
+        "Demoted (Positional) must have fingerprint"
+    );
+}
+
+/// bd-83j4: singleton store fingerprint equals the datom's content hash.
+#[test]
+fn test_inv_ferr_074_fingerprint_singleton() {
+    let datom = sample_datom("singleton-fp");
+    let mut datoms = BTreeSet::new();
+    datoms.insert(datom.clone());
+    let store = Store::from_datoms(datoms);
+    assert_eq!(
+        store.fingerprint(),
+        Some(&datom.content_hash()),
+        "INV-FERR-074: singleton fingerprint must equal content_hash"
+    );
+}
+
+// -----------------------------------------------------------------------
+// INV-FERR-027: Bloom filter entity_exists (bd-218b)
+// -----------------------------------------------------------------------
+
+/// bd-218b: `entity_exists` returns true for present entities.
+#[test]
+fn test_inv_ferr_027_entity_exists_present() {
+    let datom = sample_datom("bloom-present");
+    let mut datoms = BTreeSet::new();
+    datoms.insert(datom.clone());
+    let store = Store::from_datoms(datoms);
+    let ps = store
+        .positional()
+        .expect("INV-FERR-027: store must be Positional after from_datoms");
+    assert!(
+        ps.entity_exists(&datom.entity()),
+        "INV-FERR-027: entity_exists must return true for present entity"
+    );
+}
+
+/// bd-218b: `entity_exists` returns false for absent entities.
+#[test]
+fn test_inv_ferr_027_entity_exists_absent() {
+    let datom = sample_datom("bloom-absent");
+    let mut datoms = BTreeSet::new();
+    datoms.insert(datom);
+    let store = Store::from_datoms(datoms);
+    let ps = store
+        .positional()
+        .expect("INV-FERR-027: store must be Positional after from_datoms");
+    let absent = ferratom::EntityId::from_content(b"definitely-not-here");
+    assert!(
+        !ps.entity_exists(&absent),
+        "INV-FERR-027: entity_exists must return false for absent entity"
+    );
+}
+
+/// bd-218b: `entity_exists` on empty store returns false.
+#[test]
+fn test_inv_ferr_027_entity_exists_empty() {
+    let store = Store::from_datoms(BTreeSet::new());
+    let ps = store
+        .positional()
+        .expect("INV-FERR-027: store must be Positional after from_datoms");
+    let any_eid = ferratom::EntityId::from_content(b"anything");
+    assert!(
+        !ps.entity_exists(&any_eid),
+        "INV-FERR-027: entity_exists on empty store must return false"
+    );
+}

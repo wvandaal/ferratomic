@@ -432,6 +432,20 @@ impl Store {
         }
     }
 
+    /// Homomorphic store fingerprint (INV-FERR-074).
+    ///
+    /// Returns `Some` for `Positional` stores (fingerprint computed in
+    /// `from_datoms`). Returns `None` for `OrdMap` stores (fingerprint
+    /// is not maintained incrementally during transact — demotion
+    /// recomputes it).
+    #[must_use]
+    pub fn fingerprint(&self) -> Option<&[u8; 32]> {
+        match &self.repr {
+            StoreRepr::Positional(ps) => Some(ps.fingerprint()),
+            StoreRepr::OrdMap { .. } => None,
+        }
+    }
+
     /// Access the schema.
     ///
     /// INV-FERR-009: the schema governs transact-time validation.

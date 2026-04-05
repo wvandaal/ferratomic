@@ -22,5 +22,6 @@ serde = { workspace = true }
 
 [dev-dependencies]
 bincode = { workspace = true }
+ferratom-clock = { path = "../ferratom-clock", features = ["test-utils"] }
 ordered-float = { workspace = true }
 proptest = { workspace = true }

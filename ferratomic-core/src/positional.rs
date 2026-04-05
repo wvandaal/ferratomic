@@ -21,6 +21,93 @@ use crate::{
 };
 
 // ---------------------------------------------------------------------------
+// EntityBloom — self-contained Bloom filter for O(1) negative lookups (bd-218b)
+// ---------------------------------------------------------------------------
+
+/// Bloom filter for probabilistic entity existence checks (INV-FERR-027).
+///
+/// Zero false negatives BY CONSTRUCTION: a set bit is never cleared
+/// (monotonicity of bitwise OR). Insert is infallible — no capacity
+/// overflow, no eviction, no failure mode. False positive rate ~1%
+/// at 10 bits per element with 7 hash functions.
+///
+/// Uses BLAKE3 (already in the dependency tree) to derive k independent
+/// hash functions from a single hash via double-hashing:
+/// `h_i(x) = (h1(x) + i * h2(x)) mod m`.
+#[derive(Clone, Debug)]
+struct EntityBloom {
+    /// Bit array. Total bits = `next_power_of_two(num_elements * BITS_PER_ELEMENT)`.
+    bits: Vec<u64>,
+    /// Total number of bits (`bits.len() * 64`).
+    num_bits: u64,
+}
+
+/// Bits per element. 10 gives ~1% false positive rate with 7 hash functions.
+const BITS_PER_ELEMENT: usize = 10;
+
+/// Number of hash functions. Optimal k = (m/n) * ln(2) ≈ 10 * 0.693 ≈ 7.
+const NUM_HASHES: u64 = 7;
+
+impl EntityBloom {
+    /// Build a Bloom filter from a set of entity IDs.
+    ///
+    /// Infallible: always succeeds regardless of input size.
+    /// O(n) construction where n = number of entities.
+    fn build(entity_ids: &[EntityId]) -> Self {
+        let num_bits_raw = (entity_ids.len() * BITS_PER_ELEMENT).max(64);
+        // Round up to next power of 2 so h2|1 guarantees gcd(h2, num_bits) = 1,
+        // giving full period for the double-hashing probe sequence.
+        let num_bits = (num_bits_raw as u64).next_power_of_two();
+        let num_words = (num_bits / 64) as usize;
+        let mut bits = vec![0u64; num_words];
+
+        for eid in entity_ids {
+            let (h1, h2) = Self::hash_pair(eid);
+            for i in 0..NUM_HASHES {
+                let bit_idx = (h1.wrapping_add(i.wrapping_mul(h2))) % num_bits;
+                let word = (bit_idx / 64) as usize;
+                bits[word] |= 1u64 << (bit_idx % 64);
+            }
+        }
+
+        Self { bits, num_bits }
+    }
+
+    /// Check whether an entity ID MIGHT be present.
+    ///
+    /// Returns `false` → entity is DEFINITELY absent (zero false negatives).
+    /// Returns `true` → entity is PROBABLY present (~1% false positive rate).
+    fn maybe_contains(&self, eid: &EntityId) -> bool {
+        let (h1, h2) = Self::hash_pair(eid);
+        for i in 0..NUM_HASHES {
+            let bit_idx = (h1.wrapping_add(i.wrapping_mul(h2))) % self.num_bits;
+            let word = (bit_idx / 64) as usize;
+            if self.bits[word] & (1u64 << (bit_idx % 64)) == 0 {
+                return false; // definitive negative — bit not set
+            }
+        }
+        true
+    }
+
+    /// Derive two independent hash values from an `EntityId` via BLAKE3.
+    ///
+    /// Uses the first 8 bytes as h1 and the next 8 bytes as h2.
+    /// `EntityId` is already a BLAKE3 hash (INV-FERR-012), so its bytes
+    /// are uniformly distributed — no additional hashing needed.
+    fn hash_pair(eid: &EntityId) -> (u64, u64) {
+        let bytes = eid.as_bytes();
+        let h1 = u64::from_le_bytes([
+            bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+        ]);
+        // h2 must be odd so gcd(h2, num_bits) = 1 (num_bits is power of 2).
+        let h2 = u64::from_le_bytes([
+            bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15],
+        ]) | 1;
+        (h1, h2)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // PositionalStore (INV-FERR-076)
 // ---------------------------------------------------------------------------
 
@@ -31,7 +118,7 @@ use crate::{
 /// - `live_bits`: `BitVec` where `live_bits[p]` = datom p is live.
 /// - `perm_aevt/vaet/avet`: lazily-built permutation arrays mapping alternate
 ///   sort orders to canonical positions (`OnceLock` for deferred construction).
-/// - `fingerprint`: XOR-sum placeholder for INV-FERR-074 (Stage 1).
+/// - `fingerprint`: XOR of per-datom BLAKE3 content hashes (INV-FERR-074).
 ///
 /// Memory at 200K datoms: ~26 MB vs ~159 MB with `im::OrdMap`.
 /// Cold start: O(n log n) sort vs O(n) tree insertions with pointer chasing.
@@ -60,12 +147,16 @@ pub struct PositionalStore {
     /// Permutation: AVET-order index → canonical position (INV-FERR-005).
     /// Lazily built on first access via `OnceLock`.
     perm_avet: OnceLock<Vec<u32>>,
-    /// Homomorphic fingerprint placeholder (INV-FERR-074, Stage 1).
+    /// XOR homomorphic fingerprint: `H(S) = XOR_{d in S} content_hash(d)` (INV-FERR-074).
     fingerprint: [u8; 32],
     /// CHD perfect hash for O(1) entity existence checks (INV-FERR-076, contributes to INV-FERR-027).
     /// Lazily built on first `entity_lookup()` call via `OnceLock`.
     /// `None` if build fails (fallback to binary search).
     mph: OnceLock<Option<Mph>>,
+    /// Bloom filter for O(1) probabilistic negative entity lookups (bd-218b).
+    /// Lazily built on first `entity_exists()` call. ~1% false positive rate
+    /// at 10 bits/element. Zero false negatives by construction.
+    bloom: OnceLock<EntityBloom>,
 }
 
 impl Clone for PositionalStore {
@@ -94,6 +185,11 @@ impl Clone for PositionalStore {
                 let _ = lock.set(v.clone());
                 lock
             }),
+            bloom: self.bloom.get().map_or_else(OnceLock::new, |v| {
+                let lock = OnceLock::new();
+                let _ = lock.set(v.clone());
+                lock
+            }),
         }
     }
 }
@@ -108,6 +204,7 @@ impl std::fmt::Debug for PositionalStore {
             .field("perm_avet_init", &self.perm_avet.get().is_some())
             .field("fingerprint", &self.fingerprint)
             .field("mph_init", &self.mph.get().is_some())
+            .field("bloom_init", &self.bloom.get().is_some())
             .finish()
     }
 }
@@ -115,7 +212,9 @@ impl std::fmt::Debug for PositionalStore {
 impl PositionalStore {
     /// Build from an unsorted datom iterator (INV-FERR-076).
     ///
-    /// O(n log n) for sort + O(n) for LIVE scan. Permutation arrays are
+    /// O(n log n) for sort + O(n) for LIVE scan + O(n) for fingerprint.
+    /// After sort completes (needs `&mut`), the two O(n) passes run in
+    /// parallel via `rayon::join` (bd-a7s1). Permutation arrays are
     /// deferred to first access via `OnceLock` (lazy construction).
     /// Uses `sort_unstable` — O(1) auxiliary memory, matching the
     /// performance architecture targets (INV-FERR-076).
@@ -129,7 +228,11 @@ impl PositionalStore {
             "INV-FERR-076: canonical array exceeds u32 position space"
         );
 
-        let live_bits = build_live_bitvector(&canonical);
+        // After sort, canonical is immutable. Parallel O(n) passes (bd-a7s1).
+        let (live_bits, fingerprint) = rayon::join(
+            || build_live_bitvector(&canonical),
+            || compute_fingerprint(&canonical),
+        );
 
         Self {
             canonical,
@@ -137,8 +240,9 @@ impl PositionalStore {
             perm_aevt: OnceLock::new(),
             perm_vaet: OnceLock::new(),
             perm_avet: OnceLock::new(),
-            fingerprint: [0u8; 32],
+            fingerprint,
             mph: OnceLock::new(),
+            bloom: OnceLock::new(),
         }
     }
 
@@ -162,7 +266,11 @@ impl PositionalStore {
             "INV-FERR-076: canonical array exceeds u32 position space"
         );
 
-        let live_bits = build_live_bitvector(&canonical);
+        // Parallel O(n) passes (bd-a7s1).
+        let (live_bits, fingerprint) = rayon::join(
+            || build_live_bitvector(&canonical),
+            || compute_fingerprint(&canonical),
+        );
 
         Self {
             canonical,
@@ -170,8 +278,9 @@ impl PositionalStore {
             perm_aevt: OnceLock::new(),
             perm_vaet: OnceLock::new(),
             perm_avet: OnceLock::new(),
-            fingerprint: [0u8; 32],
+            fingerprint,
             mph: OnceLock::new(),
+            bloom: OnceLock::new(),
         }
     }
 
@@ -356,7 +465,11 @@ impl PositionalStore {
         self.live_bits.count_ones()
     }
 
-    /// Access the fingerprint (INV-FERR-074 placeholder).
+    /// XOR homomorphic store fingerprint (INV-FERR-074).
+    ///
+    /// `H(S) = XOR_{d in S} content_hash(d)`. Commutative and homomorphic
+    /// over disjoint union: `H(A ∪ B) = H(A) ⊕ H(B)` when `A ∩ B = ∅`.
+    /// Empty stores have `[0; 32]` (XOR identity).
     #[must_use]
     pub fn fingerprint(&self) -> &[u8; 32] {
         &self.fingerprint
@@ -398,14 +511,18 @@ impl PositionalStore {
             u32::try_from(canonical.len()).is_ok(),
             "INV-FERR-076: canonical array exceeds u32 position space"
         );
+        // Single O(n) pass — no rayon::join because live_bits is pre-computed.
+        // The fingerprint computation is the only O(n) work here.
+        let fingerprint = compute_fingerprint(&canonical);
         Self {
             canonical,
             live_bits,
             perm_aevt: OnceLock::new(),
             perm_vaet: OnceLock::new(),
             perm_avet: OnceLock::new(),
-            fingerprint: [0u8; 32],
+            fingerprint,
             mph: OnceLock::new(),
+            bloom: OnceLock::new(),
         }
     }
 
@@ -413,7 +530,7 @@ impl PositionalStore {
     ///
     /// Since canonical is EAVT-sorted, entities are grouped. A single O(n)
     /// pass extracts distinct entity IDs in sorted order. Shared by
-    /// MPH (bd-wa5p) and cuckoo filter (bd-218b).
+    /// MPH (bd-wa5p) and Bloom filter (bd-218b).
     #[must_use]
     pub fn unique_entity_ids(&self) -> Vec<EntityId> {
         self.unique_entities_with_positions().0
@@ -475,6 +592,26 @@ impl PositionalStore {
             None
         }
     }
+
+    /// O(1) probabilistic entity existence check (INV-FERR-027, bd-218b).
+    ///
+    /// Bloom filter provides definitive negative answers: if the filter
+    /// says "no", the entity is absent (zero false negatives by construction
+    /// — monotonicity of bitwise OR). Positive answers are verified by
+    /// binary search (false positive rate ~1% at 10 bits/element).
+    ///
+    /// Construction is infallible — no capacity overflow, no fallback path.
+    #[must_use]
+    pub fn entity_exists(&self, eid: &EntityId) -> bool {
+        let bloom = self
+            .bloom
+            .get_or_init(|| EntityBloom::build(&self.unique_entity_ids()));
+        if !bloom.maybe_contains(eid) {
+            return false; // definitive negative — entity absent
+        }
+        // Possible false positive — verify with binary search.
+        self.first_datom_position_for_entity(eid).is_some()
+    }
 }
 
 /// Build a LIVE bitvector from EAVT-sorted datoms (public within crate).
@@ -533,16 +670,54 @@ pub fn live_positions_from_sorted_run_keys_for_test<K: PartialEq>(entries: &[(K,
 #[must_use]
 pub fn merge_positional(a: &PositionalStore, b: &PositionalStore) -> PositionalStore {
     let merged = merge_sort_dedup(&a.canonical, &b.canonical);
-    let live_bits = build_live_bitvector(&merged);
+    // Parallel O(n) passes (bd-a7s1).
+    let (live_bits, fingerprint) = rayon::join(
+        || build_live_bitvector(&merged),
+        || compute_fingerprint(&merged),
+    );
     PositionalStore {
         canonical: merged,
         live_bits,
         perm_aevt: OnceLock::new(),
         perm_vaet: OnceLock::new(),
         perm_avet: OnceLock::new(),
-        fingerprint: [0u8; 32],
+        fingerprint,
         mph: OnceLock::new(),
+        bloom: OnceLock::new(),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Internal: XOR homomorphic fingerprint (INV-FERR-074)
+// ---------------------------------------------------------------------------
+
+/// XOR homomorphic fingerprint over canonical datom array (INV-FERR-074).
+///
+/// `H(S) = XOR_{d in S} content_hash(d)` where `content_hash` is the
+/// BLAKE3 hash of the full 5-tuple (INV-FERR-012).
+///
+/// Properties:
+/// - Commutative: XOR is commutative → H is independent of iteration order.
+/// - Homomorphic over disjoint union: `H(A ∪ B) = H(A) ⊕ H(B)` when `A ∩ B = ∅`.
+/// - Identity: `H(∅) = [0; 32]`.
+///
+/// # Deviation from spec Level 2
+///
+/// Spec L2 describes `blake3::hash(bincode::serialize(datom))`. This
+/// implementation uses `Datom::content_hash()` (INV-FERR-012) instead.
+/// The deviation is intentional: `content_hash()` reuses the
+/// content-addressed identity already computed for each datom, avoiding a
+/// `bincode` dependency in the hash path and ensuring the fingerprint is
+/// consistent with the canonical datom identity throughout the system.
+fn compute_fingerprint(canonical: &[Datom]) -> [u8; 32] {
+    let mut fp = [0u8; 32];
+    for datom in canonical {
+        let hash = datom.content_hash();
+        for (acc, byte) in fp.iter_mut().zip(hash.iter()) {
+            *acc ^= byte;
+        }
+    }
+    fp
 }
 
 // ---------------------------------------------------------------------------
@@ -654,6 +829,11 @@ where
 /// Vec (INV-FERR-001: set union via merge-sort).
 ///
 /// O(n + m) time, sequential access on both inputs.
+///
+/// **Coupling (DEFECT-017)**: Both inputs MUST be sorted by `Datom::Ord`,
+/// which is EAVT order (derived from struct field declaration order).
+/// `PositionalStore::datoms()` and `OrdSet::iter()` both yield this order.
+/// See `Datom` doc comment for the field-order invariant.
 ///
 /// `pub(crate)` because `store::merge` uses this for mixed-repr merge
 /// (Positional + `OrdMap`) to avoid the O(n log n) sort in `from_datoms`.
