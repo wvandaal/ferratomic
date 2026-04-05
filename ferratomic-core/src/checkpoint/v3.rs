@@ -417,9 +417,9 @@ impl PartialStore {
 
     /// Merge LIVE + HISTORICAL datoms into complete Store (INV-FERR-075).
     ///
-    /// Four O(n) passes: merge-sort, LIVE bitvector, `live_causal` rebuild,
-    /// `live_set` derivation. Uses `from_checkpoint_v3` to avoid redundant
-    /// O(n log n) re-sort on already-sorted merge output.
+    /// Five O(n) passes: merge-sort, positional construction, LIVE bitvector,
+    /// `live_causal` rebuild, `live_set` derivation. Uses `from_checkpoint_v3`
+    /// to avoid redundant O(n log n) re-sort on already-sorted merge output.
     #[must_use]
     pub fn load_historical(self) -> Store {
         let live_datoms: Vec<Datom> = self.store.datoms().cloned().collect();

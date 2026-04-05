@@ -114,8 +114,8 @@ proptest! {
             "INV-FERR-013: epoch mismatch after roundtrip"
         );
         prop_assert_eq!(
-            loaded.schema().len(), store.schema().len(),
-            "INV-FERR-013: schema attr count mismatch after roundtrip"
+            loaded.schema(), store.schema(),
+            "INV-FERR-013: schema mismatch after roundtrip"
         );
     }
 
@@ -365,9 +365,8 @@ proptest! {
             store.epoch(), loaded.epoch()
         );
         prop_assert_eq!(
-            loaded.schema().len(), store.schema().len(),
-            "INV-FERR-028 violated: schema length differs. original={}, loaded={}",
-            store.schema().len(), loaded.schema().len()
+            loaded.schema(), store.schema(),
+            "INV-FERR-028 violated: schema differs after checkpoint round-trip"
         );
     }
 }

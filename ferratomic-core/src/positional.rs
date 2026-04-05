@@ -145,8 +145,11 @@ impl PositionalStore {
     /// Construct from a pre-sorted, deduplicated datom vector.
     ///
     /// INV-FERR-076: the caller guarantees `canonical` is EAVT-sorted and
-    /// duplicate-free. This is the O(n) construction path for merge results
-    /// produced by `merge_sort_dedup`, which outputs sorted, deduplicated data.
+    /// duplicate-free. Checked via `debug_assert` only — release builds do
+    /// not validate. Callers loading from untrusted sources must verify
+    /// integrity independently (e.g., BLAKE3 per ADR-FERR-010).
+    /// This is the O(n) construction path for merge results produced by
+    /// `merge_sort_dedup`, which outputs sorted, deduplicated data.
     /// Skips the O(n log n) `sort_unstable()` call in `from_datoms`.
     #[must_use]
     pub(crate) fn from_sorted_canonical(canonical: Vec<Datom>) -> Self {
@@ -371,8 +374,11 @@ impl PositionalStore {
     ///
     /// INV-FERR-076: Zero-construction cold start for V3 checkpoint
     /// deserialization. The caller guarantees `canonical` is sorted and
-    /// `live_bits.len() == canonical.len()`. Permutation arrays are
-    /// deferred (`OnceLock::new()`).
+    /// `live_bits.len() == canonical.len()`. Checked via `debug_assert`
+    /// only — release builds do not validate. Callers loading from
+    /// untrusted sources must verify integrity independently (e.g.,
+    /// BLAKE3 per ADR-FERR-010). Permutation arrays are deferred
+    /// (`OnceLock::new()`).
     #[must_use]
     pub(crate) fn from_sorted_with_live(
         canonical: Vec<Datom>,
