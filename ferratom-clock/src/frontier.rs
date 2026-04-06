@@ -4,7 +4,7 @@
 //! agent. This enables peers to compute the delta (new datoms) needed to
 //! bring a lagging replica up to date.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use crate::{AgentId, TxId};
 
@@ -20,7 +20,7 @@ use crate::{AgentId, TxId};
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Frontier {
     /// Per-agent latest observed `TxId`.
-    map: HashMap<AgentId, TxId>,
+    map: BTreeMap<AgentId, TxId>,
 }
 
 impl Frontier {
@@ -28,7 +28,7 @@ impl Frontier {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            map: HashMap::new(),
+            map: BTreeMap::new(),
         }
     }
 

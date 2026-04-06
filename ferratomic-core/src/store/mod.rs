@@ -493,7 +493,8 @@ impl Store {
 
     /// Update the causal LIVE lattice for a single datom (incremental).
     ///
-    /// INV-FERR-029/032: O(log n) per datom. Retains the event with the
+    /// INV-FERR-029/032: O(log n) per datom where n = number of distinct
+    /// (entity, attribute) keys in `live_causal`. Retains the event with the
     /// highest `TxId` per (entity, attribute, value) triple. Updates the
     /// materialized `live_set` projection to reflect liveness transitions.
     pub(crate) fn live_apply(&mut self, datom: &Datom) {

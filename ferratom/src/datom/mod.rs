@@ -288,6 +288,54 @@ mod tests {
     }
 
     #[test]
+    fn test_inv_ferr_012_content_hash_sensitive_to_entity() {
+        let a1 = Attribute::from("test/a");
+        let v = Value::Long(1);
+        let tx = TxId::new(1, 0, 0);
+        let d1 = Datom::new(
+            EntityId::from_content(b"entity-A"),
+            a1.clone(),
+            v.clone(),
+            tx,
+            Op::Assert,
+        );
+        let d2 = Datom::new(EntityId::from_content(b"entity-B"), a1, v, tx, Op::Assert);
+        assert_ne!(
+            d1.content_hash(),
+            d2.content_hash(),
+            "INV-FERR-012: different entities must produce different content hashes"
+        );
+    }
+
+    #[test]
+    fn test_inv_ferr_012_content_hash_sensitive_to_attribute() {
+        let e = EntityId::from_content(b"e");
+        let v = Value::Long(1);
+        let tx = TxId::new(1, 0, 0);
+        let d1 = Datom::new(e, Attribute::from("attr/one"), v.clone(), tx, Op::Assert);
+        let d2 = Datom::new(e, Attribute::from("attr/two"), v, tx, Op::Assert);
+        assert_ne!(
+            d1.content_hash(),
+            d2.content_hash(),
+            "INV-FERR-012: different attributes must produce different content hashes"
+        );
+    }
+
+    #[test]
+    fn test_inv_ferr_012_content_hash_sensitive_to_tx() {
+        let e = EntityId::from_content(b"e");
+        let a = Attribute::from("a");
+        let v = Value::Long(1);
+        let d1 = Datom::new(e, a.clone(), v.clone(), TxId::new(1, 0, 0), Op::Assert);
+        let d2 = Datom::new(e, a, v, TxId::new(2, 0, 0), Op::Assert);
+        assert_ne!(
+            d1.content_hash(),
+            d2.content_hash(),
+            "INV-FERR-012: different TxIds must produce different content hashes"
+        );
+    }
+
+    #[test]
     fn test_inv_ferr_012_datom_equality() {
         let a = sample_datom();
         let b = sample_datom();

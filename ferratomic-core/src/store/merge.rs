@@ -111,16 +111,14 @@ fn merge_repr(a: &StoreRepr, b: &StoreRepr) -> PositionalStore {
 ///
 ///   `merge_causal(LIVE(A), LIVE(B)) = LIVE(A ∪ B)`
 ///
-/// Complexity: `O(min(|L_A|, |L_B|))` via `im::OrdMap::union_with`.
+/// Complexity: `O(m log n)` where `m = min(|L_A|, |L_B|)`, `n = max(|L_A|, |L_B|)`,
+/// via `im::OrdMap::union_with` (iterates smaller map, inserts into larger).
 fn merge_causal(
     a: &super::query::LiveCausal,
     b: &super::query::LiveCausal,
 ) -> super::query::LiveCausal {
     a.clone().union_with(b.clone(), |entries_a, entries_b| {
-        entries_a.union_with(
-            entries_b,
-            |ev_a, ev_b| if ev_b.0 > ev_a.0 { ev_b } else { ev_a },
-        )
+        entries_a.union_with(entries_b, std::cmp::max)
     })
 }
 

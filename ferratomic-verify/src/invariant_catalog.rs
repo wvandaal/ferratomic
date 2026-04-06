@@ -134,7 +134,7 @@ pub const CATALOG: &[Invariant] = &[
         lean_theorem: Some("apply_superset"),
         proptest_fn: Some("inv_ferr_004_monotonic_growth_transact"),
         kani_harness: Some("monotonic_growth"),
-        stateright_model: None,
+        stateright_model: Some("inv_ferr_004_monotonic_growth"),
         integration_test: Some("inv_ferr_004_transact_grows_store"),
         type_level: Some("OrdSet is append-only by API — no remove method exposed"),
     },

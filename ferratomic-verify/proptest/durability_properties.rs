@@ -409,7 +409,7 @@ proptest! {
         prop_assert_eq!(
             loaded.schema(),
             store.schema(),
-            "INV-FERR-013: LIVE-first round-trip schema mismatch"
+            "INV-FERR-075: LIVE-first round-trip schema mismatch"
         );
     }
 
@@ -445,7 +445,7 @@ proptest! {
         prop_assert_eq!(
             full.schema(),
             store.schema(),
-            "INV-FERR-013: partial -> load_historical schema mismatch"
+            "INV-FERR-075: partial -> load_historical schema mismatch"
         );
     }
 }

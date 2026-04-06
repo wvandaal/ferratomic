@@ -345,6 +345,59 @@ fn test_content_addressed_trait_bound() {
 }
 
 // -----------------------------------------------------------------------
+// INV-FERR-001..003: Merge edge cases (bd-lg6m)
+// -----------------------------------------------------------------------
+
+/// bd-lg6m: merge(empty, empty) must be empty.
+#[test]
+fn test_inv_ferr_001_merge_empty_empty() {
+    let a = Store::from_datoms(BTreeSet::new());
+    let b = Store::from_datoms(BTreeSet::new());
+    let merged = Store::from_merge(&a, &b);
+    assert!(
+        merged.is_empty(),
+        "INV-FERR-001: merge(empty, empty) must be empty"
+    );
+}
+
+/// bd-lg6m: merge(empty, X) == merge(X, empty) == X.
+#[test]
+fn test_inv_ferr_001_merge_empty_nonempty() {
+    let empty = Store::from_datoms(BTreeSet::new());
+    let mut datoms = BTreeSet::new();
+    datoms.insert(sample_datom("merge-edge"));
+    let nonempty = Store::from_datoms(datoms.clone());
+
+    let ab = Store::from_merge(&empty, &nonempty);
+    let ba = Store::from_merge(&nonempty, &empty);
+
+    let expected: BTreeSet<&Datom> = datoms.iter().collect();
+    assert_eq!(
+        ab.datom_set().iter().collect::<BTreeSet<_>>(),
+        expected,
+        "INV-FERR-001: merge(empty, X) must equal X"
+    );
+    assert_eq!(
+        ba.datom_set().iter().collect::<BTreeSet<_>>(),
+        expected,
+        "INV-FERR-001: merge(X, empty) must equal X"
+    );
+}
+
+/// bd-lg6m: merge(X, X) == X (idempotence).
+#[test]
+fn test_inv_ferr_003_merge_self_idempotent() {
+    let mut datoms = BTreeSet::new();
+    datoms.insert(sample_datom("self-merge"));
+    let store = Store::from_datoms(datoms);
+    let merged = Store::from_merge(&store, &store);
+
+    let original: BTreeSet<&Datom> = store.datom_set().iter().collect();
+    let result: BTreeSet<&Datom> = merged.datom_set().iter().collect();
+    assert_eq!(original, result, "INV-FERR-003: merge(X, X) must equal X");
+}
+
+// -----------------------------------------------------------------------
 // INV-FERR-074: XOR homomorphic store fingerprint (bd-83j4)
 // -----------------------------------------------------------------------
 

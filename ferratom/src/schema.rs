@@ -180,8 +180,10 @@ impl Schema {
     /// definition is installed (last-write-wins for schema evolution).
     ///
     /// HI-015: Previously silently overwrote any existing definition.
-    /// Now logs a `debug_assert` for conflicting redefinitions to aid
-    /// diagnosis while preserving backwards compatibility.
+    /// Last-write-wins on conflicting redefinitions. Merge-level conflict
+    /// detection and audit trail lives in `Store::from_merge` (ferratomic-core),
+    /// not in this leaf crate type. This method is intentionally silent on
+    /// conflicts because `merge_schemas` calls it with the winning definition.
     pub fn define(&mut self, attr: Attribute, def: AttributeDef) {
         if let Some(existing) = self.attrs.get(&attr) {
             if *existing == def {
@@ -189,13 +191,9 @@ impl Schema {
             }
             // INV-FERR-043: conflicting schema redefinition.
             // Resolution: last-write-wins (the new definition replaces the old).
-            // This is the designed behavior for schema evolution — a later
-            // transaction may intentionally redefine an attribute's type.
-            // Merge-level conflict detection lives in Store::from_merge
-            // (ferratomic-core), not in the leaf crate type.
-            //
-            // No I/O here — ferratom is a pure algebraic type crate (zero deps,
-            // no side effects). Diagnostics belong at the call site.
+            // Conflict tracking is the caller's responsibility (merge_schemas
+            // records SchemaConflict entries). This method does not assert
+            // because merge legitimately calls define() with conflicting defs.
         }
         self.attrs.insert(attr, def);
     }
