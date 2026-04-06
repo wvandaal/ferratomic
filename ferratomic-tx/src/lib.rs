@@ -18,7 +18,7 @@
 //!
 //! ```rust
 //! use ferratom::{AgentId, Attribute, EntityId, Value};
-//! use ferratomic_core::writer::Transaction;
+//! use ferratomic_tx::Transaction;
 //!
 //! let agent = AgentId::from_bytes([0u8; 16]);
 //! let tx = Transaction::new(agent)
@@ -29,6 +29,10 @@
 //!     );
 //! // tx is Transaction<Building>; call .commit(schema) to validate and seal.
 //! ```
+
+#![forbid(unsafe_code)]
+#![deny(clippy::all, missing_docs)]
+#![warn(clippy::pedantic)]
 
 mod commit;
 mod validate;
@@ -50,7 +54,7 @@ mod tests;
 /// In this state, datoms can be added via [`Transaction::assert_datom`]
 /// and [`Transaction::retract_datom`]. Transition to [`Committed`] via
 /// [`Transaction::commit`] (with schema validation) or
-/// [`Transaction::commit_unchecked`] (testing only).
+/// `commit_unchecked` (testing only, requires `test-utils` feature).
 ///
 /// `pub` because callers must name this type in generic bounds and
 /// function signatures that accept `Transaction<Building>`.
@@ -98,7 +102,7 @@ impl Transaction<Building> {
     /// Create a new transaction for the given agent.
     ///
     /// The transaction starts empty. Add datoms via [`assert_datom`](Self::assert_datom),
-    /// then seal with [`commit`](Self::commit) or [`commit_unchecked`](Self::commit_unchecked).
+    /// then seal with [`commit`](Self::commit) or `commit_unchecked` (requires `test-utils`).
     #[must_use]
     pub fn new(agent: AgentId) -> Self {
         Self {

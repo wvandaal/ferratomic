@@ -2,6 +2,8 @@
 members = [
     "ferratom-clock",
     "ferratom",
+    "ferratomic-tx",
+    "ferratomic-storage",
     "ferratomic-core",
     "ferratomic-datalog",
     "ferratomic-verify",

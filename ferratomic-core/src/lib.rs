@@ -31,7 +31,7 @@
 //! **INV-FERR-006** (snapshot isolation), **INV-FERR-007** (write linearizability),
 //! **INV-FERR-008** (WAL-before-visible ordering), **INV-FERR-011** (observer delivery).
 //!
-//! ### `writer` — Transaction typestate builder (Phase 4a, active)
+//! ### `writer` — Transaction typestate builder (re-exported from `ferratomic-tx`)
 //!
 //! `Transaction<Building>` accumulates datoms; `Transaction<Committed>` is sealed
 //! and read-only. Invalid state transitions are compile errors.
@@ -191,7 +191,7 @@ pub mod store;
 pub mod topology;
 pub(crate) mod transport;
 pub mod wal;
-pub mod writer;
+pub use ferratomic_tx as writer;
 
 // INV-FERR-017: Shard equivalence — the algebraic property that partitioning
 // the datom set by any deterministic function and merging the partitions

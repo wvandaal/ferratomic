@@ -7,7 +7,7 @@ use std::marker::PhantomData;
 
 use ferratom::{Datom, Schema};
 
-use super::{validate, Building, Committed, Transaction};
+use crate::{validate, Building, Committed, Transaction};
 
 /// Schema validation error produced by [`Transaction::commit`].
 ///

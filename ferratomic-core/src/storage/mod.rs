@@ -26,23 +26,18 @@
 //!
 //! # Module Structure
 //!
-//! - [`backend`]: `StorageBackend` trait + `FsBackend` + `InMemoryBackend`
+//! - Backend types re-exported from `ferratomic-storage`: [`StorageBackend`], [`FsBackend`], [`InMemoryBackend`]
 //! - [`recovery`]: Cold-start recovery cascade (generic + filesystem)
 
-mod backend;
 mod recovery;
 
 use std::path::{Path, PathBuf};
 
-pub use backend::{FsBackend, InMemoryBackend, ReadSeek, StorageBackend, WriteSeek};
+pub use ferratomic_storage::{FsBackend, InMemoryBackend, ReadSeek, StorageBackend, WriteSeek};
+pub(crate) use ferratomic_storage::{CHECKPOINT_FILENAME, WAL_FILENAME};
 pub use recovery::{cold_start, cold_start_with_backend};
 
 use crate::db::Database;
-
-/// Well-known filenames within the data directory.
-pub(crate) const CHECKPOINT_FILENAME: &str = "checkpoint.chkp";
-/// Well-known WAL filename within the data directory.
-pub(crate) const WAL_FILENAME: &str = "wal.log";
 
 /// Result of a cold start, including which recovery path was used (INV-FERR-014).
 ///

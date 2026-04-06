@@ -1,0 +1,12 @@
+[package]
+name = "ferratomic-storage"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Storage backend abstraction for Ferratomic: StorageBackend trait, FsBackend, InMemoryBackend"
+
+# Algebraic role: LEAF — I/O substrate abstraction, zero engine deps.
+# INV-FERR-024 (substrate agnosticism).
+[dependencies]
+ferratom = { path = "../ferratom" }

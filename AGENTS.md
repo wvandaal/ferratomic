@@ -56,44 +56,39 @@ Read **GOALS.md §6** (Defensive Engineering Standards) — it is the canonical 
 | 10 | `cargo +nightly miri test` | Undefined behavior |
 | 11 | Coverage >= thresholds (no regression) | Untested code |
 
-### Dynamic Analysis
+### Dynamic Analysis + Coverage (GOALS.md §6.4-6.5)
 
-- **MIRI**: All pure-logic tests pass. CI nightly.
-- **ASan**: `RUSTFLAGS="-Zsanitizer=address" cargo test`. Nightly or pre-tag.
-- **Fuzz**: 60s smoke per target in CI. Crashes become seed corpus entries.
-- **Mutation testing**: `cargo-mutants`, >80% kill rate. Weekly or pre-tag.
+| Tool | Command | Frequency | Threshold |
+|------|---------|-----------|-----------|
+| MIRI | `cargo +nightly miri test` | CI nightly | All pure-logic tests pass |
+| ASan | `RUSTFLAGS="-Zsanitizer=address" cargo test` | Pre-tag | Clean |
+| Fuzz | `cargo fuzz run <target> -- -max_total_time=60` | CI smoke | Crashes → seed corpus |
+| Mutation | `cargo-mutants` | Weekly/pre-tag | >80% kill rate |
+| Coverage | `cargo llvm-cov` | CI gate | Line >=90%, branch >=80%, ratchet up only |
 
-### Coverage Thresholds (ratchet — only goes up)
-
-Line >= 90%, branch >= 80%, mutation kill >= 80% per crate.
-
-### Verification Layers (Stage 0 invariants require ALL six)
-
-Lean 4 (0 sorry) + Kani + Stateright + proptest (10K, >99.97% Bayesian) + FaultInjectingBackend + type-level.
+**Verification layers** (Stage 0 invariants require ALL six): Lean 4 (0 sorry) + Kani + Stateright + proptest (10K, >99.97% Bayesian) + FaultInjectingBackend + type-level.
 
 ---
 
 ## Phase Ordering (non-negotiable)
 
-```
-Phase 0: Specification (73 INV, 25 ADR, 7 NEG, 2 CI-FERR)     DONE
-Phase 1: Lean 4 proofs (0 sorry)                                DONE
-Phase 2: Tests (all fail — red phase)                            DONE
-Phase 3: Type definitions (types ARE propositions)               DONE
-Phase 4: Implementation (programs ARE proofs)                    IN PROGRESS
-Phase 5: Integration
-```
+| Phase | DoF | Status | Activation Question |
+|-------|-----|--------|-------------------|
+| 0: Specification | Very high | DONE | "What algebraic structure governs this domain?" |
+| 1: Lean proofs | High | DONE | "What must always be true? Prove it." |
+| 2: Tests (red) | Low | DONE | "What input would falsify this invariant?" |
+| 3: Types | Low | DONE | "What states must be unrepresentable?" |
+| 4: Implementation | Very low | IN PROGRESS | "Implement RULE-X with exact types from spec." |
+| 5: Integration | Low | — | — |
 
-Phase N+1 CANNOT begin until Phase N passes isomorphism check. Gaps between spec, algebra, and tests are DEFECTS.
-
-Spec Level 2 uses `BTreeSet` conceptually. Implementation uses `im::OrdSet`/`im::OrdMap` (ADR-FERR-001).
+Phase N+1 CANNOT begin until Phase N passes isomorphism check. Gaps between spec, algebra, and tests are DEFECTS. Spec Level 2 uses `BTreeSet` conceptually; implementation uses `im::OrdSet`/`im::OrdMap` (ADR-FERR-001).
 
 ---
 
 ## Specification
 
 - **Spec**: `spec/` (canonical) — see `spec/README.md` for module index
-- **Architecture**: `docs/design/FERRATOMIC_ARCHITECTURE.md`
+- **Architecture**: `docs/design/` (MIGRATION.md, ARCHITECTURAL_INFLUENCES.md, REFINEMENT_CHAINS.md)
 - **Goals & values**: `GOALS.md` (value hierarchy, success criteria, defensive standards)
 - **Lifecycle prompts**: `docs/prompts/lifecycle/` (one prompt per cognitive phase)
 
@@ -102,12 +97,14 @@ Spec Level 2 uses `BTreeSet` conceptually. Implementation uses `im::OrdSet`/`im:
 ```
 ferratom-clock/     Leaf: HLC, TxId, AgentId, Frontier (ZERO project deps)
 ferratom/           Leaf: Datom, EntityId, Value, Schema, Wire types
+ferratomic-tx/      Leaf: Transaction typestate builder (depends on ferratom)
+ferratomic-storage/ Leaf: StorageBackend trait, FsBackend, InMemoryBackend (depends on ferratom)
 ferratomic-core/    Core: Store, Database, WAL, checkpoint, indexes, merge, LIVE
 ferratomic-datalog/ Facade: Datalog parser, planner, evaluator (stubs — Phase 4d)
 ferratomic-verify/  Proofs: Lean 4, Stateright, Kani, proptest, fault injection
 ```
 
-Dependency: clock -> ferratom -> core -> datalog. Acyclic.
+Dependency: clock -> ferratom -> {tx, storage} -> core -> datalog. Acyclic.
 
 ---
 
@@ -122,15 +119,37 @@ Dependency: clock -> ferratom -> core -> datalog. Acyclic.
 
 ---
 
-## Code Discipline (non-discoverable rules only)
+## Code Discipline (by demonstration)
 
-**Types are propositions.** Minimal cardinality. Newtypes for all domain concepts. Typestate for lifecycles. Exhaustive matching (no `_ =>`). Parse, don't validate.
-**Error categories matter.** `FerraError::Io` = retryable. `SchemaViolation` = caller bug. `InvariantViolation` = our bug. Callers match on category, not strings.
-**INV-FERR in doc comments.** Every function that upholds an invariant cites it: `/// INV-FERR-006: snapshot isolation`.
-**Test names cite invariants.** `test_inv_ferr_001_merge_commutativity`, not `test_merge`.
-**No `#[ignore]` without a tracking bead.**
-**Conventional commits.** `feat:`, `fix:`, `refactor:`, `test:`, `docs:`, `perf:`. Atomic — one logical change per commit.
-**Every bug gets a regression test.** Every fuzz crash gets a seed corpus entry. Coverage ratchet: only goes up.
+This example encodes the expected quality. Match this standard:
+
+```rust
+/// INV-FERR-006: Snapshot isolation — returns a consistent point-in-time view.
+///
+/// The returned snapshot is immutable under future writes (INV-FERR-011).
+/// Callers see datoms committed at or before `self.epoch`, never partial
+/// transactions (INV-FERR-020).
+pub fn snapshot(&self) -> Result<Snapshot, FerraError> {
+    let store = self.current.load();          // ArcSwap: ~1ns, lock-free
+    Ok(Snapshot::new(Arc::clone(&store)))
+}
+
+#[test]
+fn test_inv_ferr_006_snapshot_stable_under_write() {
+    let db = Database::genesis();
+    let snap = db.snapshot().expect("genesis snapshot must succeed");
+    // ... transact new datoms ...
+    assert_eq!(snap.datoms().count(), 0,
+        "INV-FERR-006: snapshot must not see post-snapshot writes");
+}
+```
+
+**What this encodes**: INV-FERR citations in doc comments. `Result<T, FerraError>` everywhere (no unwrap). Newtypes (`Snapshot`, not raw data). Test names cite invariants. Assertions explain the invariant they verify. One concept per function.
+
+**Additional non-discoverable rules:**
+- No `#[ignore]` without a tracking bead
+- Conventional commits: `feat:`, `fix:`, `refactor:`, `test:`, `docs:`, `perf:`. Atomic — one change per commit.
+- Every bug gets a regression test. Every fuzz crash gets a seed corpus entry. Coverage ratchet: only goes up.
 
 ---
 

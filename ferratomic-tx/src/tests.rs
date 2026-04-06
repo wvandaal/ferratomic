@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use ferratom::{AgentId, Attribute, EntityId, Op, Schema, TxId, Value};
 
-use super::{validate::value_matches_type, *};
+use crate::{validate::value_matches_type, *};
 
 /// Helper: build a minimal schema with one String attribute.
 fn test_schema() -> Schema {

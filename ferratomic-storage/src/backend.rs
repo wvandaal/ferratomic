@@ -200,13 +200,13 @@ impl FsBackend {
     /// Return the checkpoint file path within the data directory (INV-FERR-013).
     #[must_use]
     pub fn checkpoint_path(&self) -> PathBuf {
-        self.data_dir.join(super::CHECKPOINT_FILENAME)
+        self.data_dir.join(crate::CHECKPOINT_FILENAME)
     }
 
     /// Return the WAL file path within the data directory (INV-FERR-008).
     #[must_use]
     pub fn wal_path(&self) -> PathBuf {
-        self.data_dir.join(super::WAL_FILENAME)
+        self.data_dir.join(crate::WAL_FILENAME)
     }
 
     /// Return the root data directory path (INV-FERR-024).

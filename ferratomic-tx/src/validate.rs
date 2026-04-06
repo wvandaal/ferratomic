@@ -5,7 +5,7 @@
 
 use ferratom::{Datom, Schema, Value, ValueType};
 
-use super::TxValidationError;
+use crate::TxValidationError;
 
 // ---------------------------------------------------------------------------
 // validate_datoms
@@ -20,7 +20,7 @@ use super::TxValidationError;
 /// Schema-definition attributes (those in the `db/` namespace that define new
 /// attributes) are validated against the meta-schema -- they are themselves
 /// datoms and must pass type checks.
-pub(super) fn validate_datoms(datoms: &[Datom], schema: &Schema) -> Result<(), TxValidationError> {
+pub(crate) fn validate_datoms(datoms: &[Datom], schema: &Schema) -> Result<(), TxValidationError> {
     for datom in datoms {
         let attr_name = datom.attribute();
         match schema.get(attr_name) {
@@ -52,7 +52,7 @@ pub(super) fn validate_datoms(datoms: &[Datom], schema: &Schema) -> Result<(), T
 ///
 /// INV-FERR-009: This is the core type-checking predicate for schema
 /// validation. Each `Value` variant maps to exactly one `ValueType`.
-pub(super) fn value_matches_type(value: &Value, expected: &ValueType) -> bool {
+pub(crate) fn value_matches_type(value: &Value, expected: &ValueType) -> bool {
     matches!(
         (value, expected),
         (Value::Keyword(_), ValueType::Keyword)

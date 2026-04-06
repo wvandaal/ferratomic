@@ -1,0 +1,20 @@
+[package]
+name = "ferratomic-tx"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Transaction typestate builder for Ferratomic: Building -> Committed via schema validation"
+
+# Algebraic role: LEAF — pure types and validation, zero engine deps.
+# INV-FERR-006 (atomicity), INV-FERR-009 (schema validation), INV-FERR-018 (immutability).
+[dependencies]
+ferratom = { path = "../ferratom" }
+
+[features]
+## HI-005: Expose commit_unchecked and other testing-only APIs.
+## Production builds must NOT enable this feature.
+test-utils = []
+
+[dev-dependencies]
+ferratom = { path = "../ferratom", features = ["test-utils"] }
