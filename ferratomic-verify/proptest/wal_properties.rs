@@ -34,9 +34,13 @@ proptest! {
         let mut wal = Wal::create(&wal_path)
             .expect("failed to create WAL");
 
+        let mut payloads = Vec::new();
         for (i, tx) in txns.iter().enumerate() {
-            wal.append(i as u64 + 1, tx)
+            let payload = bincode::serialize(tx.datoms())
+                .expect("bincode serialize must succeed");
+            wal.append_raw(i as u64 + 1, &payload)
                 .expect("failed to append WAL entry");
+            payloads.push(payload);
         }
         wal.fsync().expect("failed to fsync WAL");
 
@@ -50,18 +54,11 @@ proptest! {
             recovered.len()
         );
 
-        for (orig, recov) in txns.iter().zip(recovered.iter()) {
-            // CR-006: WAL uses bincode serialization, not JSON.
-            // ADR-FERR-010: Deserialize as wire types, convert through trust boundary.
-            let wire_datoms: Vec<ferratom::wire::WireDatom> =
-                bincode::deserialize(&recov.payload)
-                    .expect("deserialize WAL payload as WireDatom (bincode)");
-            let recovered_datoms: Vec<ferratom::Datom> =
-                wire_datoms.into_iter().map(ferratom::wire::WireDatom::into_trusted).collect();
+        for (orig_payload, recov) in payloads.iter().zip(recovered.iter()) {
             prop_assert_eq!(
-                orig.datoms(),
-                recovered_datoms.as_slice(),
-                "INV-FERR-008 violated: WAL entry content differs after recovery"
+                orig_payload.as_slice(),
+                recov.payload.as_slice(),
+                "INV-FERR-008 violated: WAL entry payload differs after recovery"
             );
         }
     }
@@ -81,7 +78,9 @@ proptest! {
             .expect("failed to create WAL");
 
         for (i, tx) in complete_txns.iter().enumerate() {
-            wal.append(i as u64 + 1, tx)
+            let payload = bincode::serialize(tx.datoms())
+                .expect("bincode serialize must succeed");
+            wal.append_raw(i as u64 + 1, &payload)
                 .expect("failed to append WAL entry");
         }
         wal.fsync().expect("failed to fsync WAL");
@@ -268,7 +267,7 @@ proptest! {
                 .expect("bincode serialize must succeed");
             logical_payload_bytes += payload.len() as u64;
 
-            wal.append(i as u64 + 1, tx)
+            wal.append_raw(i as u64 + 1, &payload)
                 .expect("failed to append WAL entry");
         }
         wal.fsync().expect("failed to fsync WAL");

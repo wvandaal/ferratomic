@@ -87,9 +87,7 @@ impl Wal {
 /// # Errors
 ///
 /// Returns `FerraError::WalRead` on I/O errors during the read.
-pub(crate) fn recover_wal_from_reader<R: IoRead>(
-    reader: &mut R,
-) -> Result<Vec<WalEntry>, FerraError> {
+pub fn recover_wal_from_reader<R: IoRead>(reader: &mut R) -> Result<Vec<WalEntry>, FerraError> {
     let mut buf = Vec::new();
     reader
         .read_to_end(&mut buf)
@@ -186,23 +184,13 @@ fn try_parse_frame(buf: &[u8], pos: usize) -> Option<(WalEntry, usize)> {
 mod tests {
     use std::{fs::OpenOptions as StdOpenOptions, io::Write as StdWrite};
 
-    use ferratom::{AgentId, Attribute, EntityId, Value};
     use tempfile::TempDir;
 
-    use crate::{
-        wal::{Wal, WAL_MAGIC, WAL_VERSION},
-        writer::Transaction,
-    };
+    use crate::wal::{Wal, WAL_MAGIC, WAL_VERSION};
 
-    /// Build a minimal committed transaction for testing.
-    fn sample_tx() -> Transaction<crate::writer::Committed> {
-        Transaction::new(AgentId::from_bytes([1u8; 16]))
-            .assert_datom(
-                EntityId::from_content(b"test"),
-                Attribute::from("db/doc"),
-                Value::String("test value".into()),
-            )
-            .commit_unchecked()
+    /// Sample payload bytes for testing WAL recovery mechanics.
+    fn sample_payload() -> Vec<u8> {
+        b"test payload for WAL recovery verification".to_vec()
     }
 
     #[test]
@@ -213,8 +201,8 @@ mod tests {
         // Write 2 valid entries, then append raw garbage.
         {
             let mut wal = Wal::create(&path).unwrap();
-            wal.append(1, &sample_tx()).unwrap();
-            wal.append(2, &sample_tx()).unwrap();
+            wal.append_raw(1, &sample_payload()).unwrap();
+            wal.append_raw(2, &sample_payload()).unwrap();
             wal.fsync().unwrap();
         }
         {
@@ -242,7 +230,7 @@ mod tests {
         // Write 1 valid entry.
         {
             let mut wal = Wal::create(&path).unwrap();
-            wal.append(1, &sample_tx()).unwrap();
+            wal.append_raw(1, &sample_payload()).unwrap();
             wal.fsync().unwrap();
         }
 
@@ -294,8 +282,8 @@ mod tests {
         // Write 2 entries.
         {
             let mut wal = Wal::create(&path).unwrap();
-            wal.append(1, &sample_tx()).unwrap();
-            wal.append(2, &sample_tx()).unwrap();
+            wal.append_raw(1, &sample_payload()).unwrap();
+            wal.append_raw(2, &sample_payload()).unwrap();
             wal.fsync().unwrap();
         }
 

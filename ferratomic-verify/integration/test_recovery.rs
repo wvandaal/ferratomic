@@ -21,7 +21,8 @@ fn write_single_wal_entry(wal_path: &std::path::Path, agent: AgentId) {
             Value::String("Alice".into()),
         )
         .commit_unchecked();
-    wal.append(1, &tx).expect("append failed");
+    let payload = bincode::serialize(tx.datoms()).expect("serialize tx");
+    wal.append_raw(1, &payload).expect("append failed");
     wal.fsync().expect("fsync failed");
 }
 
@@ -95,7 +96,8 @@ fn inv_ferr_008_crash_mid_write_recovery() {
                     Value::Long(i as i64),
                 )
                 .commit_unchecked();
-            wal.append(i, &tx).expect("append failed");
+            let payload = bincode::serialize(tx.datoms()).expect("serialize tx");
+            wal.append_raw(i, &payload).expect("append failed");
         }
         wal.fsync().expect("fsync failed");
     }

@@ -11,6 +11,7 @@ description = "Storage and concurrency engine for Ferratomic: Store, MVCC snapsh
 ferratom = { path = "../ferratom" }
 ferratomic-tx = { path = "../ferratomic-tx" }
 ferratomic-storage = { path = "../ferratomic-storage" }
+ferratomic-wal = { path = "../ferratomic-wal" }
 im = { workspace = true }
 arc-swap = { workspace = true }
 blake3 = { workspace = true }

@@ -16,7 +16,7 @@
 //! +------------------+
 //! | Length (4B)       | u32 byte count of payload
 //! +------------------+
-//! | Payload (N)      | Committed transaction datoms serialized as bincode
+//! | Payload (N)      | Caller-provided bytes (e.g. bincode-serialized datoms)
 //! +------------------+
 //! | CRC32 (4B)       | CRC32 of [Magic..Payload]
 //! +------------------+
@@ -37,7 +37,7 @@ use std::{
 };
 
 use ferratom::FerraError;
-pub(crate) use recover::recover_wal_from_reader;
+pub use recover::recover_wal_from_reader;
 
 /// WAL frame magic bytes: ASCII "FERR" (0x46455252).
 pub(crate) const WAL_MAGIC: [u8; 4] = *b"FERR";
@@ -72,7 +72,7 @@ pub struct WalEntry {
     /// a single WAL file. Recovery uses this to skip entries already
     /// covered by a checkpoint (INV-FERR-014).
     pub epoch: u64,
-    /// The serialized transaction payload: bincode-encoded `Vec<WireDatom>`.
+    /// The serialized transaction payload (caller-provided bytes).
     ///
     /// INV-FERR-008: contains the post-stamp datoms (with real `TxId`s)
     /// so that recovery produces identical state to the pre-crash store.
@@ -96,9 +96,9 @@ pub struct WalEntry {
 ///
 /// # Visibility
 ///
-/// Fields are `pub(crate)` because `db::recover` and `db::transact`
+/// Fields are `pub(crate)` because the writer and recovery modules
 /// interact directly with the WAL handle. The public API surface is
-/// limited to `create`, `open`, `append`, `fsync`, `recover`,
+/// limited to `create`, `open`, `append_raw`, `fsync`, `recover`,
 /// `last_synced_epoch`, and `path`.
 pub struct Wal {
     /// Path to the WAL file on disk (INV-FERR-008).
@@ -202,7 +202,8 @@ impl Wal {
 /// This is a table-less bit-by-bit implementation. It is correct and
 /// deterministic; performance is acceptable for WAL frames which are
 /// small relative to the payload serialization cost.
-pub(crate) fn crc32_ieee(data: &[u8]) -> u32 {
+#[must_use]
+pub fn crc32_ieee(data: &[u8]) -> u32 {
     let mut crc: u32 = 0xFFFF_FFFF;
     for &byte in data {
         crc ^= u32::from(byte);

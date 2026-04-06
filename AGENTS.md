@@ -99,12 +99,13 @@ ferratom-clock/     Leaf: HLC, TxId, AgentId, Frontier (ZERO project deps)
 ferratom/           Leaf: Datom, EntityId, Value, Schema, Wire types
 ferratomic-tx/      Leaf: Transaction typestate builder (depends on ferratom)
 ferratomic-storage/ Leaf: StorageBackend trait, FsBackend, InMemoryBackend (depends on ferratom)
-ferratomic-core/    Core: Store, Database, WAL, checkpoint, indexes, merge, LIVE
+ferratomic-wal/     Leaf: WAL frames, CRC32, fsync, recovery (depends on ferratom)
+ferratomic-core/    Core: Store, Database, checkpoint, indexes, merge, LIVE
 ferratomic-datalog/ Facade: Datalog parser, planner, evaluator (stubs — Phase 4d)
 ferratomic-verify/  Proofs: Lean 4, Stateright, Kani, proptest, fault injection
 ```
 
-Dependency: clock -> ferratom -> {tx, storage} -> core -> datalog. Acyclic.
+Dependency: clock -> ferratom -> {tx, storage, wal} -> core -> datalog. Acyclic.
 
 ---
 

@@ -190,8 +190,8 @@ pub mod storage;
 pub mod store;
 pub mod topology;
 pub(crate) mod transport;
-pub mod wal;
 pub use ferratomic_tx as writer;
+pub use ferratomic_wal as wal;
 
 // INV-FERR-017: Shard equivalence — the algebraic property that partitioning
 // the datom set by any deterministic function and merging the partitions

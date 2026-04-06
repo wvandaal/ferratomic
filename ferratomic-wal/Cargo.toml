@@ -1,0 +1,15 @@
+[package]
+name = "ferratomic-wal"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Write-ahead log for Ferratomic: frame-based durability with CRC32 integrity"
+
+# Algebraic role: LEAF — pure I/O framing, zero engine deps.
+# INV-FERR-008 (WAL-before-visible), INV-FERR-007 (epoch monotonicity).
+[dependencies]
+ferratom = { path = "../ferratom" }
+
+[dev-dependencies]
+tempfile = "3"

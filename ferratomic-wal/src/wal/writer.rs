@@ -8,35 +8,22 @@ use std::io::Write as IoWrite;
 use ferratom::FerraError;
 
 use super::{crc32_ieee, Wal, CRC_SIZE, HEADER_SIZE, WAL_MAGIC, WAL_VERSION};
-use crate::writer::{Committed, Transaction};
 
 impl Wal {
-    /// Append a committed transaction to the WAL at the given epoch.
+    /// Append a pre-serialized payload to the WAL at the given epoch.
     ///
     /// INV-FERR-008: The frame is written to the OS page cache but NOT
     /// fsynced. Call [`fsync`](Self::fsync) to guarantee durability before
     /// advancing the epoch.
     ///
-    /// # Errors
-    ///
-    /// Returns `FerraError::WalWrite` if bincode serialization or the write fails.
-    pub fn append(&mut self, epoch: u64, tx: &Transaction<Committed>) -> Result<(), FerraError> {
-        let payload =
-            bincode::serialize(tx.datoms()).map_err(|e| FerraError::WalWrite(e.to_string()))?;
-
-        self.write_frame(epoch, &payload)
-    }
-
-    /// Append a pre-serialized payload to the WAL at the given epoch.
-    ///
-    /// INV-FERR-008: Like [`append`](Self::append), the frame is written but NOT
-    /// fsynced. Used by [`Database::transact`](crate::db::Database::transact) to
-    /// write post-stamp datoms (with real `TxId`s and tx metadata).
+    /// The WAL does not interpret the payload — serialization format is
+    /// the caller's responsibility (typically `bincode::serialize(datoms)`
+    /// at the Database layer).
     ///
     /// # Errors
     ///
     /// Returns `FerraError::WalWrite` if the write fails.
-    pub(crate) fn append_raw(&mut self, epoch: u64, payload: &[u8]) -> Result<(), FerraError> {
+    pub fn append_raw(&mut self, epoch: u64, payload: &[u8]) -> Result<(), FerraError> {
         self.write_frame(epoch, payload)
     }
 
@@ -65,7 +52,7 @@ impl Wal {
     /// ME-011: Enforces epoch monotonicity — each frame's epoch must be
     /// strictly greater than the previous synced epoch.
     ///
-    /// Shared by [`append`](Self::append) and [`append_raw`](Self::append_raw).
+    /// Shared by [`append_raw`](Self::append_raw).
     fn write_frame(&mut self, epoch: u64, payload: &[u8]) -> Result<(), FerraError> {
         // ME-011: Enforce WAL epoch monotonicity. Appending an epoch <=
         // the highest pending (written but not yet fsynced) epoch violates
@@ -126,20 +113,14 @@ impl Wal {
 
 #[cfg(test)]
 mod tests {
-    use ferratom::{AgentId, Attribute, EntityId, Value};
     use tempfile::TempDir;
 
-    use crate::{wal::Wal, writer::Transaction};
+    use crate::wal::Wal;
 
-    /// Build a minimal committed transaction for testing.
-    fn sample_tx() -> Transaction<crate::writer::Committed> {
-        Transaction::new(AgentId::from_bytes([1u8; 16]))
-            .assert_datom(
-                EntityId::from_content(b"test"),
-                Attribute::from("db/doc"),
-                Value::String("test value".into()),
-            )
-            .commit_unchecked()
+    /// Sample payload bytes for testing WAL frame mechanics.
+    /// The WAL is payload-agnostic; any bytes suffice for frame tests.
+    fn sample_payload() -> Vec<u8> {
+        b"test payload for WAL frame verification".to_vec()
     }
 
     #[test]
@@ -150,8 +131,8 @@ mod tests {
         // Write two entries.
         {
             let mut wal = Wal::create(&path).unwrap();
-            wal.append(1, &sample_tx()).unwrap();
-            wal.append(2, &sample_tx()).unwrap();
+            wal.append_raw(1, &sample_payload()).unwrap();
+            wal.append_raw(2, &sample_payload()).unwrap();
             wal.fsync().unwrap();
         }
 
@@ -178,7 +159,7 @@ mod tests {
         // Write 1 entry.
         {
             let mut wal = Wal::create(&path).unwrap();
-            wal.append(1, &sample_tx()).unwrap();
+            wal.append_raw(1, &sample_payload()).unwrap();
             wal.fsync().unwrap();
         }
 
@@ -188,8 +169,8 @@ mod tests {
             let entries = wal.recover().unwrap();
             assert_eq!(entries.len(), 1);
 
-            wal.append(2, &sample_tx()).unwrap();
-            wal.append(3, &sample_tx()).unwrap();
+            wal.append_raw(2, &sample_payload()).unwrap();
+            wal.append_raw(3, &sample_payload()).unwrap();
             wal.fsync().unwrap();
         }
 
@@ -209,13 +190,14 @@ mod tests {
     }
 
     #[test]
-    fn test_inv_ferr_008_payload_is_valid_bincode() {
+    fn test_inv_ferr_008_payload_roundtrip() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("test.wal");
+        let payload = b"roundtrip content verification";
 
         {
             let mut wal = Wal::create(&path).unwrap();
-            wal.append(1, &sample_tx()).unwrap();
+            wal.append_raw(1, payload).unwrap();
             wal.fsync().unwrap();
         }
 
@@ -223,50 +205,9 @@ mod tests {
             let mut wal = Wal::open(&path).unwrap();
             let entries = wal.recover().unwrap();
             assert_eq!(entries.len(), 1);
-
-            // ADR-FERR-010: Deserialize as wire types, convert through trust boundary.
-            let wire_datoms: Vec<ferratom::wire::WireDatom> =
-                bincode::deserialize(&entries[0].payload).unwrap();
-            let datoms: Vec<ferratom::Datom> = wire_datoms
-                .into_iter()
-                .map(ferratom::wire::WireDatom::into_trusted)
-                .collect();
-            assert!(
-                !datoms.is_empty(),
-                "INV-FERR-008: WAL payload must contain datoms"
-            );
-        }
-    }
-
-    /// Regression: bd-32t -- WAL payload roundtrip preserves datom content.
-    #[test]
-    fn test_bug_bd_32t_payload_content_roundtrip() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("test.wal");
-
-        {
-            let mut wal = Wal::create(&path).unwrap();
-            wal.append(1, &sample_tx()).unwrap();
-            wal.fsync().unwrap();
-        }
-
-        {
-            let mut wal = Wal::open(&path).unwrap();
-            let entries = wal.recover().unwrap();
-            assert_eq!(entries.len(), 1);
-
-            // ADR-FERR-010: Deserialize as wire types, convert through trust boundary.
-            let wire_datoms: Vec<ferratom::wire::WireDatom> =
-                bincode::deserialize(&entries[0].payload).unwrap();
-            let datoms: Vec<ferratom::Datom> = wire_datoms
-                .into_iter()
-                .map(ferratom::wire::WireDatom::into_trusted)
-                .collect();
-            assert!(!datoms.is_empty(), "bd-32t: payload must contain datoms");
             assert_eq!(
-                datoms[0].attribute().as_str(),
-                "db/doc",
-                "bd-32t: datom attribute must survive WAL roundtrip"
+                entries[0].payload, payload,
+                "INV-FERR-008: WAL payload must survive write-recover roundtrip"
             );
         }
     }
