@@ -2448,3 +2448,99 @@ Structures," 2016).
 *Spec continues in next section with INV-FERR-077 (van Emde Boas cache-oblivious layout)
 and INV-FERR-078 (columnar datom decomposition). These are Stage 2 invariants — designed
 now, implemented when the Phase 4a foundations (070-076) are proven stable.*
+
+---
+
+### Phase 4b+ Additions (Session 015)
+
+The following two architectural directions were identified during the Session 015
+radical performance analysis. They are recorded here as convergence targets for
+Phase 4b+ implementation, building on the Phase 4a foundations established above.
+
+---
+
+### ADR-FERR-031: Wavelet Matrix Phase 4a Prerequisites — Rank/Select and Attribute Interning
+
+**Traces to**: ADR-FERR-030 (wavelet matrix convergence target), INV-FERR-029
+(LIVE bitvector), INV-FERR-073 (Yoneda fusion)
+**Stage**: 2 (prerequisite work pulled to Phase 4a, wavelet matrix itself Phase 4c+)
+
+**Problem**: ADR-FERR-030 identifies the wavelet matrix as the information-theoretic
+convergence target but lists several prerequisites. Two of these prerequisites are
+independently valuable in Phase 4a and should be implemented NOW rather than
+deferred, because they compound with other Phase 4a optimizations:
+
+1. **Rank/Select succinct bitvectors**: The wavelet matrix's fundamental operation.
+   But rank/select is also independently valuable on the LIVE bitvector (INV-FERR-029):
+   O(1) live-datom counting and O(K) live iteration instead of O(N) scanning.
+   Phase 4a bead: bd-t84f.
+
+2. **Attribute interning to integer symbols**: The wavelet matrix operates on
+   integer-encoded column symbols. Attribute interning (string → u16) provides the
+   integer encoding for the attribute column AND independently delivers 34x compression,
+   Copy semantics, and 1-cycle comparison. Phase 4a bead: bd-fnod.
+
+**Consequence**: These are pulled forward to Phase 4a not as wavelet matrix
+implementation but as independent performance wins that HAPPEN to be wavelet
+matrix prerequisites. When Phase 4c implements the wavelet matrix, the rank/select
+implementation and the attribute integer encoding are already verified and benchmarked.
+
+The accretive design principle is preserved: Phase 4a work feeds Phase 4c without
+being designed for Phase 4c. The justification for each prerequisite stands on its
+own Phase 4a merits.
+
+---
+
+### ADR-FERR-032: Lean-Verified Functor Composition for Representation Changes
+
+**Traces to**: INV-FERR-025 (backend interchangeability), INV-FERR-072 (lazy promotion),
+spec/09 principle 1 (representation independence via faithful functors)
+**Stage**: 3 (Phase 4b+ — requires all Phase 4a representations to stabilize)
+
+**Problem**: Every representation change in the performance architecture (SoA columnar,
+attribute interning, succinct bitvectors, compression, wavelet matrix) must preserve
+the abstract datom set. Currently, each change is verified independently by proptest.
+As the number of representations grows (M representations), the verification cost
+grows as M² (every pair must be tested). This is unsustainable.
+
+**Solution**: Model each representation change as a FAITHFUL FUNCTOR in Lean:
+
+```lean
+/-- A representation functor from the abstract DatomStore to a concrete type C. -/
+structure RepresentationFunctor (C : Type) where
+  /-- Encode abstract store into concrete representation. -/
+  encode : DatomStore → C
+  /-- Decode concrete representation back to abstract store. -/
+  decode : C → DatomStore
+  /-- Round-trip identity: decode ∘ encode = id. -/
+  roundtrip : ∀ s : DatomStore, decode (encode s) = s
+
+/-- Functor composition: if F and G are faithful, F ∘ G is faithful. -/
+theorem functor_compose_faithful
+    (F : RepresentationFunctor B) (G : RepresentationFunctor C)
+    (lift : B → C) (lower : C → B)
+    (h_lift : ∀ b, G.decode (lift (F.encode (F.decode b))) = F.decode b)
+    (h_lower : ∀ c, F.decode (lower c) = G.decode c) :
+    ∀ s : DatomStore, G.decode (lift (F.encode s)) = s := by
+  intro s
+  rw [show F.encode s = F.encode s from rfl]
+  -- Proof by composing the two roundtrip properties.
+  sorry -- Phase 4b: mechanize when representations stabilize
+```
+
+**Consequence**: Verification cost becomes LINEAR in M (prove once per functor)
+instead of QUADRATIC (prove every pair). Each new representation change requires
+ONE Lean proof (`roundtrip`), not M new compatibility tests. The functor composition
+theorem gives correctness of all compositions for free.
+
+This is the formal-methods analogue of a COMPILER OPTIMIZATION PIPELINE: each
+optimization pass is proven correct independently, and the pipeline is correct by
+the composition theorem. No competing database project has anything comparable.
+
+**Prerequisites**: All Phase 4a representation types (SoA, interned attributes,
+succinct bitvectors, chunk fingerprints) must stabilize. The Lean model must be
+extended with concrete representation types — currently it operates on the abstract
+`DatomStore := Finset Datom` only.
+
+**Implementation**: Phase 4b for the Lean formalization. Phase 4c for full
+integration with the wavelet matrix representation functor.
