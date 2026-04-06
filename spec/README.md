@@ -3,7 +3,7 @@
 > **These files are the CANONICAL specification.**
 
 Formal specification using DDIS methodology (INV/ADR/NEG).
-74 invariants (incl. 025b), 25 ADRs, 7 negative cases, 2 coupling invariants.
+85 invariants (incl. 025b), 28 ADRs, 7 negative cases, 2 coupling invariants.
 
 **Implementation note**: Spec Level 2 contracts use `BTreeSet`/`BTreeMap` as conceptual
 illustrations. The actual implementation uses `im::OrdSet`/`im::OrdMap` per ADR-FERR-001.
@@ -30,7 +30,7 @@ Every invariant follows the Level 0/1/2 format:
 | [06-prolly-tree.md](06-prolly-tree.md) | §23.9 | 045-050 | Chunk addressing, history independence, O(d) diff, block store, substrate independence |
 | [07-refinement.md](07-refinement.md) | §23.11 | CI-FERR-001..002 | Lean-Rust coupling invariant, refinement tower |
 | [08-verification-infrastructure.md](08-verification-infrastructure.md) | §23.12 | 056-059 | Fault injection, soak testing, metamorphic testing, optimization preservation, self-monitoring convergence (B17 → M(S) ≅ S) |
-| [09-performance-architecture.md](09-performance-architecture.md) | §23.13 | 070-077, 079-080 | Zero-copy cold start, sorted-array backend, positional content addressing, permutation index fusion, homomorphic fingerprint, LIVE-first checkpoint, interpolation search for BLAKE3 keys, chunk fingerprint array, incremental LIVE, NEG-FERR-007 (FM-Index NO-GO), ADR-FERR-030 (wavelet matrix target) |
+| [09-performance-architecture.md](09-performance-architecture.md) | §23.13 | 070-085 | Zero-copy cold start, sorted-array backend, positional content addressing, permutation index fusion, homomorphic fingerprint, LIVE-first checkpoint, interpolation search, SoA columnar (078), chunk fingerprints (079), incremental LIVE (080), TxId temporal permutation (081), entity RLE (082), graph adjacency (083), WAL dedup Bloom (084), attribute interning (085), NEG-FERR-007 (FM-Index NO-GO), ADR-FERR-030..033 |
 
 ## Reading Order for Implementing Agents
 

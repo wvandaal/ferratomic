@@ -47,6 +47,7 @@ Referenced as `C1`, `C2`, etc. throughout the spec:
 | C5 | Causal traceability | Every datom records its provenance: who, when, why, and what was known. |
 | C7 | Self-bootstrap | Genesis is deterministic and self-describing. The schema describes itself. |
 | C8 | Substrate independence | Ferratomic has no knowledge of application-layer concerns. |
+| C9 | Balanced workload | Workload is balanced/bursty: write bursts, read bursts, interleaved. NOT read-heavy 99:1. Performance architecture must optimize for both read and write throughput. |
 
 ## 23.0 Preamble
 

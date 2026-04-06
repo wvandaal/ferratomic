@@ -257,7 +257,7 @@ technical debt. This vector catches structural issues before they cascade.
 - C: DAG acyclic but some modules mix concerns. Within LOC budgets.
 - F: Dependency cycles, God modules, or budget violations.
 
-#### 6. Performance (Weight: 1.5×)
+#### 6. Performance (Weight: 2.5×)
 
 *Are spec performance targets met or credibly on track?*
 
@@ -320,9 +320,9 @@ Calculate the weighted GPA:
 composite = Σ(score_i × weight_i) / Σ(weight_i)
 
 Weights: Correctness=3, Completeness=2, Verification=2, Quality=1.5,
-         Architecture=1.5, Performance=1.5, Durability=2, Ergonomics=0.5,
+         Architecture=1.5, Performance=2.5, Durability=2, Ergonomics=0.5,
          Axiological=2, Process=1
-         Total weight = 17
+         Total weight = 18
 ```
 
 Convert composite to letter grade using the same scale.

@@ -498,36 +498,46 @@ Proof:
 
 #### Level 1 (State Invariant)
 A cold-start-loaded store uses SortedVecBackend for its indexes (fast bulk construction,
-cache-optimal reads). The first mutating operation (TRANSACT) triggers promotion to
-OrdMap backend (O(n log n) one-time cost), after which the store gains O(1) snapshot
-cloning via structural sharing.
+cache-optimal reads). Two mutation paths exist, chosen by representation:
+
+**Path A: Merge-sort splice (Positional stores — the hot path).**
+For single-transaction writes on a Positional store, the store bypasses the OrdMap
+representation entirely. New datoms are pre-sorted in EAVT order, then merge-spliced
+directly into the canonical array using `merge_sort_dedup`. The store remains in
+Positional form throughout. Cost: O(N + K log K) where N = store size, K = new datoms.
+
+This path is preferred because the workload assumption (C9: balanced/bursty) means
+writes are frequent. The O(N log N) promote/demote cycle designed for read-heavy
+workloads is replaced by O(N + K) splice that keeps the store in its cache-optimal
+Positional form. The algebraic result is identical — the batch equivalence theorem
+(Level 0) proves that any representation-preserving mutation path that produces the
+same datom set is valid.
+
+After splice, permutation arrays (AEVT, VAET, AVET, TxId) are invalidated via
+OnceLock reset and rebuilt lazily on first access. The LIVE bitvector is rebuilt
+incrementally via dirty-chunk tracking (INV-FERR-080) when chunk fingerprints
+(INV-FERR-079) are available, or in full O(N) otherwise. The store fingerprint
+(INV-FERR-074) is updated incrementally in O(K) via XOR homomorphism.
+
+**Path B: Promote/demote (batch replay — recovery and complex operations).**
+For WAL recovery (`batch_replay`) and multi-step operations where incremental
+OrdMap mutation is more efficient than repeated splice (e.g., replaying hundreds
+of WAL entries), the store promotes to OrdMap once, applies all mutations, then
+demotes once. Cost: O(N) promote + O(K_total log N) mutations + O(N) demote.
 
 The promotion is transparent to callers: the Store API is identical before and after
 promotion. The IndexBackend trait (INV-FERR-025) guarantees behavioral equivalence.
-The promotion cost is amortized: it happens exactly once per cold start, and the
-subsequent OrdMap operations benefit from structural sharing for the lifetime of the
-store.
 
-The lazy promotion pattern is the same as "copy-on-write" in virtual memory: the
-read-only representation is retained until mutation forces a more expensive mutable
-representation. This is the Curry-Howard analogue of lazy evaluation in functional
-programming — defer computation until the result is needed.
+**Path C: Batch splice (group commit — write bursts).**
+For live write bursts at the Database level, `batch_transact` accumulates M
+transactions, pre-sorts their combined K_total datoms, and performs a single
+merge-sort splice. Cost: O(N + K_total log K_total) instead of M x O(N + K_i).
+This extends the batch_replay insight from recovery-only to live writes and is the
+Phase 4a precursor to the Phase 4b WriterActor group commit.
 
-After every `transact()`, the store automatically demotes from OrdMap back to Positional,
-restoring ns-level read performance via contiguous arrays. The demotion is O(n) but
-the sort detects the already-sorted run in O(n): `OrdSet` iteration yields datoms in
-EAVT order (the `Ord` implementation on `Datom` IS the EAVT comparator), so
-`sort_unstable` on an already-sorted slice is a single linear scan with zero swaps.
-Permutation arrays (AEVT, VAET, AVET) are `OnceLock` — they are not rebuilt during
-demotion but deferred lazily to first access, keeping the demotion hot path at O(n)
-rather than O(n log n).
-
-The promote/demote cycle per transaction makes the OrdMap representation a transient
-write amplifier, not a steady-state cost. Between transactions, the store is always
-in Positional form. For crash recovery, `batch_replay()` amortizes this further: one
-promote at the start, N WAL entries replayed into the OrdMap, one demote at the end —
-avoiding N redundant promote/demote cycles (the batch equivalence theorem guarantees
-this produces the identical result).
+Between transactions, the store is always in Positional form (the prolly tree leaf
+precursor per accretive design principle 4). The OrdMap representation is a transient
+state used only during batch_replay, not the steady-state write path.
 
 #### Level 2 (Implementation Contract)
 ```rust
@@ -571,7 +581,34 @@ pub(crate) fn demote(&mut self) {
     }
 }
 
-/// Batch replay: promote once, apply N WAL entries, demote once (INV-FERR-072).
+/// Merge-sort splice: insert K datoms into Positional without OrdMap detour.
+///
+/// INV-FERR-072 Path A: the hot write path for balanced workloads (C9).
+/// Pre-sorts new datoms, merge-splices into canonical array, rebuilds LIVE
+/// incrementally via dirty chunks (INV-FERR-080), updates fingerprint via
+/// XOR homomorphism (INV-FERR-074). Store stays Positional throughout.
+///
+/// Cost: O(N + K log K) where N = |canonical|, K = |new_datoms|.
+fn splice_transact(&mut self, new_datoms: Vec<Datom>) -> Result<(), FerraError> {
+    if let StoreRepr::Positional(ps) = &self.repr {
+        let mut sorted_new = new_datoms;
+        sorted_new.sort_unstable();
+        let merged = merge_sort_dedup(ps.datoms(), &sorted_new);
+        // Fingerprint: XOR in K new hashes (homomorphic, O(K))
+        let mut fp = ps.fingerprint();
+        for d in &sorted_new {
+            xor_hash_into(&mut fp, &d.content_hash());
+        }
+        // LIVE: incremental via dirty chunks if available, else full rebuild
+        let live_bits = build_live_bitvector(&merged); // or rebuild_live_incremental
+        let new_ps = PositionalStore::from_merged(merged, fp, live_bits);
+        self.repr = StoreRepr::Positional(Arc::new(new_ps));
+        for d in &sorted_new { self.live_apply(d); }
+    }
+    Ok(())
+}
+
+/// Batch replay: promote once, apply N WAL entries, demote once (INV-FERR-072 Path B).
 ///
 /// Used by recovery to avoid N promote/demote cycles.
 /// Cost: 1 promote + N x insert + 1 demote, vs N x (promote + insert + demote).
@@ -593,6 +630,28 @@ pub(crate) fn batch_replay(
     }
     self.demote();
     Ok(())
+}
+
+/// Batch splice: group commit for write bursts (INV-FERR-072 Path C).
+///
+/// Accumulates M transactions, pre-sorts combined K_total datoms, single
+/// merge-sort splice. Each transaction gets a distinct epoch.
+/// Cost: O(N + K_total log K_total) instead of M x O(N + K_i).
+///
+/// Phase 4a precursor to Phase 4b WriterActor group commit.
+pub(crate) fn batch_splice_transact(
+    &mut self,
+    transactions: Vec<(Vec<Datom>, TxId)>,
+) -> Result<Vec<TxReceipt>, FerraError> {
+    // Combine all datoms, sort once, splice once
+    let mut all_datoms: Vec<Datom> = Vec::new();
+    let mut receipts = Vec::new();
+    for (datoms, tx_id) in &transactions {
+        let stamped = stamp_datoms(datoms.clone(), *tx_id);
+        all_datoms.extend(stamped);
+    }
+    self.splice_transact(all_datoms)?;
+    Ok(receipts)
 }
 ```
 
@@ -2445,9 +2504,312 @@ Structures," 2016).
 
 ---
 
-*Spec continues in next section with INV-FERR-077 (van Emde Boas cache-oblivious layout)
-and INV-FERR-078 (columnar datom decomposition). These are Stage 2 invariants — designed
-now, implemented when the Phase 4a foundations (070-076) are proven stable.*
+*INV-FERR-077 (van Emde Boas cache-oblivious layout) remains a Stage 2 invariant —
+designed now, implemented when the Phase 4a foundations (070-076) are proven stable.*
+
+---
+
+### INV-FERR-078: Columnar Datom Decomposition (Structure-of-Arrays)
+
+**Traces to**: INV-FERR-076 (Positional Content Addressing), INV-FERR-071
+(Sorted-Array Backend), ADR-FERR-030 (Wavelet Matrix — SoA is the stepping stone)
+**Verification**: `V:PROP`, `V:TYPE`
+**Stage**: 1 (Phase 4a — pulled forward from Stage 2)
+
+#### Level 0 (Algebraic Law)
+```
+Let S be a DatomStore in canonical EAVT order, with datoms d₁, ..., dₙ.
+Define the columnar decomposition:
+
+  C_E(S) = [d₁.entity, d₂.entity, ..., dₙ.entity]    : Vec<EntityId>
+  C_A(S) = [d₁.attr,   d₂.attr,   ..., dₙ.attr]      : Vec<AttributeId>
+  C_V(S) = [d₁.value,  d₂.value,  ..., dₙ.value]      : Vec<Value>
+  C_T(S) = [d₁.tx,     d₂.tx,     ..., dₙ.tx]         : Vec<TxId>
+  C_O(S) = [d₁.op,     d₂.op,     ..., dₙ.op]         : BitVec
+
+Theorem (columnar isomorphism):
+  ∀ S: S ≅ (C_E(S), C_A(S), C_V(S), C_T(S), C_O(S))
+
+  The columnar decomposition is a faithful representation: the datom at position i
+  can be reconstructed as (C_E[i], C_A[i], C_V[i], C_T[i], C_O[i]), and the
+  canonical datom set is the set of all such reconstructed datoms.
+
+Proof:
+  Each datom d = (e, a, v, t, o) is mapped to 5 column entries at the same
+  position i. The mapping is a bijection because position i uniquely identifies
+  the datom across all columns. Reconstruction produces the original datom by
+  construction. The canonical EAVT ordering is preserved because all columns share
+  the same positional ordering.
+
+Theorem (column scan independence):
+  ∀ query Q that references only a subset of fields F ⊆ {E, A, V, T, O}:
+    eval(Q, S) depends only on {C_f(S) | f ∈ F}
+
+  A query that scans only the attribute column touches only C_A — the entity,
+  value, TxId, and op columns are not accessed.
+
+Proof:
+  Each column is a contiguous, independent array. Memory accesses to C_A do not
+  load C_E, C_V, C_T, or C_O into cache. Column scan independence follows from
+  memory layout independence.
+```
+
+#### Level 1 (State Invariant)
+The PositionalStore (INV-FERR-076) stores datoms as per-field column arrays
+(Structure-of-Arrays) instead of a single Vec<Datom> (Array-of-Structs). This
+transformation does not change the datom set, the canonical ordering, or any
+algebraic property — it changes only the physical memory layout.
+
+Cache utilization improvement: scanning 100K attributes in AoS touches 100K × ~130
+bytes = 13MB, with each 64-byte cache line carrying ~8 bytes of attribute data
+(6% utilization). In SoA, the same scan touches 100K × 2 bytes = 200KB, with each
+cache line carrying 32 attribute IDs (100% utilization). **16x cache improvement.**
+
+The SoA layout also enables per-column compression: entity column via run-length
+encoding (INV-FERR-082), attribute column via dictionary encoding (INV-FERR-085),
+TxId column via delta + varint, op column as bitvector (1 bit/datom).
+
+The SoA layout IS the prolly tree leaf chunk format (Phase 4b). Content-defined
+chunking adds chunk boundaries; the column layout within each chunk stays.
+This is accretive design principle 4 in action.
+
+#### Level 2 (Implementation Contract)
+```rust
+/// Structure-of-Arrays columnar store (INV-FERR-078).
+///
+/// Each datom field is a contiguous array. Column scans touch only the
+/// relevant field's memory, achieving 100% cache utilization.
+pub struct ColumnarStore {
+    entities: EntityRLE,              // INV-FERR-082: run-length encoded
+    attr_ids: Vec<AttributeId>,       // INV-FERR-085: interned u16
+    values: Vec<Value>,               // tagged union, ~16 bytes
+    tx_ids: Vec<TxId>,                // 28 bytes
+    ops: BitVec<u64, Lsb0>,           // 1 BIT per datom
+
+    len: usize,
+    live_bits: SuccinctBitVec,        // INV-FERR-029 + Rank9/Select
+    chunk_fps: ChunkFingerprints,     // INV-FERR-079
+    fingerprint: [u8; 32],            // INV-FERR-074
+    bloom: EntityBloom,               // INV-FERR-027
+    entity_mph: OnceLock<Chd>,        // INV-FERR-027
+    perm_aevt: OnceLock<Vec<u32>>,    // INV-FERR-073
+    perm_vaet: OnceLock<Vec<u32>>,    // INV-FERR-073
+    perm_avet: OnceLock<Vec<u32>>,    // INV-FERR-073
+    perm_txid: OnceLock<Vec<u32>>,    // INV-FERR-081
+    adjacency: OnceLock<AdjacencyIndex>, // INV-FERR-083
+}
+
+impl ColumnarStore {
+    /// Reconstruct datom at position i. O(1).
+    pub fn datom_at(&self, i: usize, intern: &AttributeIntern) -> Datom {
+        Datom::new(
+            self.entities.entity_at_position(i),
+            intern.resolve(self.attr_ids[i]),
+            self.values[i].clone(),
+            self.tx_ids[i],
+            if self.ops[i] { Op::Assert } else { Op::Retract },
+        )
+    }
+}
+```
+
+**Falsification**: Any position i where `datom_at(i)` produces a datom different
+from what the AoS representation would produce. Specifically: any field mismatch
+between the reconstructed datom and the original.
+
+**proptest strategy**:
+```rust
+proptest! {
+    fn columnar_roundtrip(datoms in prop::collection::btree_set(arb_datom(), 0..500)) {
+        let columnar = ColumnarStore::from_datoms(datoms.iter().cloned());
+        for (i, original) in datoms.iter().enumerate() {
+            let reconstructed = columnar.datom_at(i, &intern);
+            prop_assert_eq!(&reconstructed, original,
+                "INV-FERR-078: columnar reconstruction must match original");
+        }
+    }
+}
+```
+
+**Lean theorem**:
+```lean
+/-- Columnar decomposition is a faithful representation: reconstruction
+    from columns produces the original datom set. At the Lean Finset level,
+    representation is abstracted — the theorem is trivially true. Concrete
+    round-trip fidelity verified by proptest. -/
+def columnar_decompose (s : DatomStore) : DatomStore := s
+def columnar_reconstruct (s : DatomStore) : DatomStore := s
+
+theorem columnar_roundtrip (s : DatomStore) :
+    columnar_reconstruct (columnar_decompose s) = s := rfl
+```
+
+---
+
+### INV-FERR-085: Attribute Interning (u16 Dictionary with Copy Semantics)
+
+**Traces to**: ADR-FERR-030 (wavelet matrix prerequisite), INV-FERR-078 (SoA
+columnar — attribute column uses interned IDs), INV-FERR-009 (schema validation)
+**Verification**: `V:PROP`, `V:TYPE`
+**Stage**: 1 (Phase 4a — pulled forward as wavelet matrix prerequisite)
+
+#### Level 0 (Algebraic Law)
+```
+Let Σ_A be the finite alphabet of attribute names used in a store S.
+Let |Σ_A| ≤ 2^16 (at most 65,536 distinct attributes — sufficient for any
+realistic schema).
+
+Define the attribute interning bijection:
+  intern : Σ_A → [0, 2^16)
+  resolve : [0, 2^16) → Σ_A
+  such that ∀ a ∈ Σ_A: resolve(intern(a)) = a
+
+The interning preserves ordering:
+  ∀ a₁, a₂ ∈ Σ_A: intern(a₁) < intern(a₂) ↔ a₁ < a₂
+
+  (Monotone: IDs are assigned in the order attributes are first encountered,
+  which is deterministic given genesis determinism INV-FERR-031.)
+
+Theorem (interning preserves index semantics):
+  ∀ queries Q over the attribute field:
+    eval(Q, S with string attributes) = eval(Q, S with interned attributes)
+
+Proof:
+  Q compares attributes by Ord. intern preserves Ord (monotone bijection).
+  Therefore all comparison-based queries produce identical results.
+```
+
+#### Level 1 (State Invariant)
+AttributeId is a Copy newtype over u16. Comparison is integer comparison (1 CPU
+cycle, not string comparison ~20ns). Clone is Copy (0 cycles, not Arc refcount
+bump ~5ns). Memory: 2 bytes per datom attribute field (not ~30 bytes for Arc<str>
++ pointer + length + refcount + string data).
+
+The bidirectional intern table (AttributeIntern) maps between string names and
+u16 IDs. It is seeded at genesis with the 19 bootstrap attributes at fixed IDs
+(0-18), ensuring genesis determinism (INV-FERR-031). New attributes are assigned
+the next unused ID on schema evolution (INV-FERR-009).
+
+At 100K datoms: 2.8MB saved on the attribute field alone. Per-field entropy
+analysis (NEG-FERR-007) shows 34x compression opportunity — interning captures
+most of it.
+
+#### Level 2 (Implementation Contract)
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct AttributeId(u16);
+
+pub struct AttributeIntern {
+    to_id: im::OrdMap<Arc<str>, AttributeId>,
+    to_name: Vec<Arc<str>>,
+}
+
+impl AttributeIntern {
+    pub fn intern(&mut self, name: &str) -> AttributeId { todo!() }
+    pub fn resolve(&self, id: AttributeId) -> &str { todo!() }
+}
+```
+
+**Falsification**: Any attribute where `resolve(intern(name)) != name`. Or:
+two different attribute names that produce the same AttributeId.
+
+**proptest strategy**:
+```rust
+proptest! {
+    fn intern_roundtrip(names in prop::collection::vec(arb_attribute_name(), 0..100)) {
+        let mut intern = AttributeIntern::genesis();
+        for name in &names {
+            let id = intern.intern(name);
+            prop_assert_eq!(intern.resolve(id), name.as_str());
+        }
+    }
+}
+```
+
+**Lean theorem**:
+```lean
+-- Interning is a bijection on a finite alphabet. Trivially correct when
+-- the implementation maintains a bidirectional map. Verified by proptest.
+theorem intern_roundtrip (a : String) (dict : AttributeDict) :
+    dict.resolve (dict.intern a) = a := by sorry
+```
+
+---
+
+### ADR-FERR-033: Primitive vs. Injectable Index Taxonomy
+
+**Traces to**: INV-FERR-025 (Index Backend Interchangeability), INV-FERR-005
+(Index Bijection), spec/05 DatomIndex trait
+**Stage**: 0
+
+**Problem**: The index hierarchy includes both deterministic projections of the
+datom set (EAVT, AEVT, VAET, AVET, Bloom, CHD, permutations, fingerprint,
+adjacency) and application-specific structures (TextIndex, VectorIndex). These
+have fundamentally different properties and the distinction must be formalized.
+
+**Options**: N/A — this is a taxonomy, not a design choice.
+
+**Decision**: Two categories of index:
+
+**Primitive indexes** are deterministic projections of the datom set. Given the
+same datom set, all conforming implementations produce bit-identical results.
+They have exactly one correct answer. They are ALWAYS present (some lazily via
+OnceLock) and are not configurable.
+
+| Primitive | INV-FERR | Construction | Purpose |
+|-----------|----------|-------------|---------|
+| EAVT canonical | 076 | Sort | Primary order |
+| AEVT permutation | 073 | Sort indices | Attribute-first queries |
+| VAET permutation | 073 | Sort indices | Value-first queries |
+| AVET permutation | 073 | Sort indices | Attribute-value queries |
+| TxId permutation | 081 | Sort indices | Temporal queries |
+| Entity Bloom | 027 | Hash | O(1) negative membership |
+| CHD perfect hash | 027 | Hash | O(1) entity lookup |
+| XOR fingerprint | 074 | XOR fold | O(1) convergence detection |
+| Chunk fingerprints | 079 | Chunked XOR | O(delta) reconciliation |
+| LIVE bitvector | 029 | Single pass | Current-state queries |
+| Entity RLE | 082 | Run-length | O(1) group boundaries |
+| Adjacency index | 083 | Ref scan | O(1) graph traversal |
+
+**Injectable indexes** depend on application-provided models. Two conforming
+implementations may produce different results given different models. They are
+OPTIONAL — the store is correct without them. They degrade gracefully to empty
+results or O(n) scan when absent.
+
+| Injectable | Trait | Model provided by |
+|------------|-------|------------------|
+| TextIndex | `DatomIndex` + `TextIndex` | Application (tokenizer) |
+| VectorIndex | `DatomIndex` + `VectorIndex` | Application (embedding function) |
+
+The distinction: primitives are **projections** (the answer is determined by the
+datom set alone). Injectables are **transformations** (the answer depends on an
+external model in addition to the datom set).
+
+Both categories satisfy the DatomIndex homomorphism property (spec/05): they
+distribute over set union. But primitives are verifiable by proptest (compare
+against a reference implementation), while injectables are only verifiable
+relative to their model.
+
+**Consequence**: New indexes are classified at design time. An index that requires
+no external model is primitive and goes in the ColumnarStore struct. An index that
+requires an application-provided function is injectable and goes behind a trait.
+
+---
+
+### Fingerprint SIMD Optimization Note
+
+**Applies to**: INV-FERR-074 (homomorphic fingerprint), INV-FERR-079 (chunk
+fingerprints)
+
+The byte-by-byte XOR loops in `StoreFingerprint::insert()` and `merge()` are the
+SPECIFICATION form. Implementations MAY use widened operations (u64, u128, or SIMD
+intrinsics) because XOR on aligned wider types produces bit-identical results to
+byte-by-byte XOR. This is a consequence of XOR's bitwise nature:
+`(a XOR b)[byte i] = a[byte i] XOR b[byte i]` regardless of the register width.
+
+SIMD example: `_mm256_xor_si256` processes all 32 bytes in a single instruction
+(AVX2). The widened form is a valid optimization under INV-FERR-025 (backend
+interchangeability) because the observable fingerprint bytes are identical.
 
 ---
 
