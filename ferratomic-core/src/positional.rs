@@ -877,10 +877,10 @@ pub(crate) fn merge_sort_dedup(a: &[Datom], b: &[Datom]) -> Vec<Datom> {
 }
 
 // ---------------------------------------------------------------------------
-// Internal: interpolation search on EAVT canonical array (INV-FERR-027)
+// Internal: interpolation search on EAVT canonical array (INV-FERR-077, contributes to INV-FERR-027)
 // ---------------------------------------------------------------------------
 
-/// Interpolation search on EAVT-sorted canonical array (contributes to INV-FERR-027).
+/// Interpolation search on EAVT-sorted canonical array (INV-FERR-077, contributes to INV-FERR-027).
 ///
 /// O(log log n) expected for inter-entity lookup (BLAKE3 uniformity).
 /// Within a same-entity block (multiple datoms per entity), degrades to
@@ -919,6 +919,7 @@ fn interpolation_search<'a>(canonical: &'a [Datom], key: &EavtKey) -> Option<&'a
                 u128::from(key_val.saturating_sub(lo_val)) * u128::from((hi - lo) as u64);
             let denominator = u128::from(hi_val - lo_val);
             let ratio = numerator / denominator;
+            // NEG-FERR-001: unwrap_or is panic-free — falls back to hi on overflow
             let estimate = lo + usize::try_from(ratio).unwrap_or(hi);
             estimate.clamp(lo, hi)
         };

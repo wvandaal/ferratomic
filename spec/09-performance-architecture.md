@@ -631,6 +631,18 @@ proptest! {
         prop_assert_eq!(before, after,
             "INV-FERR-072: demotion must preserve the datom set");
     }
+
+    fn demotion_roundtrip_after_transact(
+        datoms in prop::collection::btree_set(arb_datom(), 0..200),
+        new_datom in arb_datom(),
+    ) {
+        let mut store = Store::from_datoms(datoms);
+        // transact triggers promote + insert + demote automatically
+        store.transact_test(Transaction::from_datom(new_datom));
+        // After transact, store should be back in Positional representation
+        prop_assert!(store.positional().is_some(),
+            "INV-FERR-072: store must auto-demote to Positional after transact");
+    }
 }
 ```
 
