@@ -491,9 +491,15 @@ ferratomic-datalog (query: Datalog parser + evaluator)
 **Consequences**:
 - `ferratom` gains a dependency on `ferratom-clock`. This is the ONLY
   additional internal dependency, preserving the acyclic DAG.
+- `ferratom-clock` has zero project-internal dependencies (leaf crate).
 - `HybridClock`, `TxId`, `AgentId`, and `Frontier` are re-exported from
   `ferratom` for backward compatibility (consumers don't need to add
   `ferratom-clock` to their `Cargo.toml`).
+- Default type parameter `HybridClock<C = SystemClock>` preserves all
+  existing call sites without requiring generic annotation.
+- Test-only constructor `TxId::new()` is behind
+  `#[cfg(any(test, feature = "test-utils"))]` to prevent production code
+  from constructing transaction IDs without a clock.
 - INV-FERR-023 (`#![forbid(unsafe_code)]`) applies to ferratom-clock.
 
 ---

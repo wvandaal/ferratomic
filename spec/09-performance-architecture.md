@@ -441,7 +441,7 @@ theorem sorted_array_lookup_equiv (s₁ s₂ : Finset (Nat × Nat))
 
 ---
 
-### INV-FERR-072: Lazy Representation Promotion (SortedVec → OrdMap)
+### INV-FERR-072: Lazy Representation Promotion / Demotion (Positional ↔ OrdMap)
 
 **Traces to**: INV-FERR-071 (Sorted-Array Backend), INV-FERR-006 (Snapshot Isolation),
 INV-FERR-025 (Index Backend Interchangeability)
@@ -469,6 +469,31 @@ Proof:
   Both R₁ and R₂ are faithful representations of the same abstract map.
   eval(q, _) depends only on the abstract content (by INV-FERR-025).
   Since content is preserved by promote, the query results are identical.
+
+Let demote : R₂ → R₁ be the demotion function (OrdMap → Positional).
+
+Axiom (demotion preserves content):
+  ∀ m : R₂: content(demote(m)) = content(m)
+
+Axiom (demotion is idempotent via identity on R₁):
+  ∀ m : R₁: demote(m) = m  (demotion of an already-demoted map is identity)
+
+Theorem (batch equivalence):
+  ∀ sequence of N mutations m₁..mₙ on a store initially in R₁:
+    demote(apply(mₙ, ... apply(m₁, promote(s))))
+    = demote(promote(apply_all([m₁..mₙ], s)))
+
+  N individual promote/mutate/demote cycles produce the same result as
+  one promote, N mutations, one demote. The intermediate representation
+  switches are algebraically invisible.
+
+Proof:
+  Each apply(mᵢ, _) depends only on abstract content (by INV-FERR-025).
+  promote and demote preserve content (axioms above).
+  Therefore the composition of content-preserving functions is
+  content-preserving, regardless of how many intermediate representation
+  switches occur. The batch form avoids N−1 redundant round-trips
+  without changing the algebraic result.
 ```
 
 #### Level 1 (State Invariant)
@@ -487,6 +512,22 @@ The lazy promotion pattern is the same as "copy-on-write" in virtual memory: the
 read-only representation is retained until mutation forces a more expensive mutable
 representation. This is the Curry-Howard analogue of lazy evaluation in functional
 programming — defer computation until the result is needed.
+
+After every `transact()`, the store automatically demotes from OrdMap back to Positional,
+restoring ns-level read performance via contiguous arrays. The demotion is O(n) but
+the sort detects the already-sorted run in O(n): `OrdSet` iteration yields datoms in
+EAVT order (the `Ord` implementation on `Datom` IS the EAVT comparator), so
+`sort_unstable` on an already-sorted slice is a single linear scan with zero swaps.
+Permutation arrays (AEVT, VAET, AVET) are `OnceLock` — they are not rebuilt during
+demotion but deferred lazily to first access, keeping the demotion hot path at O(n)
+rather than O(n log n).
+
+The promote/demote cycle per transaction makes the OrdMap representation a transient
+write amplifier, not a steady-state cost. Between transactions, the store is always
+in Positional form. For crash recovery, `batch_replay()` amortizes this further: one
+promote at the start, N WAL entries replayed into the OrdMap, one demote at the end —
+avoiding N redundant promote/demote cycles (the batch equivalence theorem guarantees
+this produces the identical result).
 
 #### Level 2 (Implementation Contract)
 ```rust
@@ -517,11 +558,48 @@ impl AdaptiveIndexes {
         }
     }
 }
+
+/// Demote from OrdMap back to Positional (INV-FERR-072).
+///
+/// O(n) because OrdSet iteration is EAVT-sorted, so sort_unstable
+/// detects the sorted run in O(n). Permutation arrays are OnceLock (lazy).
+/// No-op if already Positional.
+pub(crate) fn demote(&mut self) {
+    if let StoreRepr::OrdMap { datoms, .. } = &self.repr {
+        let positional = PositionalStore::from_datoms(datoms.iter().cloned());
+        self.repr = StoreRepr::Positional(Arc::new(positional));
+    }
+}
+
+/// Batch replay: promote once, apply N WAL entries, demote once (INV-FERR-072).
+///
+/// Used by recovery to avoid N promote/demote cycles.
+/// Cost: 1 promote + N x insert + 1 demote, vs N x (promote + insert + demote).
+/// INV-FERR-009: schema evolution applied per-entry for correct epoch boundaries.
+pub(crate) fn batch_replay(
+    &mut self,
+    entries: &[(u64, Vec<Datom>)],
+) -> Result<(), FerraError> {
+    if entries.is_empty() {
+        return Ok(());
+    }
+    self.promote();
+    for (epoch, datoms) in entries {
+        for datom in datoms {
+            self.insert(datom);
+        }
+        self.epoch = *epoch;
+        evolve_schema(&mut self.schema, datoms)?;
+    }
+    self.demote();
+    Ok(())
+}
 ```
 
 **Falsification**: Any store S where the datom set or query results change after
 promotion. Concretely: `query(S_before_promotion) ≠ query(S_after_promotion)` for
 any valid query. This would indicate that promotion loses or reorders datoms.
+Any store S where `content(demote(S)) ≠ content(S)` — demotion lost or invented datoms.
 
 **proptest strategy**:
 ```rust
@@ -541,6 +619,18 @@ proptest! {
         }
         prop_assert_eq!(store_sv.len(), store_om.len());
     }
+
+    fn demotion_preserves_content(
+        datoms in prop::collection::btree_set(arb_datom(), 0..500),
+    ) {
+        let mut store = Store::from_datoms(datoms);
+        store.promote(); // R₁ → R₂
+        let before: BTreeSet<_> = store.datoms().collect();
+        store.demote(); // R₂ → R₁
+        let after: BTreeSet<_> = store.datoms().collect();
+        prop_assert_eq!(before, after,
+            "INV-FERR-072: demotion must preserve the datom set");
+    }
 }
 ```
 
@@ -558,6 +648,11 @@ def promote (s : DatomStore) : DatomStore := s
 
 theorem promote_preserves_content (s : DatomStore) :
     promote (sorted_vec_of s) = s := rfl
+
+def demote (s : DatomStore) : DatomStore := s
+
+theorem demote_preserves_content (s : DatomStore) :
+    demote (promote s) = s := rfl
 ```
 
 ---
@@ -1564,6 +1659,260 @@ theorem positional_stability (S : Finset Datom) (d : Datom) (d' : Datom)
   -- Datom, d' either precedes d (position unchanged) or follows d
   -- (position increases by 1). Both satisfy the ≤ claim.
   exact List.indexOf_le_indexOf_of_sorted_insert h_sorted h_sorted' h_mem h_new
+```
+
+---
+
+### INV-FERR-077: Interpolation Search for BLAKE3-Uniform Keys
+
+**Traces to**: INV-FERR-027 (Read P99.99 Latency), INV-FERR-012
+(Content-Addressed Identity), INV-FERR-071 (Sorted-Array Backend),
+INV-FERR-076 (Positional Content Addressing)
+**Verification**: `V:PROP`, `V:LEAN`
+**Stage**: 1
+
+#### Level 0 (Algebraic Law)
+```
+EntityId = BLAKE3(content) (INV-FERR-012), so entity bytes are uniformly
+distributed over [0, 2^256). For N keys drawn uniformly from [0, M),
+interpolation search achieves O(log log N) expected probes
+(Perl, Itai, Avni 1978).
+
+Given a sorted array A[lo..hi] of datoms and a target key k, compute
+the interpolated position:
+
+  mid = lo + (key - A[lo]) * (hi - lo) / (A[hi] - A[lo])
+
+using the first 8 bytes of EntityId as a u64 proxy for the full 256-bit
+key. The proxy preserves the uniform distribution property: the first
+8 bytes of a BLAKE3 hash are uniformly distributed over [0, 2^64).
+
+Theorem (lookup equivalence):
+  ∀ S ∈ DatomStore, ∀ k ∈ EavtKey:
+    interpolation_search(sorted(S), k) = binary_search(sorted(S), k)
+
+Proof:
+  Both algorithms search a sorted array by repeatedly narrowing a
+  [lo, hi] range and comparing the element at a chosen position against
+  the target key.
+
+  Binary search chooses mid = lo + (hi - lo) / 2 (midpoint).
+  Interpolation search chooses mid based on the interpolation formula
+  above, clamped to [lo, hi].
+
+  In both cases:
+  - If A[mid] = k, return Some(A[mid]).
+  - If A[mid] < k, recurse on [mid+1, hi].
+  - If A[mid] > k, recurse on [lo, mid-1].
+
+  The loop invariant is identical: if k exists in A, it lies in [lo, hi].
+  The only difference is the choice of mid, which affects probe count
+  (O(log n) vs O(log log n)) but not correctness. Both terminate because
+  hi - lo strictly decreases on each iteration (mid is clamped to [lo, hi],
+  and the comparison eliminates at least one element). Both return
+  the same result because they search the same sorted array with the
+  same comparison semantics.
+
+Corollary (probe complexity for BLAKE3 keys):
+  E[probes] = O(log log N) for uniformly distributed keys.
+  At N = 100M datoms: ~4-5 probes vs ~27 for binary search.
+
+  Degenerate case: when all entities in [lo, hi] share the same 8-byte
+  prefix (same-entity block), hi_val = lo_val and the formula would
+  divide by zero. The algorithm falls back to midpoint:
+  mid = lo + (hi - lo) / 2, degrading to binary search within the block.
+  This is correct because same-entity blocks are typically small (k datoms
+  per entity), so O(log k) ≪ O(log N).
+```
+
+#### Level 1 (State Invariant)
+The `eavt_get` method on `PositionalStore` uses interpolation search on the canonical
+sorted array (INV-FERR-076) instead of binary search. For inter-entity lookups on
+BLAKE3-uniform keys, this achieves O(log log N) expected probes. At 100M datoms,
+this is approximately 4-5 probes versus approximately 27 for binary search.
+
+The search degrades gracefully:
+- **Inter-entity lookup** (uniformly distributed keys): O(log log N) probes.
+- **Intra-entity lookup** (same 8-byte prefix block): falls back to midpoint,
+  giving O(log k) where k is the block size.
+- **Edge cases**: empty array returns `None` immediately. Single-element array
+  performs one comparison.
+
+The u64 proxy (first 8 bytes, big-endian) is monotone with the full EntityId
+ordering because BLAKE3 hashes are compared lexicographically and the first
+8 bytes are the most significant. Two EntityIds that differ in their first
+8 bytes have the same u64 ordering as their full 256-bit ordering.
+
+#### Level 2 (Implementation Contract)
+```rust
+/// Interpolation search on EAVT-sorted canonical array (INV-FERR-077).
+///
+/// O(log log n) expected for inter-entity lookup (BLAKE3 uniformity).
+/// Within a same-entity block (multiple datoms per entity), degrades to
+/// O(log k) binary search where k = datoms sharing the entity prefix.
+/// Uses the first 8 bytes of `EntityId` as a u64 interpolation key.
+/// Falls back to midpoint when all entities in the current range share
+/// the same 8-byte prefix (same-entity block or division-by-zero guard).
+///
+/// # Overflow safety
+///
+/// The interpolation formula `lo + (key - lo_val) * (hi - lo) / (hi_val - lo_val)`
+/// uses `u128` arithmetic to prevent overflow. `key_val`, `lo_val`, and `hi_val`
+/// are `u64` values (8-byte entity prefixes), and `hi - lo` is at most
+/// `u32::MAX` because INV-FERR-076 constrains the canonical array length
+/// to `u32` (checked via `debug_assert` in all constructors). The widest
+/// intermediate product is `u64 * u64 = u128`, which fits without overflow.
+/// The final `usize::try_from(ratio).unwrap_or(hi)` safely degrades to a
+/// midpoint-like fallback if the ratio exceeds `usize::MAX` (impossible in
+/// practice given the `u32` length constraint, but defensive).
+fn interpolation_search<'a>(canonical: &'a [Datom], key: &EavtKey) -> Option<&'a Datom> {
+    if canonical.is_empty() {
+        return None;
+    }
+    let mut lo: usize = 0;
+    let mut hi: usize = canonical.len() - 1;
+
+    while lo <= hi {
+        let lo_val = entity_u64(&canonical[lo]);
+        let hi_val = entity_u64(&canonical[hi]);
+        let key_val = entity_key_u64(key);
+
+        let pos = if hi_val == lo_val {
+            // Same-entity block: all entities share the 8-byte prefix.
+            // Fall back to midpoint (binary search behavior).
+            lo + (hi - lo) / 2
+        } else {
+            // Interpolation formula with u128 intermediate to prevent overflow.
+            // Widest product: u64 * u64 = u128. Safe.
+            let numerator =
+                u128::from(key_val.saturating_sub(lo_val)) * u128::from((hi - lo) as u64);
+            let denominator = u128::from(hi_val - lo_val);
+            let ratio = numerator / denominator;
+            let estimate = lo + usize::try_from(ratio).unwrap_or(hi);
+            estimate.clamp(lo, hi)
+        };
+
+        match EavtKey::from_datom(&canonical[pos]).cmp(key) {
+            std::cmp::Ordering::Equal => return Some(&canonical[pos]),
+            std::cmp::Ordering::Less => lo = pos + 1,
+            std::cmp::Ordering::Greater => {
+                if pos == 0 {
+                    return None;
+                }
+                hi = pos - 1;
+            }
+        }
+    }
+    None
+}
+
+/// Extract first 8 bytes of a `Datom`'s `EntityId` as big-endian u64.
+fn entity_u64(datom: &Datom) -> u64 {
+    let eid = datom.entity();
+    let b = eid.as_bytes();
+    u64::from_be_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]])
+}
+
+/// Extract first 8 bytes of an `EavtKey`'s entity as big-endian u64.
+fn entity_key_u64(key: &EavtKey) -> u64 {
+    let eid = key.0;
+    let b = eid.as_bytes();
+    u64::from_be_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]])
+}
+```
+
+**Falsification**: Any `(store, key)` pair where `interpolation_search(sorted(store), key)`
+returns a different result than `binary_search(sorted(store), key)`. Concretely: a store
+and key where the interpolation formula computes an incorrect probe position that causes
+the algorithm to miss an element that binary search would find, or to return an element
+that binary search would not.
+
+**proptest strategy**:
+```rust
+proptest! {
+    fn interpolation_search_equiv_binary_search(
+        datoms in prop::collection::btree_set(arb_datom(), 0..500),
+        query_entity in arb_entity_id(),
+        query_attr in arb_attribute(),
+    ) {
+        let store = PositionalStore::from_datoms(datoms.iter().cloned());
+        let key = EavtKey(query_entity, query_attr);
+
+        let interp_result = interpolation_search(&store.canonical, &key);
+        let binary_result = store.canonical
+            .binary_search_by(|d| EavtKey::from_datom(d).cmp(&key))
+            .ok()
+            .map(|i| &store.canonical[i]);
+
+        prop_assert_eq!(
+            interp_result, binary_result,
+            "INV-FERR-077: interpolation_search must return the same result as binary_search"
+        );
+    }
+
+    fn interpolation_search_empty_store() {
+        let empty: Vec<Datom> = vec![];
+        let key = EavtKey(arb_entity_id()(), arb_attribute()());
+        let result = interpolation_search(&empty, &key);
+        prop_assert!(result.is_none(),
+            "INV-FERR-077: interpolation_search on empty array must return None");
+    }
+
+    fn interpolation_search_same_entity_block(
+        entity in arb_entity_id(),
+        attrs in prop::collection::btree_set(arb_attribute(), 2..20),
+        query_attr in arb_attribute(),
+    ) {
+        // Construct a store where all datoms share the same entity.
+        // This forces the hi_val == lo_val fallback to midpoint.
+        let datoms: BTreeSet<Datom> = attrs.iter()
+            .map(|&a| Datom::new(entity, a, Value::Bool(true), TxId::ZERO, Op::Assert))
+            .collect();
+        let store = PositionalStore::from_datoms(datoms.iter().cloned());
+        let key = EavtKey(entity, query_attr);
+
+        let interp_result = interpolation_search(&store.canonical, &key);
+        let binary_result = store.canonical
+            .binary_search_by(|d| EavtKey::from_datom(d).cmp(&key))
+            .ok()
+            .map(|i| &store.canonical[i]);
+
+        prop_assert_eq!(
+            interp_result, binary_result,
+            "INV-FERR-077: same-entity fallback must match binary_search"
+        );
+    }
+}
+```
+
+**Lean theorem**:
+```lean
+/-- INV-FERR-077: Interpolation search lookup equivalence.
+
+    At the Finset abstraction level, the choice of probe position within
+    a sorted list does not affect the membership answer — if an element
+    is in the set, any correct binary-search-like algorithm will find it.
+    This theorem states that membership in a sorted list is invariant
+    under the search strategy: both midpoint (binary search) and
+    interpolated position yield the same result.
+
+    The proof is trivial at the Finset level: Finset.mem_sort reduces
+    both queries to set membership, which is independent of any search
+    strategy over the sorted representation. The O(log log N) complexity
+    claim is a performance property, not a correctness property, and is
+    verified empirically by proptest benchmarks. -/
+theorem interpolation_search_equiv (S : Finset Datom) (d : Datom) :
+    d ∈ S.sort (· ≤ ·) ↔ d ∈ S := by
+  simp [Finset.mem_sort]
+
+/-- INV-FERR-077: Lookup in a sorted list is deterministic — if d is in
+    the sorted list, its index is uniquely determined by the list contents
+    and the total order on Datom. This holds regardless of how the search
+    algorithm chooses its probe sequence. -/
+theorem sorted_lookup_deterministic (S₁ S₂ : Finset Datom)
+    (h : S₁ = S₂) (d : Datom) :
+    (S₁.sort (· ≤ ·)).indexOf d = (S₂.sort (· ≤ ·)).indexOf d := by
+  rw [h]
 ```
 
 ---

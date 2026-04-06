@@ -276,7 +276,7 @@ verified empirically. The supporting algebraic facts are monotonic growth
 
 **Traces to**: SEED.md §10, INV-FERR-006 (Snapshot Isolation),
 ADR-FERR-001 (Persistent Data Structures), ADR-FERR-003 (Concurrency Model)
-**Referenced by**: INV-FERR-071 (sorted-array backend — 4.5x lookup improvement)
+**Referenced by**: INV-FERR-071 (sorted-array backend — 4.5x lookup improvement), INV-FERR-077 (interpolation search — O(log log N) for BLAKE3 keys)
 **Verification**: `V:PROP`, `V:KANI`
 **Stage**: 0
 
