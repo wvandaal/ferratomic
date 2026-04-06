@@ -1,155 +1,100 @@
 # Ferratomic Continuation — Session 015 (Final State)
 
 > Generated: 2026-04-06
-> Last commit: `7b5f722` "fix(spec): remediate 2 CRITICALs + 2 MAJORs from spec audit"
+> Last commit: `1fb4310` "chore(beads): sequential audit beads 11-28 — structural verification complete"
 > Branch: main
-> Next session goal: Start crate decomposition (4 parallel extractions)
 
----
+## Read First
 
-## Session 015 Summary
+1. `QUICKSTART.md` — project orientation
+2. `AGENTS.md` — guidelines and constraints
+3. `spec/README.md` — load only the spec modules you need
+4. `spec/09-performance-architecture.md` — heavily amended this session
 
-**Re-review + two gate-blocking EPICs + radical performance spec + spec audit.** 8 commits. ~1,200 lines across 7 files.
+## Session Summary
 
-### What happened
-1. Ran full cleanroom re-review (5 parallel agents): 0 CRITICALs, 0 MAJORs, 5 MINORs
-2. Progress review scored composite A (9.38/10.0) — but performance at 8.5 flagged
-3. User corrected workload assumption: balanced/bursty, NOT read-heavy 99:1
-4. Designed 11-crate decomposition (ferratomic-core → 8 focused crates, renamed to ferratomic-db)
-5. Deep performance analysis: promote/demote per transact is O(N log N) waste
-6. Filed radical performance stack: 16 beads across 4 tiers
-7. Spec amended: ADR-FERR-031 (wavelet matrix prerequisites), ADR-FERR-032 (Lean functor composition)
-8. Identified 4 real test failures in threshold tests (bugs, not debug-mode issues)
+### Completed
+- Cleanroom re-review (5 parallel agents): 0 CRITICALs, 0 MAJORs, 5 MINORs
+- Progress review: composite A (9.38/10.0), performance flagged at 8.5
+- 11-crate decomposition designed: ferratomic-core → 8 focused crates, renamed to ferratomic-db
+- Radical performance stack: 20 beads across 4 tiers (structural, alien data structures, information-theoretic, agentic OS)
+- Spec amendments: C9 (balanced workload), INV-FERR-072 rewrite (3 mutation paths), INV-FERR-078 (SoA columnar), INV-FERR-081-085, ADR-FERR-031-033
+- Spec audit: 2 CRITICALs found and fixed (085 ordering axiom, 084 Bloom safety)
+- Full bead audit (28/28 sequential, lifecycle/14): 6 critical findings corrected (fictional exports, circular dependency, missing dep edges, hidden coupling)
+- 16 commits pushed
 
-### Key design decisions
-- **Crate decomposition**: mmap → checkpoint (not WAL), PositionalStore → own crate (not index), recovery → db (not storage), ferratomic-core renamed ferratomic-db
-- **Merge-sort splice**: bypass promote/demote entirely, stay in Positional form (more accretive than OrdMap detour)
-- **Chunk fingerprints (INV-FERR-079)**: the keystone — makes LIVE rebuild O(delta × C) not O(N)
-- **All performance beads stay Phase 4a** — multiple sessions, profile-validated
+### Decisions Made
+- **C9 Balanced workload**: NOT read-heavy 99:1. Write bursts + read bursts + interleaved. Drives entire performance architecture.
+- **Merge-sort splice** (INV-FERR-072 Path A): transact bypasses promote/demote, stays Positional. O(N + K) not O(N log N).
+- **Primitive vs injectable indexes** (ADR-FERR-033): deterministic projections are primitive; app-model-dependent indexes are injectable.
+- **Checkpoint decoupled from Store**: serialize/deserialize accept raw data, not &Store. Breaks circular dependency.
+- **WAL decoupled from Transaction**: append_raw(&[u8]) only. No Transaction import in WAL crate.
+- **Performance weight 2.5x** (up from 1.5x): second only to correctness.
+- **All performance beads stay Phase 4a**: multiple sessions, profile-validated.
 
----
+### Bugs Found
+- bd-pb3b: 4 threshold tests fail (cold start genesis fallback + indexes().unwrap() on Positional)
+- bd-l64y: merge_causal homomorphism inexact for same-TxId cross-Op
+- bd-fcta: WireEntityId pub inner field bypasses trust boundary
+- bd-8rvz: 2 functions over 50 LOC
 
-## Build Health (verified at session end)
+### Stopping Point
+All planning, spec authoring, and bead auditing complete. Zero implementation code written. The project is fully designed, specified, and task-graphed for the decomposition + performance work. Next session begins actual code changes.
+
+## Next Execution Scope
+
+### Primary Task
+**Start crate decomposition (bd-cly9).** 4 extractions can run in parallel:
 
 ```
-cargo check --workspace --all-targets          PASS
-cargo clippy --workspace --all-targets -Dwarnings  PASS
-cargo clippy --workspace --lib -Dunwrap/expect/panic  PASS
-cargo fmt --all -- --check                     PASS
-cargo test --workspace                         4 threshold tests FAIL (known bugs, bd-pb3b filed)
-lake build                                     PASS (not re-run this session, passed in S014)
-Zero #[allow(...)] in codebase                 PASS
+bd-bc41: ferratomic-wal (~850 LOC) — READY
+bd-nb12: ferratomic-index (~600 LOC) — READY
+bd-8fr9: ferratomic-storage (~500 LOC) — READY
+bd-nt71: ferratomic-tx (~365 LOC) — READY
 ```
 
----
+Each bead has been source-verified with exact import maps, visibility requirements, and step-by-step verification plans. Start with bd-nt71 (tx) — it's the smallest and cleanest (zero crate:: imports).
 
-## Gate Path (updated)
-
-```
-bd-cly9 (decomp EPIC, 8 tasks) ──┐
-bd-4i6u (perf EPIC, 16 tasks)  ──┼──> bd-add (Phase 4a gate) ──> Phase 4b
-bd-7fub.22.10 (re-review)      ──┤
-bd-y1w5 (tag)                   ──┘
+### Ready Queue
+```bash
+br ready          # Show unblocked issues
+bv --robot-next   # Top pick with reasoning
 ```
 
-Decomposition must complete BEFORE performance work (Tier 2 > Tier 3).
+### Dependency Context (decomposition)
+```
+Track A: bd-bc41 (wal) → bd-bb9r (checkpoint, needs wal+positional)
+Track B: bd-nb12 (index) → bd-q0ys (positional) → bd-ipln (store, needs index+positional+tx+checkpoint)
+Track C: bd-nt71 (tx) — independent
+Track D: bd-8fr9 (storage) — independent
+Final:   bd-wrrg (rewire ferratomic-db, depends on all 7)
+```
 
----
+### Dependency Context (performance, after decomposition)
+```
+Tier 1: bd-k4ex (into_datoms) → bd-886d (splice) → bd-ks5d (batch)
+         bd-0zfw (chunks) → bd-nq6v (inc. LIVE)
+Tier 2: bd-fnod (intern) → bd-574c (SoA) → bd-mdfq (entity RLE), bd-3ta0 (TxId perm)
+         bd-t84f (rank/select), bd-iltk (SIMD fp), bd-wv6v (Eytzinger)
+Tier 3: bd-wows (PinSketch), bd-m7te (entropy checkpoint), bd-eusk (WAL dedup)
+```
 
-## Next Session Protocol
+## Hard Constraints
 
-1. Cold-start via `docs/prompts/lifecycle/01-session-init.md`
-2. Start crate decomposition (bd-cly9):
-   - Claim the 4 parallel-ready extractions: bd-bc41 (wal), bd-nb12 (index), bd-8fr9 (storage), bd-nt71 (tx)
-   - Execute all 4 in parallel (disjoint file sets)
-   - Then: bd-q0ys (positional, depends on index), bd-bb9r (checkpoint, depends on wal+positional)
-   - Then: bd-ipln (store, depends on index+positional)
-   - Finally: bd-wrrg (rewire ferratomic-db, depends on all 7)
-3. After decomposition: start performance Tier 1 (bd-0zfw chunk fingerprints)
-4. Profile after each structural change to validate theoretical gains
+- Safe callable surface: `#![forbid(unsafe_code)]` by default; internal unsafe only per ADR-FERR-020 (mmap in ferratomic-checkpoint)
+- No `unwrap()` in production code (NEG-FERR-001)
+- `CARGO_TARGET_DIR=/data/cargo-target` (prevents /tmp exhaustion)
+- C9: Balanced workload assumption — never optimize only for reads
+- Performance weight 2.5x — profile every structural change
+- Zero `#[allow(...)]` anywhere — fix root causes
+- All 32 beads are lab-grade audited — follow the Pseudocode Contract exactly
+- **NEVER batch bead audits or delegate to subagents** — sequential, source-verified, one at a time
 
----
+## Stop Conditions
 
-## Execution Order (across sessions)
-
-### Session 016: Crate Decomposition
-- 4 parallel extractions (wal, index, storage, tx)
-- 3 sequential (positional, checkpoint, store)
-- 1 final rewire (ferratomic-db)
-
-### Session 017+: Performance Tier 1 (Structural)
-- bd-0zfw: Chunk fingerprint array (keystone)
-- bd-nq6v: Incremental LIVE via dirty chunks
-- bd-k4ex: Transaction::into_datoms()
-- bd-886d: Merge-sort splice transact
-- bd-ks5d: batch_transact group commit
-- bd-pb3b: Fix 4 threshold test bugs
-- bd-zwvb: WA measurement fix
-- bd-ip22: Invariant catalog 070-077
-
-### Session 018+: Performance Tier 2 (Alien Data Structures)
-- bd-fnod: Attribute interning (u16 dictionary)
-- bd-574c: SoA columnar PositionalStore
-- bd-mdfq: Entity run-length encoding (O(1) group boundaries, 9x compression)
-- bd-3ta0: TxId temporal permutation (5th index)
-- bd-ewma: Graph adjacency index (O(1) traversal)
-- bd-t84f: Rank9/Select succinct bitvector
-- bd-iltk: SIMD XOR fingerprint
-- bd-wv6v: Borrow-based Eytzinger comparison
-- bd-86ap: Checkpoint serialize from slice
-
-### Session 019+: Performance Tier 3 (Information-Theoretic + Agentic OS)
-- bd-wows: PinSketch set reconciliation
-- bd-m7te: Entropy-coded columnar checkpoint
-- bd-eusk: WAL dedup Bloom filter
-
-### Final: Gate Closure
-- Re-review (bd-7fub.22.10)
-- Tag (bd-y1w5)
-- Close gate (bd-add)
-
----
-
-## Open Beads Summary
-
-### Gate-Blocking EPICs (P0)
-- bd-cly9: EPIC: Decompose ferratomic-core into 8 focused crates (11 total)
-- bd-4i6u: EPIC: Phase 4a performance to 10.0 — 4 tiers, profile-validated
-
-### Crate Decomposition (bd-cly9 children)
-- bd-bc41 (P0): Extract ferratomic-wal (~850 LOC) — READY
-- bd-nb12 (P0): Extract ferratomic-index (~600 LOC) — READY
-- bd-8fr9 (P0): Extract ferratomic-storage (~500 LOC) — READY
-- bd-nt71 (P0): Extract ferratomic-tx (~365 LOC) — READY
-- bd-q0ys (P0): Extract ferratomic-positional (~1,850 LOC) — blocked by index
-- bd-bb9r (P0): Extract ferratomic-checkpoint (~1,550 LOC) — blocked by wal, positional
-- bd-ipln (P0): Extract ferratomic-store (~2,250 LOC) — blocked by index, positional
-- bd-wrrg (P0): Rewire ferratomic-db (~1,700 LOC) — blocked by all 7
-
-### Performance (bd-4i6u children)
-- bd-0zfw (P0): Chunk fingerprint array — READY
-- bd-nq6v (P0): Incremental LIVE via dirty chunks — blocked by 0zfw
-- bd-886d (P0): Merge-sort splice transact — blocked by k4ex, 0zfw, nq6v
-- bd-ks5d (P0): batch_transact — blocked by 886d
-- bd-k4ex (P1): Transaction::into_datoms() — READY
-- bd-fnod (P1): Attribute interning — READY
-- bd-t84f (P1): Rank9/Select succinct bitvector — READY
-- bd-iltk (P1): SIMD XOR fingerprint — READY
-- bd-574c (P1): SoA columnar PositionalStore — blocked by fnod
-- bd-wv6v (P1): Borrow-based Eytzinger — READY
-- bd-86ap (P1): Checkpoint serialize from slice — READY
-- bd-ip22 (P1): Invariant catalog 070-077 — READY
-- bd-pb3b (P1): Fix 4 threshold test bugs — READY
-- bd-zwvb (P2): WA measurement fix — READY
-- bd-wows (P2): PinSketch set reconciliation — blocked by 0zfw
-- bd-m7te (P2): Entropy-coded checkpoint — blocked by 574c
-
-### Review Findings (non-blocking)
-- bd-l64y (P2): merge_causal homomorphism edge case
-- bd-fcta (P2): WireEntityId pub inner field
-- bd-uyy9 (P2): Self-merge fast path
-- bd-8rvz (P3): Two functions over 50 LOC
-
-### Existing Gate Beads
-- bd-7fub.22.10 (P0): Re-review — must re-run after all changes
-- bd-y1w5 (P0): Tag v0.4.0-gate
+Stop and escalate to the user if:
+- A crate extraction reveals a circular dependency not caught in the audit
+- A file has imports from >2 extracted crates (may indicate the split point is wrong)
+- cargo test reveals new failures beyond the 4 known threshold bugs (bd-pb3b)
+- Any bead's Pseudocode Contract doesn't match what the code actually needs
+- The 11-crate DAG has a cycle (`cargo tree` will catch this)
