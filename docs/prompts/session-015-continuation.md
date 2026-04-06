@@ -1,7 +1,7 @@
 # Ferratomic Continuation — Session 015 (Final State)
 
 > Generated: 2026-04-06
-> Last commit: `1fb4310` "chore(beads): sequential audit beads 11-28 — structural verification complete"
+> Last commit: `16319cb` "docs: final session 015 continuation prompt — full handoff"
 > Branch: main
 
 ## Read First
@@ -17,11 +17,11 @@
 - Cleanroom re-review (5 parallel agents): 0 CRITICALs, 0 MAJORs, 5 MINORs
 - Progress review: composite A (9.38/10.0), performance flagged at 8.5
 - 11-crate decomposition designed: ferratomic-core → 8 focused crates, renamed to ferratomic-db
-- Radical performance stack: 20 beads across 4 tiers (structural, alien data structures, information-theoretic, agentic OS)
+- Radical performance stack: 20 performance beads across 4 tiers + 8 decomposition beads + 4 review finding beads = 32 total
 - Spec amendments: C9 (balanced workload), INV-FERR-072 rewrite (3 mutation paths), INV-FERR-078 (SoA columnar), INV-FERR-081-085, ADR-FERR-031-033
 - Spec audit: 2 CRITICALs found and fixed (085 ordering axiom, 084 Bloom safety)
 - Full bead audit (28/28 sequential, lifecycle/14): 6 critical findings corrected (fictional exports, circular dependency, missing dep edges, hidden coupling)
-- 16 commits pushed
+- 17 commits pushed
 
 ### Decisions Made
 - **C9 Balanced workload**: NOT read-heavy 99:1. Write bursts + read bursts + interleaved. Drives entire performance architecture.
