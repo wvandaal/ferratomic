@@ -1,7 +1,7 @@
 # Ferratomic Continuation — Session 015 (Final State)
 
 > Generated: 2026-04-06
-> Last commit: `640ef3d` "feat(spec): add INV-FERR-081-084 — agentic OS performance primitives"
+> Last commit: `7b5f722` "fix(spec): remediate 2 CRITICALs + 2 MAJORs from spec audit"
 > Branch: main
 > Next session goal: Start crate decomposition (4 parallel extractions)
 
@@ -9,7 +9,7 @@
 
 ## Session 015 Summary
 
-**Re-review + two gate-blocking EPICs filed + radical performance spec.** 4 commits. ~600 lines across 3 files.
+**Re-review + two gate-blocking EPICs + radical performance spec + spec audit.** 8 commits. ~1,200 lines across 7 files.
 
 ### What happened
 1. Ran full cleanroom re-review (5 parallel agents): 0 CRITICALs, 0 MAJORs, 5 MINORs
