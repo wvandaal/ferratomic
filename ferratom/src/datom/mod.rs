@@ -164,8 +164,13 @@ impl Datom {
             Value::Keyword(s) => hash_tagged_bytes(hasher, 0, s.as_bytes()),
             Value::String(s) => hash_tagged_bytes(hasher, 1, s.as_bytes()),
             Value::Long(n) => hash_tagged_fixed(hasher, 2, &n.to_le_bytes()),
-            Value::Double(f) => hash_tagged_fixed(hasher, 3, &f.into_inner().to_le_bytes()),
-            // NonNanFloat guarantees no NaN reaches hashing (INV-FERR-012).
+            Value::Double(f) => {
+                // INV-FERR-012: canonicalize -0.0 to +0.0 so Eq-equal floats
+                // produce identical content hashes. OrderedFloat(-0.0) == OrderedFloat(0.0)
+                // but (-0.0f64).to_le_bytes() != (0.0f64).to_le_bytes().
+                let canonical = f.into_inner() + 0.0;
+                hash_tagged_fixed(hasher, 3, &canonical.to_le_bytes());
+            }
             Value::Bool(b) => hash_tagged_fixed(hasher, 4, &[u8::from(*b)]),
             Value::Instant(ms) => hash_tagged_fixed(hasher, 5, &ms.to_le_bytes()),
             Value::Uuid(bytes) => hash_tagged_fixed(hasher, 6, bytes),
@@ -357,6 +362,41 @@ mod tests {
         assert_eq!(a, b);
         // They share Arc-backed data but are logically independent values.
         assert_eq!(a.attribute(), b.attribute());
+    }
+
+    /// INV-FERR-012: -0.0 and +0.0 are Eq-equal via `OrderedFloat`, so their
+    /// content hashes MUST be identical. Regression test for the sign-bit
+    /// canonicalization in `hash_value`.
+    #[test]
+    fn test_inv_ferr_012_content_hash_neg_zero_canonical() {
+        let entity = EntityId::from_content(b"neg-zero-test");
+        let attr = Attribute::from("test/float");
+        let tx = TxId::new(1, 0, 0);
+        let pos_zero = Datom::new(
+            entity,
+            attr.clone(),
+            Value::Double(NonNanFloat::new(0.0).expect("0.0 is not NaN")),
+            tx,
+            Op::Assert,
+        );
+        let neg_zero = Datom::new(
+            entity,
+            attr,
+            Value::Double(NonNanFloat::new(-0.0).expect("-0.0 is not NaN")),
+            tx,
+            Op::Assert,
+        );
+        // OrderedFloat treats -0.0 == +0.0.
+        assert_eq!(
+            pos_zero, neg_zero,
+            "INV-FERR-012: -0.0 and +0.0 datoms must be Eq-equal"
+        );
+        // Content hashes must also be equal.
+        assert_eq!(
+            pos_zero.content_hash(),
+            neg_zero.content_hash(),
+            "INV-FERR-012: -0.0 and +0.0 must produce identical content hashes"
+        );
     }
 
     #[test]
