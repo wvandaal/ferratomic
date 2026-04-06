@@ -1,7 +1,7 @@
 # Ferratomic Continuation — Session 015 (Final State)
 
 > Generated: 2026-04-06
-> Last commit: `89d2c03` "chore(beads): session 015 — crate decomposition + radical performance stack"
+> Last commit: `640ef3d` "feat(spec): add INV-FERR-081-084 — agentic OS performance primitives"
 > Branch: main
 > Next session goal: Start crate decomposition (4 parallel extractions)
 
@@ -9,7 +9,7 @@
 
 ## Session 015 Summary
 
-**Re-review + two gate-blocking EPICs filed.** 1 commit. 128 lines across 2 files.
+**Re-review + two gate-blocking EPICs filed + radical performance spec.** 4 commits. ~600 lines across 3 files.
 
 ### What happened
 1. Ran full cleanroom re-review (5 parallel agents): 0 CRITICALs, 0 MAJORs, 5 MINORs
@@ -90,14 +90,18 @@ Decomposition must complete BEFORE performance work (Tier 2 > Tier 3).
 ### Session 018+: Performance Tier 2 (Alien Data Structures)
 - bd-fnod: Attribute interning (u16 dictionary)
 - bd-574c: SoA columnar PositionalStore
+- bd-mdfq: Entity run-length encoding (O(1) group boundaries, 9x compression)
+- bd-3ta0: TxId temporal permutation (5th index)
+- bd-ewma: Graph adjacency index (O(1) traversal)
 - bd-t84f: Rank9/Select succinct bitvector
 - bd-iltk: SIMD XOR fingerprint
 - bd-wv6v: Borrow-based Eytzinger comparison
 - bd-86ap: Checkpoint serialize from slice
 
-### Session 019+: Performance Tier 3 (Information-Theoretic)
+### Session 019+: Performance Tier 3 (Information-Theoretic + Agentic OS)
 - bd-wows: PinSketch set reconciliation
 - bd-m7te: Entropy-coded columnar checkpoint
+- bd-eusk: WAL dedup Bloom filter
 
 ### Final: Gate Closure
 - Re-review (bd-7fub.22.10)
