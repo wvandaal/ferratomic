@@ -177,7 +177,7 @@ pub mod anti_entropy;
 pub mod backpressure;
 pub mod checkpoint;
 pub mod db;
-pub mod indexes;
+pub use ferratomic_index as indexes;
 pub mod merge;
 pub(crate) mod mmap;
 pub(crate) mod mph;

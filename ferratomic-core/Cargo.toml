@@ -12,6 +12,7 @@ ferratom = { path = "../ferratom" }
 ferratomic-tx = { path = "../ferratomic-tx" }
 ferratomic-storage = { path = "../ferratomic-storage" }
 ferratomic-wal = { path = "../ferratomic-wal" }
+ferratomic-index = { path = "../ferratomic-index" }
 im = { workspace = true }
 arc-swap = { workspace = true }
 blake3 = { workspace = true }

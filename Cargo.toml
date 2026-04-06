@@ -5,6 +5,7 @@ members = [
     "ferratomic-tx",
     "ferratomic-storage",
     "ferratomic-wal",
+    "ferratomic-index",
     "ferratomic-core",
     "ferratomic-datalog",
     "ferratomic-verify",

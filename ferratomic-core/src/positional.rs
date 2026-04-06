@@ -960,7 +960,7 @@ fn entity_u64(datom: &Datom) -> u64 {
 
 /// Extract first 8 bytes of an `EavtKey`'s entity as big-endian u64.
 fn entity_key_u64(key: &EavtKey) -> u64 {
-    let eid = key.0;
+    let eid = key.entity();
     let b = eid.as_bytes();
     u64::from_be_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]])
 }

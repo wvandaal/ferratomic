@@ -100,12 +100,13 @@ ferratom/           Leaf: Datom, EntityId, Value, Schema, Wire types
 ferratomic-tx/      Leaf: Transaction typestate builder (depends on ferratom)
 ferratomic-storage/ Leaf: StorageBackend trait, FsBackend, InMemoryBackend (depends on ferratom)
 ferratomic-wal/     Leaf: WAL frames, CRC32, fsync, recovery (depends on ferratom)
-ferratomic-core/    Core: Store, Database, checkpoint, indexes, merge, LIVE
+ferratomic-index/   Leaf: Index key types, IndexBackend trait, SortedVecBackend (depends on ferratom + im)
+ferratomic-core/    Core: Store, Database, checkpoint, positional, merge, LIVE
 ferratomic-datalog/ Facade: Datalog parser, planner, evaluator (stubs — Phase 4d)
 ferratomic-verify/  Proofs: Lean 4, Stateright, Kani, proptest, fault injection
 ```
 
-Dependency: clock -> ferratom -> {tx, storage, wal} -> core -> datalog. Acyclic.
+Dependency: clock -> ferratom -> {tx, storage, wal, index} -> core -> datalog. Acyclic.
 
 ---
 

@@ -1,0 +1,13 @@
+[package]
+name = "ferratomic-index"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Index key types and backends for Ferratomic: EAVT/AEVT/VAET/AVET with IndexBackend trait"
+
+# Algebraic role: LEAF — index types and trait, zero engine deps.
+# INV-FERR-005 (index bijection), INV-FERR-025 (backend interchangeability).
+[dependencies]
+ferratom = { path = "../ferratom" }
+im = { workspace = true }
