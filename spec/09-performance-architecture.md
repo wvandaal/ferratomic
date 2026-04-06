@@ -650,7 +650,11 @@ pub(crate) fn batch_splice_transact(
         let stamped = stamp_datoms(datoms.clone(), *tx_id);
         all_datoms.extend(stamped);
     }
-    self.splice_transact(all_datoms)?;
+    self.splice_transact(all_datoms.clone())?;
+    for (datoms, tx_id) in &transactions {
+        self.epoch += 1;
+        receipts.push(TxReceipt { epoch: self.epoch, datoms: datoms.clone() });
+    }
     Ok(receipts)
 }
 ```
@@ -696,7 +700,7 @@ proptest! {
         new_datom in arb_datom(),
     ) {
         let mut store = Store::from_datoms(datoms);
-        // transact triggers promote + insert + demote automatically
+        // Path A: splice_transact keeps store in Positional (no promote/demote)
         store.transact_test(Transaction::from_datom(new_datom));
         // After transact, store should be back in Positional representation
         prop_assert!(store.positional().is_some(),
@@ -2667,8 +2671,18 @@ Define the attribute interning bijection:
 The interning preserves ordering:
   ∀ a₁, a₂ ∈ Σ_A: intern(a₁) < intern(a₂) ↔ a₁ < a₂
 
-  (Monotone: IDs are assigned in the order attributes are first encountered,
-  which is deterministic given genesis determinism INV-FERR-031.)
+  IDs are assigned in LEXICOGRAPHIC order of attribute names, not encounter
+  order. The genesis bootstrap registers attributes 0-18 in sorted order.
+  When a new attribute is added via schema evolution, the intern table
+  assigns the ID that maintains sorted rank: new_id = sorted_position(name)
+  among all known attributes. Existing IDs may be renumbered if necessary
+  to maintain the ordering invariant (renumbering is O(|Σ_A|) ≤ O(65536),
+  amortized over the lifetime of the store).
+
+  Determinism (INV-FERR-031): Two stores that have registered the same set
+  of attributes produce identical intern tables, regardless of registration
+  order. This follows from the ordering being determined by the attribute
+  name set, not the registration sequence.
 
 Theorem (interning preserves index semantics):
   ∀ queries Q over the attribute field:
@@ -3199,29 +3213,38 @@ INV-FERR-012 (content-addressed identity — duplicate datoms have identical has
 Let B be a Bloom filter with false positive rate ε.
 Let h(d) = BLAKE3(serialize(d)) be the datom content hash (INV-FERR-012).
 
-Define the WAL dedup predicate:
-  skip_wal(d, B) = B.probably_contains(h(d))
+Define the WAL dedup predicate (two-phase check):
+  skip_wal(d, B, S) = B.probably_contains(h(d)) ∧ d ∈ S
+
+  Phase 1 (Bloom): fast probabilistic check. O(1).
+  Phase 2 (Store): if Bloom says "maybe," verify against the live store. O(log N).
+  Skip WAL write ONLY if BOTH the Bloom says present AND the datom is already
+  in the store's datom set.
 
 Safety theorem:
-  ∀ d ∈ DatomStore, ∀ B:
-    ¬skip_wal(d, B) → d is written to WAL (no false negatives)
+  ∀ d, ∀ B, ∀ S:
+    ¬skip_wal(d, B, S) → d is written to WAL
 
-  Bloom filters have ZERO false negative rate. If the filter says "not present,"
-  the datom is genuinely new and MUST be written. This is unconditional.
+  Proof: If skip_wal is false, either the Bloom returned false (zero false
+  negative rate guarantees d is genuinely new → written) or the Bloom returned
+  true but d ∉ S (false positive → d IS new → written). In both cases d is
+  written. No datom is ever silently dropped.
 
-Liveness theorem:
-  ∀ d previously written to WAL, ∀ B that contains h(d):
-    skip_wal(d, B) with probability ≥ 1 - ε
+  This is UNCONDITIONAL — it does not rely on caller re-submission. INV-FERR-008
+  (WAL-before-visible) is preserved: every genuinely new datom is durable before
+  it becomes visible.
 
-  A previously written datom is correctly skipped with probability ≥ 1 - ε.
-  The ε fraction are false positives on OTHER datoms' hashes, not on d's own hash
-  (which is definitely in the filter after insertion).
+Efficiency theorem:
+  ∀ d already in S, ∀ B that contains h(d):
+    skip_wal(d, B, S) = true
 
-  Note: false POSITIVES (ε) cause a genuinely new datom to be incorrectly skipped.
-  This is safe because:
-  1. The datom will be re-submitted on the next event
-  2. The store's set semantics guarantee idempotent re-insertion
-  3. The Bloom is cleared on checkpoint (bounded FP accumulation)
+  A duplicate datom (already in the store) passes both the Bloom check and
+  the store membership check. The WAL write is correctly skipped. This is the
+  common case for bursty event sources that produce redundant events.
+
+Cost: Most duplicates are filtered by the O(1) Bloom check alone (true positives).
+The O(log N) store check is reached only on Bloom false positives (ε fraction of
+genuinely new datoms). At ε = 0.1%: 999 of 1000 new datoms skip the store check.
 ```
 
 #### Level 1 (State Invariant)
@@ -3229,10 +3252,11 @@ A fixed-size (64KB) Bloom filter on recent WAL datom hashes, cleared on
 checkpoint. Eliminates redundant WAL writes from bursty event sources (filesystem
 watchers, git hooks, CRM webhooks) that produce duplicate events.
 
-The safety guarantee is unconditional: the Bloom filter has zero false negatives,
-so genuinely new datoms are ALWAYS written to WAL. False positives (0.1% at 100K
-entries) cause at most 1-in-1000 genuinely new datoms to skip ONE WAL write — they
-will be durable after the next submission or the next checkpoint.
+The safety guarantee is unconditional: a two-phase check (Bloom + store membership)
+ensures NO genuinely new datom is ever silently dropped. The Bloom provides O(1)
+fast-path elimination of known duplicates. On a Bloom false positive (0.1% rate),
+the store membership check (O(log N)) catches the error — the datom IS new and IS
+written to WAL. INV-FERR-008 (WAL-before-visible) is preserved unconditionally.
 
 #### Level 2 (Implementation Contract)
 ```rust
