@@ -457,7 +457,9 @@ fn test_inv_ferr_075_partial_store_live_only() {
 
     // The partial store should have fewer datoms than the full store
     // because the retracted entity-1 datoms are historical.
-    let full = partial.load_historical();
+    let full = partial
+        .load_historical()
+        .expect("INV-FERR-076: load_historical");
     assert_eq!(
         full.datom_set(),
         store.datom_set(),
@@ -515,7 +517,9 @@ fn test_inv_ferr_075_100_percent_live() {
     );
     // Partial then historical must also recover everything.
     let partial = v3::deserialize_v3_live_first_partial(&bytes).expect("partial");
-    let full = partial.load_historical();
+    let full = partial
+        .load_historical()
+        .expect("INV-FERR-076: load_historical");
     assert_eq!(full.datom_set(), store.datom_set());
 }
 
@@ -574,7 +578,9 @@ fn test_inv_ferr_075_live_only_query() {
     );
 
     // Verify load_historical still works after reading live_store.
-    let full = partial.load_historical();
+    let full = partial
+        .load_historical()
+        .expect("INV-FERR-076: load_historical");
     assert_eq!(full.datom_set(), store.datom_set());
 }
 
@@ -635,7 +641,9 @@ fn test_inv_ferr_075_mixed_live_groups() {
 
     // Partial → full also preserves all datoms.
     let partial = v3::deserialize_v3_live_first_partial(&bytes).expect("partial");
-    let full = partial.load_historical();
+    let full = partial
+        .load_historical()
+        .expect("INV-FERR-076: load_historical");
     assert_eq!(
         full.datom_set(),
         store.datom_set(),

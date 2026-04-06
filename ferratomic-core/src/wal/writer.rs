@@ -68,13 +68,16 @@ impl Wal {
     /// Shared by [`append`](Self::append) and [`append_raw`](Self::append_raw).
     fn write_frame(&mut self, epoch: u64, payload: &[u8]) -> Result<(), FerraError> {
         // ME-011: Enforce WAL epoch monotonicity. Appending an epoch <=
-        // last_synced would violate INV-FERR-007 (strict monotonicity).
-        if epoch <= self.last_synced_epoch && self.last_synced_epoch > 0 {
+        // the highest pending (written but not yet fsynced) epoch violates
+        // INV-FERR-007 (strict monotonicity). Using pending_epoch instead
+        // of last_synced_epoch closes the gap where duplicate epochs could
+        // slip in between writes before the first fsync (bd-y286).
+        if epoch <= self.pending_epoch && self.pending_epoch > 0 {
             return Err(FerraError::InvariantViolation {
                 invariant: "INV-FERR-007".to_string(),
                 details: format!(
-                    "WAL epoch monotonicity violated: epoch {epoch} <= last_synced {}",
-                    self.last_synced_epoch
+                    "WAL epoch monotonicity violated: epoch {epoch} <= pending {}",
+                    self.pending_epoch
                 ),
             });
         }

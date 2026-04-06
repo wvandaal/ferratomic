@@ -251,22 +251,28 @@ impl Store {
     /// recomputing liveness.
     ///
     /// INV-FERR-076: `from_sorted_with_live` is used for the positional store.
-    #[must_use]
+    /// Returns an error if preconditions are violated (`live_bits`/canonical
+    /// length mismatch, unsorted datoms, or u32 position space overflow).
+    ///
+    /// # Errors
+    ///
+    /// Returns `FerraError::InvariantViolation` if the sorted datom or
+    /// `live_bits` preconditions are violated (INV-FERR-076).
     pub fn from_checkpoint_v3(
         epoch: u64,
         genesis_agent: AgentId,
         schema_attrs: Vec<(String, AttributeDef)>,
         sorted_datoms: Vec<Datom>,
         live_bits: bitvec::prelude::BitVec<u64, bitvec::prelude::Lsb0>,
-    ) -> Self {
+    ) -> Result<Self, ferratom::FerraError> {
         let mut schema = Schema::empty();
         for (name, def) in schema_attrs {
             schema.define(Attribute::from(name.as_str()), def);
         }
-        let positional = PositionalStore::from_sorted_with_live(sorted_datoms, live_bits);
+        let positional = PositionalStore::from_sorted_with_live(sorted_datoms, live_bits)?;
         let live_causal = query::build_live_causal(positional.datoms().iter());
         let live_set = query::derive_live_set(&live_causal);
-        Self {
+        Ok(Self {
             repr: StoreRepr::Positional(Arc::new(positional)),
             schema,
             epoch,
@@ -274,7 +280,7 @@ impl Store {
             live_causal,
             live_set,
             schema_conflicts: Vec::new(),
-        }
+        })
     }
 
     /// Deterministic genesis store with the 19 axiomatic meta-schema attributes.

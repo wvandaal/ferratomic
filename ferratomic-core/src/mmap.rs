@@ -211,7 +211,7 @@ mod mmap_impl {
             let mut live_bits = BitVec::<u64, Lsb0>::from_vec(words);
             live_bits.truncate(live_bits_len);
 
-            Ok(PositionalStore::from_sorted_with_live(datoms, live_bits))
+            PositionalStore::from_sorted_with_live(datoms, live_bits)
         }
     }
 

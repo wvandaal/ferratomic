@@ -434,7 +434,8 @@ proptest! {
         let partial = ferratomic_core::checkpoint::deserialize_live_first_partial(&bytes)
             .expect("INV-FERR-075: partial deserialize must succeed");
 
-        let full = partial.load_historical();
+        let full = partial.load_historical()
+            .expect("INV-FERR-076: load_historical must succeed for valid checkpoint data");
 
         prop_assert_eq!(
             full.datom_set(),

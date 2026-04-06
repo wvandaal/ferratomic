@@ -177,11 +177,54 @@ impl WireDatom {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WireCheckpointPayload {
     /// Schema attributes (sorted by name for determinism).
-    pub schema: Vec<(String, AttributeDef)>,
+    schema: Vec<(String, AttributeDef)>,
     /// Genesis agent identity.
-    pub genesis_agent: AgentId,
+    genesis_agent: AgentId,
     /// All datoms in wire format.
-    pub datoms: Vec<WireDatom>,
+    datoms: Vec<WireDatom>,
+}
+
+impl WireCheckpointPayload {
+    /// Construct a new wire checkpoint payload.
+    #[must_use]
+    pub fn new(
+        schema: Vec<(String, AttributeDef)>,
+        genesis_agent: AgentId,
+        datoms: Vec<WireDatom>,
+    ) -> Self {
+        Self {
+            schema,
+            genesis_agent,
+            datoms,
+        }
+    }
+
+    /// Schema attributes (sorted by name for determinism).
+    #[must_use]
+    pub fn schema(&self) -> &[(String, AttributeDef)] {
+        &self.schema
+    }
+
+    /// Genesis agent identity.
+    #[must_use]
+    pub fn genesis_agent(&self) -> AgentId {
+        self.genesis_agent
+    }
+
+    /// All datoms in wire format.
+    #[must_use]
+    pub fn datoms(&self) -> &[WireDatom] {
+        &self.datoms
+    }
+
+    /// Consume and return owned components for checkpoint reconstruction.
+    ///
+    /// ADR-FERR-010: Used by checkpoint deserialization to take ownership
+    /// of the schema, genesis agent, and datoms without cloning.
+    #[must_use]
+    pub fn into_parts(self) -> (Vec<(String, AttributeDef)>, AgentId, Vec<WireDatom>) {
+        (self.schema, self.genesis_agent, self.datoms)
+    }
 }
 
 // ---------------------------------------------------------------------------

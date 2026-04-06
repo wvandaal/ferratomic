@@ -560,10 +560,11 @@ where
         self.avet.backend_values()
     }
 
-    /// Verify that all four indexes have the same cardinality.
+    /// Verify that all four indexes contain the same datom set (INV-FERR-005 bijection).
     ///
-    /// INV-FERR-005: bijection implies equal cardinality. Returns `true`
-    /// if all four indexes agree on the count of entries.
+    /// INV-FERR-005: bijection implies both equal cardinality AND identical
+    /// datom identity across all four indexes. Returns `true` if all four
+    /// indexes agree on the count and the exact set of datom references.
     #[must_use]
     pub fn verify_bijection(&self) -> bool {
         let n = self.eavt.backend_len();
@@ -580,9 +581,8 @@ where
         // "No #[cfg(...)] hiding code from the type checker."
         let eavt_datoms: std::collections::BTreeSet<_> = self.eavt.backend_values().collect();
         let aevt_datoms: std::collections::BTreeSet<_> = self.aevt.backend_values().collect();
-        if eavt_datoms != aevt_datoms {
-            return false;
-        }
-        true
+        let vaet_datoms: std::collections::BTreeSet<_> = self.vaet.backend_values().collect();
+        let avet_datoms: std::collections::BTreeSet<_> = self.avet.backend_values().collect();
+        eavt_datoms == aevt_datoms && eavt_datoms == vaet_datoms && eavt_datoms == avet_datoms
     }
 }

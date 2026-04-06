@@ -276,13 +276,13 @@ pub(crate) fn deserialize_v3_bytes(data: &[u8]) -> Result<Store, FerraError> {
         .map(ferratom::wire::WireDatom::into_trusted)
         .collect();
 
-    Ok(Store::from_checkpoint_v3(
+    Store::from_checkpoint_v3(
         epoch,
         genesis_agent,
         wire_payload.schema_pairs,
         datoms,
         wire_payload.live_bits,
-    ))
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -420,8 +420,12 @@ impl PartialStore {
     /// Five O(n) passes: merge-sort, positional construction, LIVE bitvector,
     /// `live_causal` rebuild, `live_set` derivation. Uses `from_checkpoint_v3`
     /// to avoid redundant O(n log n) re-sort on already-sorted merge output.
-    #[must_use]
-    pub fn load_historical(self) -> Store {
+    ///
+    /// # Errors
+    ///
+    /// Returns `FerraError::InvariantViolation` if the merged datoms violate
+    /// INV-FERR-076 preconditions (should not happen with valid checkpoint data).
+    pub fn load_historical(self) -> Result<Store, FerraError> {
         let live_datoms: Vec<Datom> = self.store.datoms().cloned().collect();
         let merged = crate::positional::merge_sort_dedup(&live_datoms, &self.hist_datoms);
         let live_bits = build_live_bitvector_pub(&merged);
@@ -492,7 +496,7 @@ pub(crate) fn deserialize_v3_live_first_partial(data: &[u8]) -> Result<PartialSt
         wire_payload.schema_pairs,
         live_datoms,
         live_bits,
-    );
+    )?;
 
     Ok(PartialStore { store, hist_datoms })
 }
@@ -503,5 +507,5 @@ pub(crate) fn deserialize_v3_live_first_partial(data: &[u8]) -> Result<PartialSt
 /// datoms. Use `deserialize_v3_live_first_partial` if you want LIVE-only access.
 pub(crate) fn deserialize_v3_live_first_full(data: &[u8]) -> Result<Store, FerraError> {
     let partial = deserialize_v3_live_first_partial(data)?;
-    Ok(partial.load_historical())
+    partial.load_historical()
 }

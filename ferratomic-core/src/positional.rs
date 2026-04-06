@@ -488,34 +488,47 @@ impl PositionalStore {
     /// INV-FERR-076: Zero-construction cold start for V3 checkpoint
     /// deserialization. The caller guarantees `canonical` is sorted and
     /// deduplicated (strictly increasing EAVT order, no duplicate datoms)
-    /// and that `live_bits.len() == canonical.len()`. Checked via
-    /// `debug_assert` only — release builds do not validate. Callers
-    /// loading from untrusted sources must verify integrity independently
-    /// (e.g., BLAKE3 per ADR-FERR-010). Permutation arrays are deferred
+    /// and that `live_bits.len() == canonical.len()`. Runtime-validated
+    /// in all builds (debug and release). Permutation arrays are deferred
     /// (`OnceLock::new()`).
-    #[must_use]
+    ///
+    /// # Errors
+    ///
+    /// Returns `FerraError::InvariantViolation` (INV-FERR-076) if:
+    /// - `live_bits.len() != canonical.len()`
+    /// - `canonical` is not strictly sorted (EAVT order, no duplicates)
+    /// - `canonical.len()` exceeds `u32::MAX` (position space overflow)
     pub(crate) fn from_sorted_with_live(
         canonical: Vec<Datom>,
         live_bits: BitVec<u64, Lsb0>,
-    ) -> Self {
-        debug_assert!(
-            live_bits.len() == canonical.len(),
-            "INV-FERR-076: live_bits length ({}) must equal canonical length ({})",
-            live_bits.len(),
-            canonical.len(),
-        );
-        debug_assert!(
-            canonical.windows(2).all(|w| w[0] < w[1]),
-            "INV-FERR-076: canonical datoms must be strictly sorted (EAVT order, no duplicates)",
-        );
-        debug_assert!(
-            u32::try_from(canonical.len()).is_ok(),
-            "INV-FERR-076: canonical array exceeds u32 position space"
-        );
+    ) -> Result<Self, ferratom::FerraError> {
+        if live_bits.len() != canonical.len() {
+            return Err(ferratom::FerraError::InvariantViolation {
+                invariant: "INV-FERR-076".to_string(),
+                details: format!(
+                    "live_bits length ({}) != canonical length ({})",
+                    live_bits.len(),
+                    canonical.len()
+                ),
+            });
+        }
+        if !canonical.windows(2).all(|w| w[0] < w[1]) {
+            return Err(ferratom::FerraError::InvariantViolation {
+                invariant: "INV-FERR-076".to_string(),
+                details: "canonical datoms not strictly sorted (EAVT order, no duplicates)"
+                    .to_string(),
+            });
+        }
+        if u32::try_from(canonical.len()).is_err() {
+            return Err(ferratom::FerraError::InvariantViolation {
+                invariant: "INV-FERR-076".to_string(),
+                details: "canonical array exceeds u32 position space".to_string(),
+            });
+        }
         // Single O(n) pass — no rayon::join because live_bits is pre-computed.
         // The fingerprint computation is the only O(n) work here.
         let fingerprint = compute_fingerprint(&canonical);
-        Self {
+        Ok(Self {
             canonical,
             live_bits,
             perm_aevt: OnceLock::new(),
@@ -524,7 +537,7 @@ impl PositionalStore {
             fingerprint,
             mph: OnceLock::new(),
             bloom: OnceLock::new(),
-        }
+        })
     }
 
     /// Sorted unique `EntityId`s from the canonical array (INV-FERR-076).

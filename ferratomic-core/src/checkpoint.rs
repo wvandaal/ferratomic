@@ -290,19 +290,14 @@ pub(crate) fn deserialize_v2_bytes(data: &[u8]) -> Result<Store, FerraError> {
             actual: e.to_string(),
         })?;
 
-    // ADR-FERR-010: Convert wire datoms to core datoms through trust boundary.
-    let datoms: Vec<ferratom::Datom> = wire_payload
-        .datoms
+    // ADR-FERR-010: Decompose wire payload and convert through trust boundary.
+    let (schema, genesis_agent, wire_datoms) = wire_payload.into_parts();
+    let datoms: Vec<ferratom::Datom> = wire_datoms
         .into_iter()
         .map(ferratom::wire::WireDatom::into_trusted)
         .collect();
 
-    Ok(Store::from_checkpoint(
-        epoch,
-        wire_payload.genesis_agent,
-        wire_payload.schema,
-        datoms,
-    ))
+    Ok(Store::from_checkpoint(epoch, genesis_agent, schema, datoms))
 }
 
 /// Serialize a store to a checkpoint file.

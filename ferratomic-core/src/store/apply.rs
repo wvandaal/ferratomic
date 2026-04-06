@@ -235,13 +235,10 @@ fn create_tx_metadata(epoch: u64, agent: AgentId, tx_id: ferratom::TxId) -> Vec<
     let mut tx_content = format!("tx-{epoch}-").into_bytes();
     tx_content.extend_from_slice(agent.as_bytes());
     let tx_entity = ferratom::EntityId::from_content(&tx_content);
-    let now_ms = i64::try_from(
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis(),
-    )
-    .unwrap_or(i64::MAX);
+    // Derive tx wall-clock from HLC physical component (deterministic,
+    // no SystemTime dependency).  Overflow from u64→i64 is safe: the
+    // fallback i64::MAX is ~292 billion years after epoch.
+    let now_ms = i64::try_from(tx_id.physical()).unwrap_or(i64::MAX);
 
     vec![
         Datom::new(
