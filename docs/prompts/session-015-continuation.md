@@ -1,7 +1,7 @@
 # Ferratomic Continuation — Session 015 (Final State)
 
 > Generated: 2026-04-06
-> Last commit: `16319cb` "docs: final session 015 continuation prompt — full handoff"
+> Last commit: `9fbed41` "docs: fix session 015 continuation — correct commit hash and counts"
 > Branch: main
 
 ## Read First
@@ -21,7 +21,7 @@
 - Spec amendments: C9 (balanced workload), INV-FERR-072 rewrite (3 mutation paths), INV-FERR-078 (SoA columnar), INV-FERR-081-085, ADR-FERR-031-033
 - Spec audit: 2 CRITICALs found and fixed (085 ordering axiom, 084 Bloom safety)
 - Full bead audit (28/28 sequential, lifecycle/14): 6 critical findings corrected (fictional exports, circular dependency, missing dep edges, hidden coupling)
-- 17 commits pushed
+- 18 commits pushed
 
 ### Decisions Made
 - **C9 Balanced workload**: NOT read-heavy 99:1. Write bursts + read bursts + interleaved. Drives entire performance architecture.
