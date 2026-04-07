@@ -93,7 +93,7 @@ fn measure_write_amplification(count: usize) -> f64 {
             ferratom::TxId::new(0, 0, 0),
             ferratom::Op::Assert,
         );
-        let serialized = bincode::serialize(&[&datom]).expect("serialize datom for logical size");
+        let serialized = bincode::serialize(&datom).expect("serialize datom for logical size");
         logical_bytes += serialized.len() as u64;
 
         let tx = Transaction::new(agent)

@@ -53,7 +53,7 @@ pub(crate) fn interpolation_search<'a>(canonical: &'a [Datom], key: &EavtKey) ->
             estimate.clamp(lo, hi)
         };
 
-        match EavtKey::from_datom(&canonical[pos]).cmp(key) {
+        match key.cmp_datom(&canonical[pos]).reverse() {
             std::cmp::Ordering::Equal => return Some(&canonical[pos]),
             std::cmp::Ordering::Less => lo = pos + 1,
             std::cmp::Ordering::Greater => {

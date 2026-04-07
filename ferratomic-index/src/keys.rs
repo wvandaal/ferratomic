@@ -75,6 +75,19 @@ impl EavtKey {
         )
     }
 
+    /// Compare this key against a datom's EAVT fields without constructing
+    /// an intermediate key. Zero Arc refcount operations (INV-FERR-027).
+    #[inline]
+    #[must_use]
+    pub fn cmp_datom(&self, datom: &Datom) -> std::cmp::Ordering {
+        self.0
+            .cmp(&datom.entity())
+            .then_with(|| self.1.cmp(datom.attribute()))
+            .then_with(|| self.2.cmp(datom.value()))
+            .then_with(|| self.3.cmp(&datom.tx()))
+            .then_with(|| self.4.cmp(&datom.op()))
+    }
+
     /// The entity component of this key (INV-FERR-005, INV-FERR-076).
     #[must_use]
     pub fn entity(&self) -> EntityId {
