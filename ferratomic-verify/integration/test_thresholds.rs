@@ -85,7 +85,7 @@ fn measure_write_amplification(count: usize) -> f64 {
         let val = Value::String(format!("wa-value-{i}").into());
 
         // Approximate logical size: entity(32) + attr(~6) + value(~12) + tx(14) + op(1) = ~65
-        // We use serde_json serialization of a single datom as the logical unit.
+        // We use bincode serialization — the actual WAL format — as the logical unit.
         let datom = ferratom::Datom::new(
             entity,
             attr.clone(),
@@ -93,7 +93,7 @@ fn measure_write_amplification(count: usize) -> f64 {
             ferratom::TxId::new(0, 0, 0),
             ferratom::Op::Assert,
         );
-        let serialized = serde_json::to_vec(&[&datom]).expect("serialize datom for logical size");
+        let serialized = bincode::serialize(&[&datom]).expect("serialize datom for logical size");
         logical_bytes += serialized.len() as u64;
 
         let tx = Transaction::new(agent)
