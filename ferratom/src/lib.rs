@@ -36,6 +36,6 @@ pub mod traits;
 pub mod wire;
 
 pub use clock::{AgentId, ClockSource, Frontier, HybridClock, SystemClock, TxId};
-pub use datom::{Attribute, Datom, EntityId, NonNanFloat, Op, Value};
+pub use datom::{Attribute, AttributeId, AttributeIntern, Datom, EntityId, NonNanFloat, Op, Value};
 pub use error::FerraError;
 pub use schema::{AttributeDef, Cardinality, ResolutionMode, Schema, ValueType};

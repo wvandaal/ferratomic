@@ -11,7 +11,7 @@ mod value;
 
 pub use entity::EntityId;
 use serde::{Deserialize, Serialize};
-pub use value::{Attribute, NonNanFloat, Value};
+pub use value::{Attribute, AttributeId, AttributeIntern, NonNanFloat, Value};
 
 use crate::clock::TxId;
 

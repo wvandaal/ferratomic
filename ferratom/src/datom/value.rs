@@ -47,6 +47,145 @@ impl fmt::Display for Attribute {
 }
 
 // ---------------------------------------------------------------------------
+// AttributeId + AttributeIntern (ADR-FERR-030 prerequisite, bd-fnod)
+// ---------------------------------------------------------------------------
+
+/// Interned attribute identifier (ADR-FERR-030 prerequisite).
+///
+/// `Copy + Ord + Hash`. 2 bytes. Comparison is integer comparison (1 cycle).
+/// IDs are assigned in lexicographic (sorted) order so that
+/// `AttributeId::Ord` is isomorphic to `Attribute::Ord`.
+///
+/// The string name is recoverable via `AttributeIntern::resolve`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct AttributeId(u16);
+
+impl AttributeId {
+    /// Raw numeric ID (for serialization or debugging).
+    #[must_use]
+    pub fn as_u16(self) -> u16 {
+        self.0
+    }
+}
+
+/// Bidirectional intern table for attribute names (ADR-FERR-030).
+///
+/// Assigns IDs in lexicographic order: if `a < b` as strings, then
+/// `intern(a) < intern(b)` as `AttributeId`. This preserves the
+/// `Attribute::Ord` isomorphism so that index key comparisons using
+/// `AttributeId` produce the same ordering as string comparisons.
+///
+/// Append-only: attributes are never removed. Rebuilt on schema
+/// evolution (rare) to maintain sorted ID assignment.
+#[derive(Debug, Clone)]
+pub struct AttributeIntern {
+    /// name → id (O(log A) lookup).
+    to_id: std::collections::BTreeMap<Attribute, AttributeId>,
+    /// id → name (O(1) lookup by index).
+    to_name: Vec<Arc<str>>,
+}
+
+impl AttributeIntern {
+    /// Build an intern table from a set of attributes.
+    ///
+    /// Assigns IDs in sorted (lexicographic) order so that
+    /// `AttributeId::Ord` is isomorphic to `Attribute::Ord`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `FerraError::InvariantViolation` if more than 65,535
+    /// distinct attributes are provided (u16 capacity exceeded).
+    pub fn from_attributes(
+        attrs: impl IntoIterator<Item = Attribute>,
+    ) -> Result<Self, super::super::FerraError> {
+        use std::collections::BTreeSet;
+        let sorted: BTreeSet<Attribute> = attrs.into_iter().collect();
+        if sorted.len() > usize::from(u16::MAX) {
+            return Err(super::super::FerraError::InvariantViolation {
+                invariant: "ADR-FERR-030".to_string(),
+                details: format!(
+                    "attribute count {} exceeds u16 capacity {}",
+                    sorted.len(),
+                    u16::MAX
+                ),
+            });
+        }
+        let mut to_id = std::collections::BTreeMap::new();
+        let mut to_name = Vec::with_capacity(sorted.len());
+        for (i, attr) in sorted.into_iter().enumerate() {
+            // i < sorted.len() <= u16::MAX (checked above).
+            let id = AttributeId(u16::try_from(i).unwrap_or(0));
+            to_id.insert(attr.clone(), id);
+            to_name.push(Arc::from(attr.as_str()));
+        }
+        Ok(Self { to_id, to_name })
+    }
+
+    /// Build from a `Schema` (convenience: extracts attribute names).
+    ///
+    /// # Errors
+    ///
+    /// Returns `FerraError::InvariantViolation` if the schema has more
+    /// than 65,535 attributes (u16 capacity).
+    pub fn from_schema(schema: &super::super::Schema) -> Result<Self, super::super::FerraError> {
+        Self::from_attributes(schema.iter().map(|(a, _)| a.clone()))
+    }
+
+    /// Look up the ID for an attribute. Returns `None` if not interned.
+    #[must_use]
+    pub fn id_of(&self, attr: &Attribute) -> Option<AttributeId> {
+        self.to_id.get(attr).copied()
+    }
+
+    /// Intern an attribute, assigning a new ID if not present.
+    ///
+    /// New IDs are appended at the END (not in sorted position),
+    /// so the sorted-ordering invariant is violated until the table
+    /// is rebuilt via `from_attributes`. Use this only for transient
+    /// lookups where ordering does not matter.
+    ///
+    /// # Errors
+    ///
+    /// Returns `FerraError::InvariantViolation` if u16 capacity exceeded.
+    pub fn intern(&mut self, attr: &Attribute) -> Result<AttributeId, super::super::FerraError> {
+        if let Some(&id) = self.to_id.get(attr) {
+            return Ok(id);
+        }
+        let id_raw = u16::try_from(self.to_name.len()).map_err(|_| {
+            super::super::FerraError::InvariantViolation {
+                invariant: "ADR-FERR-030".to_string(),
+                details: "attribute intern table exceeded u16 capacity".to_string(),
+            }
+        })?;
+        let id = AttributeId(id_raw);
+        self.to_id.insert(attr.clone(), id);
+        self.to_name.push(Arc::from(attr.as_str()));
+        Ok(id)
+    }
+
+    /// Resolve an ID back to its string name. O(1).
+    ///
+    /// Returns `None` if the ID is out of range (should not happen
+    /// for IDs obtained from this table).
+    #[must_use]
+    pub fn resolve(&self, id: AttributeId) -> Option<&str> {
+        self.to_name.get(usize::from(id.0)).map(AsRef::as_ref)
+    }
+
+    /// Number of interned attributes.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.to_name.len()
+    }
+
+    /// Whether the intern table is empty.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.to_name.is_empty()
+    }
+}
+
+// ---------------------------------------------------------------------------
 // NonNanFloat
 // ---------------------------------------------------------------------------
 
@@ -217,6 +356,113 @@ mod tests {
             assert_eq!(*r, eid);
         } else {
             panic!("expected Ref variant");
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // AttributeId + AttributeIntern tests (ADR-FERR-030)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_adr_ferr_030_attribute_id_is_copy() {
+        let id = AttributeId(42);
+        let copy = id;
+        assert_eq!(id, copy, "ADR-FERR-030: AttributeId must be Copy");
+    }
+
+    #[test]
+    fn test_adr_ferr_030_intern_roundtrip() {
+        let attrs = vec![
+            Attribute::from("db/doc"),
+            Attribute::from("db/ident"),
+            Attribute::from("tx/time"),
+        ];
+        let table = AttributeIntern::from_attributes(attrs.clone()).expect("intern must succeed");
+        for attr in &attrs {
+            let id = table.id_of(attr).expect("attribute must be interned");
+            let resolved = table.resolve(id).expect("id must resolve");
+            assert_eq!(resolved, attr.as_str(), "ADR-FERR-030: roundtrip failed");
+        }
+    }
+
+    #[test]
+    fn test_adr_ferr_030_sorted_id_assignment() {
+        let attrs = vec![
+            Attribute::from("z/last"),
+            Attribute::from("a/first"),
+            Attribute::from("m/middle"),
+        ];
+        let table = AttributeIntern::from_attributes(attrs).expect("intern must succeed");
+        let id_a = table.id_of(&Attribute::from("a/first")).expect("a");
+        let id_m = table.id_of(&Attribute::from("m/middle")).expect("m");
+        let id_z = table.id_of(&Attribute::from("z/last")).expect("z");
+        assert!(
+            id_a < id_m && id_m < id_z,
+            "ADR-FERR-030: IDs must be in sorted string order: a={id_a:?} m={id_m:?} z={id_z:?}"
+        );
+    }
+
+    #[test]
+    fn test_adr_ferr_030_intern_append() {
+        let attrs = vec![Attribute::from("a"), Attribute::from("b")];
+        let mut table = AttributeIntern::from_attributes(attrs).expect("intern");
+        assert_eq!(table.len(), 2);
+        let id_c = table.intern(&Attribute::from("c")).expect("intern c");
+        assert_eq!(table.len(), 3);
+        assert_eq!(
+            table.resolve(id_c),
+            Some("c"),
+            "ADR-FERR-030: dynamically interned attribute must resolve"
+        );
+        // Re-interning returns same ID.
+        let id_c2 = table.intern(&Attribute::from("c")).expect("re-intern c");
+        assert_eq!(id_c, id_c2, "ADR-FERR-030: re-intern must return same ID");
+    }
+
+    #[test]
+    fn test_adr_ferr_030_genesis_19_attributes() {
+        // The genesis schema has exactly 19 attributes. Verify the intern
+        // table can accommodate them with deterministic IDs.
+        let genesis_attrs: Vec<Attribute> = vec![
+            "db/cardinality",
+            "db/doc",
+            "db/ident",
+            "db/isComponent",
+            "db/latticeOrder",
+            "db/lwwClock",
+            "db/resolutionMode",
+            "db/unique",
+            "db/valueType",
+            "lattice/bottom",
+            "lattice/comparator",
+            "lattice/elements",
+            "lattice/ident",
+            "lattice/top",
+            "tx/agent",
+            "tx/coherence-override",
+            "tx/provenance",
+            "tx/rationale",
+            "tx/time",
+        ]
+        .into_iter()
+        .map(Attribute::from)
+        .collect();
+
+        let table = AttributeIntern::from_attributes(genesis_attrs.clone())
+            .expect("genesis intern must succeed");
+        assert_eq!(table.len(), 19, "ADR-FERR-030: genesis has 19 attributes");
+
+        // IDs must be 0..18 in sorted order.
+        for (i, attr) in genesis_attrs.iter().enumerate() {
+            let id = table
+                .id_of(attr)
+                .expect("genesis attribute must be interned");
+            assert_eq!(
+                id.as_u16(),
+                u16::try_from(i).unwrap_or(u16::MAX),
+                "ADR-FERR-030: genesis attribute '{attr}' should have ID {i}, got {}",
+                id.as_u16()
+            );
         }
     }
 }
