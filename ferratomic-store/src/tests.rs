@@ -628,6 +628,61 @@ fn batch_splice_3tx_fixture() -> (Store, Vec<TxReceipt>) {
     (store, receipts)
 }
 
+/// INV-FERR-029: `live_apply` with a lower `TxId` is a no-op — the causal map
+/// retains the higher `TxId` and the `live_set` is unchanged.
+#[test]
+fn test_inv_ferr_029_live_apply_noop_lower_txid() {
+    use im::OrdSet;
+
+    let entity = EntityId::from_content(b"live-noop-entity");
+    let attr = Attribute::from("db/doc");
+    let value = Value::String(Arc::from("hello"));
+
+    // Insert a datom with TxId=2 (higher).
+    let d_high = Datom::new(
+        entity,
+        attr.clone(),
+        value.clone(),
+        TxId::new(2, 0, 0),
+        Op::Assert,
+    );
+    let mut store = Store::from_datoms(std::collections::BTreeSet::new());
+    store.live_apply(&d_high);
+
+    // Verify initial causal state.
+    let key = (entity, attr.clone());
+    let causal_before = store.live_causal.get(&key).cloned();
+    let live_before: Option<OrdSet<Value>> = store.live_set.get(&key).cloned();
+    assert!(
+        live_before.is_some(),
+        "INV-FERR-029: value must be LIVE after Assert"
+    );
+
+    // Apply a datom with TxId=1 (lower) for the same (entity, attribute, value).
+    let d_low = Datom::new(
+        entity,
+        attr.clone(),
+        value.clone(),
+        TxId::new(1, 0, 0),
+        Op::Assert,
+    );
+    store.live_apply(&d_low);
+
+    // Causal map must still show TxId=2 (the higher one wins).
+    let causal_after = store.live_causal.get(&key).cloned();
+    assert_eq!(
+        causal_before, causal_after,
+        "INV-FERR-029: live_apply with lower TxId must not change causal map"
+    );
+
+    // live_set must be unchanged.
+    let live_after: Option<OrdSet<Value>> = store.live_set.get(&key).cloned();
+    assert_eq!(
+        live_before, live_after,
+        "INV-FERR-029: live_apply with lower TxId must not change live_set"
+    );
+}
+
 /// INV-FERR-072: `batch_splice_transact` with empty batch is a no-op.
 #[test]
 fn test_inv_ferr_072_batch_splice_transact_empty() {

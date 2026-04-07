@@ -143,12 +143,16 @@ fn observer_monotonicity() {
         epochs.push(store.snapshot().epoch());
     }
 
-    // INV-FERR-011: observer epochs must be monotonically non-decreasing.
+    // INV-FERR-011: observer epochs must strictly increase after each
+    // successful transact. Every transact_test() above uses .expect(), so
+    // each iteration commits exactly one transaction — epoch MUST advance.
     for i in 1..epochs.len() {
         assert!(
-            epochs[i] >= epochs[i - 1],
-            "INV-FERR-011: epoch regressed from {} to {} at step {i}",
+            epochs[i] > epochs[i - 1],
+            "INV-FERR-011: epoch must strictly increase after successful transact \
+             (was {} at step {}, got {} at step {i})",
             epochs[i - 1],
+            i - 1,
             epochs[i]
         );
     }

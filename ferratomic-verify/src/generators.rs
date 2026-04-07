@@ -1,7 +1,8 @@
 //! Proptest generators for all Ferratomic core types.
 //!
 //! Arbitrary instances for domain types used by property-based tests.
-//! Generators cover all value variants with uniform distribution.
+//! Generators cover all value variants with weighted distribution
+//! (random arms weight 10, edge-case arms weight 1).
 //!
 //! ## Usage
 //!
@@ -40,7 +41,7 @@ pub fn arb_attribute() -> impl Strategy<Value = Attribute> {
 
 /// Construct a `Value::Double` from a known non-NaN `f64`.
 ///
-/// Falls back to `Value::Double(0.0)` if the value is somehow NaN,
+/// Falls back to `Value::Long(0)` if the value is somehow NaN,
 /// satisfying NEG-FERR-001 (no panics) without `expect`/`unwrap`.
 /// All callers pass compile-time constants that are provably non-NaN.
 fn double_edge(f: f64) -> Value {
@@ -51,8 +52,10 @@ fn double_edge(f: f64) -> Value {
     }
 }
 
-/// Arbitrary Value: all 11 variant types with uniform distribution,
-/// plus explicit edge cases for boundary value testing.
+/// Arbitrary Value: all 11 variant types with weighted distribution.
+///
+/// Random generators get weight 10 each; edge-case `Just(...)` arms get
+/// weight 1 each, preventing edge cases from diluting random coverage.
 ///
 /// INV-FERR-012 (Content-Addressed Identity): edge cases verify that
 /// BLAKE3 hashing handles all representable values correctly, including
@@ -62,54 +65,60 @@ fn double_edge(f: f64) -> Value {
 pub fn arb_value() -> impl Strategy<Value = Value> {
     use std::sync::Arc;
     prop_oneof![
-        // --- Random generation (uniform across variants) ---
-        any::<i64>().prop_map(Value::Long),
-        any::<bool>().prop_map(Value::Bool),
-        ".*".prop_map(|s| Value::String(Arc::from(s.as_str()))),
-        any::<f64>().prop_filter_map("not NaN", |f| {
+        // --- Random generation (weight 10 each) ---
+        10 => any::<i64>().prop_map(Value::Long),
+        10 => any::<bool>().prop_map(Value::Bool),
+        10 => ".*".prop_map(|s| Value::String(Arc::from(s.as_str()))),
+        10 => any::<f64>().prop_filter_map("not NaN", |f| {
             ferratom::NonNanFloat::new(f).map(Value::Double)
         }),
-        "[a-z][a-z0-9_/]{0,63}".prop_map(|s| Value::Keyword(Arc::from(s.as_str()))),
-        any::<i64>().prop_map(Value::Instant),
-        any::<[u8; 16]>().prop_map(Value::Uuid),
-        prop::collection::vec(any::<u8>(), 0..256).prop_map(|v| Value::Bytes(Arc::from(v))),
-        arb_entity_id().prop_map(Value::Ref),
-        any::<i128>().prop_map(Value::BigInt),
-        any::<i128>().prop_map(Value::BigDec),
-        // --- Edge cases (bd-tj8r, INV-FERR-012) ---
+        10 => "[a-z][a-z0-9_/]{0,63}".prop_map(|s| Value::Keyword(Arc::from(s.as_str()))),
+        10 => any::<i64>().prop_map(Value::Instant),
+        10 => any::<[u8; 16]>().prop_map(Value::Uuid),
+        10 => prop::collection::vec(any::<u8>(), 0..256).prop_map(|v| Value::Bytes(Arc::from(v))),
+        10 => arb_entity_id().prop_map(Value::Ref),
+        10 => any::<i128>().prop_map(Value::BigInt),
+        10 => any::<i128>().prop_map(Value::BigDec),
+        // --- Edge cases (bd-tj8r, INV-FERR-012) — weight 1 each ---
         // Double: -0.0 (distinct bit pattern from +0.0)
-        Just(double_edge(-0.0)),
+        1 => Just(double_edge(-0.0)),
         // Double: positive infinity
-        Just(double_edge(f64::INFINITY)),
+        1 => Just(double_edge(f64::INFINITY)),
         // Double: negative infinity
-        Just(double_edge(f64::NEG_INFINITY)),
-        // Double: smallest positive subnormal
-        Just(double_edge(f64::MIN_POSITIVE)),
+        1 => Just(double_edge(f64::NEG_INFINITY)),
+        // Double: smallest positive normal
+        1 => Just(double_edge(f64::MIN_POSITIVE)),
+        // Double: f64 extremes (bd-b5mw)
+        1 => Just(double_edge(f64::MAX)),
+        1 => Just(double_edge(f64::MIN)),
         // String: empty string
-        Just(Value::String(Arc::from(""))),
+        1 => Just(Value::String(Arc::from(""))),
         // Keyword: empty-ish keyword
-        Just(Value::Keyword(Arc::from(""))),
+        1 => Just(Value::Keyword(Arc::from(""))),
         // Long: extremes
-        Just(Value::Long(i64::MIN)),
-        Just(Value::Long(i64::MAX)),
-        Just(Value::Long(0)),
+        1 => Just(Value::Long(i64::MIN)),
+        1 => Just(Value::Long(i64::MAX)),
+        1 => Just(Value::Long(0)),
         // Instant: extremes (epoch boundaries)
-        Just(Value::Instant(i64::MIN)),
-        Just(Value::Instant(i64::MAX)),
-        Just(Value::Instant(0)),
+        1 => Just(Value::Instant(i64::MIN)),
+        1 => Just(Value::Instant(i64::MAX)),
+        1 => Just(Value::Instant(0)),
         // Uuid: all zeros and all ones
-        Just(Value::Uuid([0u8; 16])),
-        Just(Value::Uuid([0xFF; 16])),
+        1 => Just(Value::Uuid([0u8; 16])),
+        1 => Just(Value::Uuid([0xFF; 16])),
         // Bytes: empty
-        Just(Value::Bytes(Arc::from(Vec::<u8>::new().as_slice()))),
+        1 => Just(Value::Bytes(Arc::from(Vec::<u8>::new().as_slice()))),
+        // Ref: boundary EntityIds (bd-wdcz)
+        1 => Just(Value::Ref(EntityId::from_bytes([0u8; 32]))),
+        1 => Just(Value::Ref(EntityId::from_bytes([0xFF; 32]))),
         // BigInt: extremes
-        Just(Value::BigInt(i128::MIN)),
-        Just(Value::BigInt(i128::MAX)),
-        Just(Value::BigInt(0)),
+        1 => Just(Value::BigInt(i128::MIN)),
+        1 => Just(Value::BigInt(i128::MAX)),
+        1 => Just(Value::BigInt(0)),
         // BigDec: extremes
-        Just(Value::BigDec(i128::MIN)),
-        Just(Value::BigDec(i128::MAX)),
-        Just(Value::BigDec(0)),
+        1 => Just(Value::BigDec(i128::MIN)),
+        1 => Just(Value::BigDec(i128::MAX)),
+        1 => Just(Value::BigDec(0)),
     ]
 }
 
@@ -276,6 +285,9 @@ pub fn verify_index_bijection(store: &Store) -> bool {
     let mut promoted = store.clone();
     promoted.promote();
     let primary: BTreeSet<&Datom> = promoted.datoms().collect();
+    // bd-0k2k: promote() on a Store always produces indexes. If this
+    // ever returns None, there is a bug in Store::promote(). Returning
+    // false here triggers a proptest failure with a clear message.
     let Some(indexes) = promoted.indexes() else {
         return false;
     };

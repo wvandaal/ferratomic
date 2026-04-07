@@ -23,12 +23,19 @@ fn main() {
         .unwrap_or(DEFAULT_PROPTEST_CASES);
 
     // ADR-FERR-012: warn if case count is below the confidence threshold.
-    let _ = check_case_count_sufficient(proptest_cases);
+    let sufficient = check_case_count_sufficient(proptest_cases);
 
     println!("NEG-FERR-006 Confidence Report");
     println!("==============================");
     println!("Proptest cases assumed: {proptest_cases}");
     println!();
+
+    if !sufficient {
+        println!(
+            "WARNING: case count {proptest_cases} is below 10,000 minimum for >99.97% confidence"
+        );
+        println!();
+    }
 
     print_header();
 
@@ -84,6 +91,11 @@ fn build_report(inv: &Invariant, proptest_cases: usize) -> InvReport {
     };
 
     let (proptest_conf, gate) = if inv.proptest_fn.is_some() {
+        // COUPLING INVARIANT: This report assumes all proptest cases passed.
+        // Run AFTER `cargo test --workspace` succeeds. If any proptest case
+        // failed, cargo test would have exited non-zero. The PROPTEST_CASES
+        // env var must match the ProptestConfig::with_cases() value in each
+        // proptest file.
         let (lower, _) = compute_beta_posterior(proptest_cases, 0, 1.0, 1.0);
         let g = if lower >= GATE_THRESHOLD {
             GateDecision::Pass

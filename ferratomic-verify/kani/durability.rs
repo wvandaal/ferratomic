@@ -1,7 +1,10 @@
 //! Durability and transaction-shape Kani harnesses.
 //!
-//! Covers INV-FERR-008, INV-FERR-013, INV-FERR-014, INV-FERR-018,
-//! INV-FERR-020, INV-FERR-024, INV-FERR-026, and INV-FERR-028.
+//! Covers INV-FERR-008, INV-FERR-013, INV-FERR-018, INV-FERR-020,
+//! INV-FERR-024, INV-FERR-026, and INV-FERR-028.
+//!
+//! Note: INV-FERR-014 (crash recovery) is stubbed — `checkpoint_superset_014_stub`
+//! only exercises checkpoint round-trip. Full WAL replay modeling deferred to Phase 4b.
 
 use std::{collections::BTreeSet, sync::Arc};
 
@@ -33,17 +36,25 @@ fn checkpoint_roundtrip() {
     assert_eq!(store.epoch(), loaded.epoch());
 }
 
-/// INV-FERR-014: recovery never loses committed datoms.
+/// Currently verifies checkpoint round-trip (INV-FERR-013). A full
+/// INV-FERR-014 harness requires WAL replay modeling (deferred to Phase 4b).
 ///
 /// bd-z2jv: Rewritten to use the real Store type instead of raw BTreeSet.
 /// A store with committed transactions is serialized to checkpoint bytes
 /// and deserialized back. The recovered store must contain at least all
 /// datoms from the original (superset property).
+///
+/// NOTE: This harness exercises the same checkpoint-serialization path as
+/// `checkpoint_roundtrip` above, but with symbolic transaction counts.
+/// It does NOT model WAL replay or crash-recovery sequencing, so it
+/// cannot verify INV-FERR-014 in full. The INV-FERR-014 gap is tracked
+/// for Phase 4b, which will introduce WAL frame injection and partial-
+/// write fault models.
 #[cfg_attr(kani, kani::proof)]
 #[cfg_attr(kani, kani::unwind(8))]
 #[cfg_attr(not(kani), test)]
 #[cfg_attr(not(kani), ignore = "requires Kani verifier")]
-fn recovery_superset() {
+fn checkpoint_superset_014_stub() {
     let mut store = Store::genesis();
     let agent = AgentId::from_bytes([1u8; 16]);
 
@@ -105,10 +116,16 @@ fn append_only() {
     let initial: BTreeSet<Datom> = store.datoms().cloned().collect();
     let initial_len = store.len();
 
+    // bd-fl4s: Use kani::any::<u8>() for symbolic entity variation.
+    // Gives Kani 256 symbolic paths to explore (attribute and value are
+    // fixed — they don't affect the append-only property).
+    let id_byte: u8 = kani::any();
+    let entity = EntityId::from_content(&[id_byte]);
+
     // Transact a new datom.
     let tx = Transaction::new(agent)
         .assert_datom(
-            EntityId::from_content(b"kani-append-only"),
+            entity,
             Attribute::from("db/doc"),
             Value::String("appended".into()),
         )

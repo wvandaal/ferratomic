@@ -93,23 +93,39 @@ where
     // verify that entity-scoped lookups also produce identical results,
     // catching index-level bugs that preserve the global set but mis-route
     // individual entity lookups.
+    //
+    // bd-lgwg: Use BTreeSet for order-independent comparison.
+    // bd-06pm: Track idx for accurate query_count.
+    let mut idx: usize = 0;
     for eid in query_entities {
-        let baseline_entity: Vec<&Datom> =
+        idx += 1;
+        let baseline_entity: BTreeSet<&Datom> =
             baseline.datoms().filter(|d| d.entity() == *eid).collect();
-        let optimized_entity: Vec<&Datom> =
+        let optimized_entity: BTreeSet<&Datom> =
             optimized.datoms().filter(|d| d.entity() == *eid).collect();
         if baseline_entity != optimized_entity {
+            // bd-0umz: Improved divergence message for same-count case.
+            let divergence_msg = if baseline_entity.len() == optimized_entity.len() {
+                format!(
+                    "entity {:?}: both returned {} datoms but sets differ \
+                     (same count, different members)",
+                    eid,
+                    baseline_entity.len()
+                )
+            } else {
+                format!(
+                    "entity {:?}: baseline returned {} datoms, optimized returned {}",
+                    eid,
+                    baseline_entity.len(),
+                    optimized_entity.len()
+                )
+            };
             return IsomorphismProof {
                 optimization: optimization_name.to_string(),
                 datom_count: baseline.len(),
-                query_count: query_entities.len(),
+                query_count: idx,
                 verdict: IsomorphismVerdict::Divergent {
-                    first_divergence: format!(
-                        "entity {:?}: baseline returned {} datoms, optimized returned {}",
-                        eid,
-                        baseline_entity.len(),
-                        optimized_entity.len()
-                    ),
+                    first_divergence: divergence_msg,
                 },
             };
         }
@@ -118,7 +134,7 @@ where
     IsomorphismProof {
         optimization: optimization_name.to_string(),
         datom_count: baseline.len(),
-        query_count: query_entities.len(),
+        query_count: idx,
         verdict: IsomorphismVerdict::Isomorphic,
     }
 }

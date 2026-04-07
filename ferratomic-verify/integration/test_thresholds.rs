@@ -439,7 +439,7 @@ fn threshold_inv_ferr_026_write_amplification_200k() {
 #[test]
 fn threshold_inv_ferr_027_read_latency_200k() {
     let datom_count = if cfg!(debug_assertions) {
-        10_000
+        15_000
     } else {
         200_000
     };
@@ -471,7 +471,7 @@ fn threshold_inv_ferr_027_read_latency_200k() {
 #[test]
 fn threshold_inv_ferr_028_cold_start_200k() {
     let datom_count = if cfg!(debug_assertions) {
-        10_000
+        25_000
     } else {
         200_000
     };

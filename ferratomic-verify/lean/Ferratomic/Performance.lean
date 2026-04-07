@@ -238,7 +238,10 @@ theorem demote_preserves_content (s : DatomStore) :
   The O(log log N) complexity claim is a performance property verified
   empirically by proptest benchmarks. -/
 
-/-- V:LEAN-ABSTRACT: Proves identity on Finset. Does not verify concrete sorted-array implementation.
+/-- V:LEAN-ABSTRACT placeholder: proves Finset membership reflexivity.
+    Concrete interpolation search correctness is verified by proptest
+    (INV-FERR-077). A concrete Lean proof connecting sorted-array binary
+    search to Finset membership is deferred to Phase 4b.
 
     INV-FERR-077: Interpolation search lookup equivalence.
     Membership in the Finset is equivalent to membership in any sorted

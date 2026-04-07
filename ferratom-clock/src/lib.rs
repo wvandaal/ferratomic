@@ -213,6 +213,15 @@ impl<C: ClockSource> HybridClock<C> {
         self.physical = new_physical;
         self.logical = new_logical;
     }
+
+    /// Set the logical counter directly for testing overflow behavior.
+    ///
+    /// Only available in test builds and when the `test-utils` feature is
+    /// enabled. Used to reach `u32::MAX` without 4 billion ticks.
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn set_logical_for_test(&mut self, logical: u32) {
+        self.logical = logical;
+    }
 }
 
 impl HybridClock<SystemClock> {
@@ -386,5 +395,43 @@ mod tests {
     fn frontier_empty_default() {
         let f = Frontier::default();
         assert!(f.is_empty());
+    }
+
+    /// A clock source that always returns the same value, simulating a
+    /// frozen/stuck wall clock for overflow testing.
+    struct FrozenClock {
+        fixed_ms: u64,
+    }
+
+    impl ClockSource for FrozenClock {
+        fn now(&self) -> u64 {
+            self.fixed_ms
+        }
+    }
+
+    /// INV-FERR-021: When the logical counter is at `u32::MAX` and the wall
+    /// clock is frozen, `tick()` enters the bounded retry loop, exhausts
+    /// `MAX_BUSY_WAIT_RETRIES`, and returns `Err(LogicalOverflow)`.
+    #[test]
+    fn test_inv_ferr_021_logical_overflow_under_frozen_clock() {
+        let agent = AgentId::from_bytes([7u8; 16]);
+        let mut clock = HybridClock::with_clock(agent, FrozenClock { fixed_ms: 42 });
+
+        // First tick: physical=42, logical=0.
+        let first = clock.tick().expect("first tick must succeed");
+        assert_eq!(first.physical(), 42);
+        assert_eq!(first.logical(), 0);
+
+        // Force logical to u32::MAX via test helper.
+        clock.set_logical_for_test(u32::MAX);
+
+        // Next tick: checked_add(1) overflows, enters busy-wait loop.
+        // FrozenClock never advances, so after MAX_BUSY_WAIT_RETRIES
+        // iterations the clock returns Err(LogicalOverflow).
+        let result = clock.tick();
+        assert!(
+            matches!(result, Err(ClockError::LogicalOverflow)),
+            "INV-FERR-021: frozen clock at logical=u32::MAX must overflow, got {result:?}"
+        );
     }
 }

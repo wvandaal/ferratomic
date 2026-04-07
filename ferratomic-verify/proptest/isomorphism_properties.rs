@@ -289,6 +289,38 @@ fn test_inv_ferr_059_isomorphism_api_shape() {
     assert_eq!(proof.query_count, 0);
 }
 
+/// bd-yopg: Verify isomorphism with non-empty query_entities.
+///
+/// The identity optimization must pass even when per-entity queries are
+/// exercised, proving the per-entity BTreeSet comparison path is correct.
+#[test]
+fn test_inv_ferr_059_isomorphism_with_query_entities() {
+    use ferratom::{AgentId, Attribute, EntityId, Value};
+    use ferratomic_db::writer::Transaction;
+
+    let mut store = Store::genesis();
+    let entity = EntityId::from_content(b"iso-query-entity");
+    let tx = Transaction::new(AgentId::from_bytes([1u8; 16]))
+        .assert_datom(
+            entity,
+            Attribute::from("db/doc"),
+            Value::String("iso-query-value".into()),
+        )
+        .commit(store.schema())
+        .expect("schema valid");
+    store.transact_test(tx).expect("transact must succeed");
+
+    let proof =
+        verify_optimization_isomorphism(&store, |s| s.clone(), &[entity], "identity-with-queries");
+    assert_eq!(
+        proof.verdict,
+        IsomorphismVerdict::Isomorphic,
+        "INV-FERR-059: identity optimization with query entities must be isomorphic"
+    );
+    assert_eq!(proof.query_count, 1, "must have executed 1 entity query");
+    assert!(proof.datom_count > 0, "store must have datoms");
+}
+
 /// Verify that the isomorphism harness detects a divergent optimization.
 #[test]
 fn test_inv_ferr_059_isomorphism_detects_divergence() {

@@ -7,7 +7,7 @@
 use ferratom::{AgentId, Attribute, EntityId, Value};
 use ferratomic_db::{
     checkpoint::{load_checkpoint, write_checkpoint, write_checkpoint_to_writer},
-    storage::{cold_start_with_backend, InMemoryBackend},
+    storage::{cold_start_with_backend, InMemoryBackend, RecoveryLevel},
     store::Store,
     writer::Transaction,
 };
@@ -59,6 +59,9 @@ proptest! {
         let mut bytes = Vec::new();
         write_checkpoint_to_writer(&store, &mut bytes)
             .expect("serialize checkpoint");
+
+        // bd-gdgq: Skip no-op cases where flip_offset exceeds checkpoint size.
+        prop_assume!(flip_offset < bytes.len(), "skip no-op cases where flip_offset exceeds checkpoint size");
 
         if flip_offset < bytes.len() {
             bytes[flip_offset] ^= 1 << flip_bit;
@@ -125,6 +128,15 @@ proptest! {
                         "INV-FERR-056: non-empty store must have schema"
                     );
                 }
+                // bd-taa8: InMemoryBackend::new() starts fresh (no checkpoint,
+                // no WAL), so the only valid Ok path is genesis.
+                if datom_count == 0 {
+                    prop_assert_eq!(
+                        cs.level,
+                        RecoveryLevel::Genesis,
+                        "INV-FERR-056: empty store from fresh backend must be Genesis level"
+                    );
+                }
             }
             Err(ferratom::FerraError::Io { .. })
             | Err(ferratom::FerraError::WalRead(_))
@@ -138,6 +150,8 @@ proptest! {
                      (got {invariant}: {details}) — this indicates a logic bug, not a fault"
                 );
             }
+            // Catch-all: any new FerraError variant not listed above will fail the test,
+            // ensuring explicit review when the error taxonomy expands.
             Err(e) => {
                 prop_assert!(false, "INV-FERR-056: unexpected error category: {e}");
             }
@@ -169,6 +183,15 @@ proptest! {
                         "INV-FERR-056: non-empty store must have schema"
                     );
                 }
+                // bd-taa8: InMemoryBackend::new() starts fresh (no checkpoint,
+                // no WAL), so the only valid Ok path is genesis.
+                if datom_count == 0 {
+                    prop_assert_eq!(
+                        cs.level,
+                        RecoveryLevel::Genesis,
+                        "INV-FERR-056: empty store from fresh backend must be Genesis level"
+                    );
+                }
             }
             Err(ferratom::FerraError::Io { .. })
             | Err(ferratom::FerraError::WalRead(_))
@@ -182,6 +205,8 @@ proptest! {
                      (got {invariant}: {details}) — this indicates a logic bug, not a fault"
                 );
             }
+            // Catch-all: any new FerraError variant not listed above will fail the test,
+            // ensuring explicit review when the error taxonomy expands.
             Err(e) => {
                 prop_assert!(false, "INV-FERR-056: unexpected error category: {e}");
             }
@@ -212,6 +237,15 @@ proptest! {
                         "INV-FERR-056: non-empty store must have schema"
                     );
                 }
+                // bd-taa8: InMemoryBackend::new() starts fresh (no checkpoint,
+                // no WAL), so the only valid Ok path is genesis.
+                if datom_count == 0 {
+                    prop_assert_eq!(
+                        cs.level,
+                        RecoveryLevel::Genesis,
+                        "INV-FERR-056: empty store from fresh backend must be Genesis level"
+                    );
+                }
             }
             Err(ferratom::FerraError::Io { .. })
             | Err(ferratom::FerraError::WalRead(_))
@@ -225,6 +259,8 @@ proptest! {
                      (got {invariant}: {details}) — this indicates a logic bug, not a fault"
                 );
             }
+            // Catch-all: any new FerraError variant not listed above will fail the test,
+            // ensuring explicit review when the error taxonomy expands.
             Err(e) => {
                 prop_assert!(false, "INV-FERR-056: unexpected error category: {e}");
             }

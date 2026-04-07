@@ -191,7 +191,7 @@ impl Store {
     }
 
     /// Test-only convenience: applies a transaction with a synthetic
-    /// epoch-based `TxId` derived from `self.epoch + 1`.
+    /// epoch-based `TxId` derived from checked epoch increment.
     ///
     /// Bypasses the HLC clock that `Database::transact` provides, making
     /// it suitable for tests that operate on `Store` directly without
@@ -200,13 +200,21 @@ impl Store {
     /// # Errors
     ///
     /// Delegates to [`Store::transact`]; returns the same error variants.
+    /// Returns `FerraError::InvariantViolation` on epoch overflow.
     #[cfg(any(test, feature = "test-utils"))]
     pub fn transact_test(
         &mut self,
         transaction: Transaction<Committed>,
     ) -> Result<TxReceipt, FerraError> {
         let agent = transaction.agent();
-        let tx_id = ferratom::TxId::with_agent(self.epoch.saturating_add(1), 0, agent);
+        let next_epoch =
+            self.epoch
+                .checked_add(1)
+                .ok_or_else(|| FerraError::InvariantViolation {
+                    invariant: "INV-FERR-007".to_string(),
+                    details: "epoch overflow in transact_test".to_string(),
+                })?;
+        let tx_id = ferratom::TxId::with_agent(next_epoch, 0, agent);
         self.transact(transaction, tx_id)
     }
 

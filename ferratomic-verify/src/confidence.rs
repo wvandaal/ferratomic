@@ -64,8 +64,10 @@ pub fn check_case_count_sufficient(cases: usize) -> bool {
 /// For k=0 failures, uses the closed-form: `1 - significance^(1/n)`
 /// where significance = 0.05 for a 95% interval.
 ///
-/// For k>0 failures, uses the Wald interval normal approximation:
-/// `p_hat - z * sqrt(p_hat * (1 - p_hat) / n)` where z = 1.96.
+/// For k>0 failures, uses a Wald-type normal approximation to the Beta
+/// posterior: `p_hat - z * sqrt(p_hat * (1 - p_hat) / n)` where z = 1.96
+/// and `p_hat = alpha/(alpha+beta)` is the posterior mean (not the classical
+/// sample proportion).
 ///
 /// ADR-FERR-012: returns (lower_bound, upper_bound).
 #[must_use]
@@ -90,7 +92,9 @@ pub fn compute_beta_posterior(
         // Upper bound is always 1.0 when k=0 (no failures observed)
         (lower, 1.0)
     } else {
-        // Normal approximation to Beta posterior
+        // Wald-type normal approximation to the Beta posterior.
+        // Uses posterior mean p_hat = alpha/(alpha+beta) rather than
+        // the classical sample proportion.
         let p_hat = alpha / (alpha + beta);
         let std_err = (p_hat * (1.0 - p_hat) / (alpha + beta)).sqrt();
         let z = 1.96; // 95% CI
@@ -222,6 +226,24 @@ mod tests {
         assert!(
             !check_case_count_sufficient(1_000),
             "ADR-FERR-012: 1,000 cases must be insufficient"
+        );
+        assert!(
+            !check_case_count_sufficient(0),
+            "ADR-FERR-012: 0 cases must be insufficient"
+        );
+    }
+
+    /// ADR-FERR-012: boundary test for the PROPTEST_CASES env var threshold.
+    /// Verifies the exact boundary at MIN_CASES_FOR_CONFIDENCE (10,000).
+    #[test]
+    fn test_adr_ferr_012_check_case_count_boundary() {
+        assert!(
+            check_case_count_sufficient(10_000),
+            "ADR-FERR-012: exactly 10,000 cases must be sufficient"
+        );
+        assert!(
+            !check_case_count_sufficient(9_999),
+            "ADR-FERR-012: 9,999 cases must be insufficient"
         );
         assert!(
             !check_case_count_sufficient(0),

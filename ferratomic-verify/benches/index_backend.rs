@@ -81,7 +81,7 @@ fn bench_index_backend(c: &mut Criterion) {
         let direct = build_direct_ordmap(size);
         let key = lookup_key(size / 2);
 
-        group.throughput(Throughput::Elements(size as u64));
+        group.throughput(Throughput::Elements(1));
 
         // Trait-dispatched lookup via IndexBackend::backend_get
         group.bench_with_input(
@@ -174,7 +174,7 @@ fn bench_perf3_overhead_assertion(c: &mut Criterion) {
 
     // Also register a Criterion benchmark so the comparison appears in
     // the HTML report alongside the existing groups.
-    group.throughput(Throughput::Elements(LOOKUP_ITERATIONS as u64));
+    group.throughput(Throughput::Elements(1));
     group.bench_function("trait_vs_direct_ratio", |b| {
         b.iter(|| {
             black_box(store.indexes().unwrap().eavt().backend_get(black_box(&key)));

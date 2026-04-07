@@ -240,6 +240,13 @@ The following aspects are **abstracted away** in Lean and verified by other laye
 | Merkle proof verification | Axiomatized `inclusion_proof_complete` | proptest + Kani (real prolly tree) | 052, 053 |
 | VKC 3-part verification | Signature check only (context/calibration axiomatized) | proptest + integration | 055 |
 
+#### Verification Layer Tags: Lean Abstraction Levels
+
+| Tag | Scope | Meaning |
+|-----|-------|---------|
+| `V:LEAN-ABSTRACT` | `Finset Datom` (abstract model) | Proof operates on the set-theoretic model only. Proves algebraic identity at the set level. Does NOT verify concrete data structure implementation correctness. |
+| `V:LEAN-CONCRETE` | Abstract model + concrete representation | Proof connects abstract model to concrete representation (e.g., sorted array to Finset bijection). Verifies that implementation-level operations preserve abstract properties. |
+
 The **conformance bridge** (proptest matching Lean predictions) catches divergence between
 the abstract model and concrete implementation. A property that holds in Lean but fails in
 proptest indicates an implementation bug. A property that fails in Lean is an algebraic defect.

@@ -1293,12 +1293,12 @@ theorem partial_subset_full (stores : Finset (Fin k))
   apply Finset.filter_subset_filter
   exact Finset.biUnion_subset_biUnion_of_subset_left f h_sub
 
--- When all stores respond, partial == full
-theorem all_respond_equals_full (stores : Finset (Fin k))
-    (f : Fin k → DatomStore)
-    (p : Datom → Prop) [DecidablePred p] :
-    (stores.biUnion f).filter p = (stores.biUnion f).filter p := by
-  rfl
+-- When all stores respond, partial == full.
+-- NOTE: The `all_respond_equals_full` theorem was removed from
+-- Federation.lean because it proved `x = x` (trivially `rfl`).
+-- The special case where all stores respond is covered by
+-- `partial_subset_full` when `responding = stores` — the subset
+-- relation degenerates to `⊆` reflexivity, yielding equality.
 ```
 
 ---

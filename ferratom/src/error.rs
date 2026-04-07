@@ -18,6 +18,9 @@ use std::fmt;
 /// | Concurrency | Transient | Yes (backoff) | `Backpressure` |
 /// | Federation | Infrastructure | Yes (retry/reconnect) | `PeerUnreachable` |
 /// | Internal | Our bug | No (file a bug) | `InvariantViolation` |
+///
+/// `PartialEq` compares full variant structure including string fields.
+/// For variant-only matching in tests, prefer `matches!(err, FerraError::WalWrite(_))`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FerraError {
     // ── Storage errors (retryable) ──────────────────────────────────
@@ -244,8 +247,13 @@ impl std::error::Error for FerraError {}
 
 /// Convert `ClockError` into `FerraError::InvariantViolation` for `?` propagation.
 ///
-/// INV-FERR-021: Clock overflow is an invariant violation — the wall clock
-/// source failed to advance within bounded retry.
+/// INV-FERR-021: `InvariantViolation` is the correct category because the
+/// bounded retry loop in `HybridClock::tick()` already waited ~1-10ms
+/// (`MAX_BUSY_WAIT_RETRIES` yield iterations). If the wall clock still
+/// has not advanced after that delay, the clock source is fundamentally
+/// broken (frozen mock, stuck hardware, sandboxed monotonic clock), not
+/// transiently unavailable. Retrying will not help -- the caller must
+/// treat this as an unrecoverable internal fault.
 impl From<ferratom_clock::ClockError> for FerraError {
     fn from(e: ferratom_clock::ClockError) -> Self {
         Self::InvariantViolation {
@@ -426,6 +434,18 @@ mod tests {
         // Display through the trait object — proves the impl is wired up.
         let msg = format!("{err}");
         assert!(msg.contains("I/O"), "std::error::Error Display should work");
+    }
+
+    /// `From<ClockError>` maps to `InvariantViolation` with INV-FERR-021.
+    #[test]
+    fn test_from_clock_error_maps_to_invariant_violation() {
+        let err = FerraError::from(ferratom_clock::ClockError::LogicalOverflow);
+        match err {
+            FerraError::InvariantViolation { invariant, .. } => {
+                assert_eq!(invariant, "INV-FERR-021");
+            }
+            other => panic!("Expected InvariantViolation, got {other:?}"),
+        }
     }
 
     /// `From<std::io::Error>` produces `FerraError::Io` with kind preserved.

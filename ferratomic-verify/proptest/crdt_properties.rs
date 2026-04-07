@@ -580,16 +580,31 @@ proptest! {
     }
 
     // -----------------------------------------------------------------
-    // Overlap merge tests (bd-vd5d)
+    // Overlap merge tests (bd-vd5d, bd-z3uy, bd-9gg7)
     // -----------------------------------------------------------------
 
-    /// INV-FERR-001..004: merge of stores with controlled overlap must
+    /// INV-FERR-001, 003, 004: merge of stores with controlled overlap must
     /// satisfy all CRDT properties. The overlap guarantees non-empty
     /// intersection, exercising merge dedup and LIVE resolution.
+    ///
+    /// bd-z3uy: Verifies non-empty intersection via BTreeSet.
+    /// bd-9gg7: Adds associativity test with a third store.
     #[test]
-    fn inv_ferr_001_004_merge_with_overlap(
+    fn inv_ferr_001_003_004_merge_with_overlap(
         (a, b) in arb_store_with_overlap(50, 0.3),
+        c in arb_store(50),
     ) {
+        // bd-z3uy: Verify the overlap generator produced non-empty intersection.
+        let a_set: BTreeSet<Datom> = a.datoms().cloned().collect();
+        let b_set: BTreeSet<Datom> = b.datoms().cloned().collect();
+        let intersection_count = a_set.intersection(&b_set).count();
+        prop_assert!(
+            intersection_count > 0,
+            "overlap generator must produce non-empty intersection \
+             (|A|={}, |B|={}, |A & B|=0)",
+            a_set.len(), b_set.len()
+        );
+
         // Commutativity (INV-FERR-001).
         let ab = merge(&a, &b).expect("merge(A,B) must succeed");
         let ba = merge(&b, &a).expect("merge(B,A) must succeed");
@@ -621,5 +636,15 @@ proptest! {
                 "INV-FERR-004: merged store must contain all datoms from B"
             );
         }
+
+        // bd-9gg7: Associativity (INV-FERR-002) with overlap.
+        let ab_c = merge(&ab, &c).expect("merge(AB,C) must succeed");
+        let bc = merge(&b, &c).expect("merge(B,C) must succeed");
+        let a_bc = merge(&a, &bc).expect("merge(A,BC) must succeed");
+        prop_assert_eq!(
+            ab_c.datom_set(),
+            a_bc.datom_set(),
+            "INV-FERR-002: merge associativity with overlap"
+        );
     }
 }
