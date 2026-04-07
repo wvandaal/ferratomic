@@ -3,8 +3,8 @@
 //! INV-FERR-013: `load(checkpoint(S)) = S` -- round-trip identity.
 //!
 //! V4 decomposes each datom into per-column arrays (entity, attribute,
-//! value, tx, op) and serializes them independently. This layout enables
-//! per-column compression in Phase 4b (delta coding for `TxId`, RLE for
+//! value, tx, op) and serializes them independently. This layout is
+//! designed to enable per-column compression in Phase 4b (delta coding for `TxId`, RLE for
 //! entity, bitpacking for ops). Phase 4a uses bincode for all columns.
 //!
 //! # File Format

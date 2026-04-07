@@ -62,7 +62,7 @@ pub struct PositionalStore {
     /// Permutation: AVET-order index -> canonical position (INV-FERR-005).
     /// Lazily built on first access via `OnceLock`.
     pub(crate) perm_avet: OnceLock<Vec<u32>>,
-    /// Permutation: TxId-order index -> canonical position (bd-3ta0).
+    /// Permutation: TxId-order index -> canonical position (INV-FERR-081).
     /// Lazily built on first access via `OnceLock`. Enables O(log N)
     /// temporal range queries across all entities.
     pub(crate) perm_txid: OnceLock<Vec<u32>>,
@@ -391,21 +391,32 @@ impl PositionalStore {
         layout_to_sorted(self.perm_avet())
     }
 
-    /// TxId-order permutation array in Eytzinger (BFS) layout (bd-3ta0).
+    /// TxId-order permutation array in Eytzinger (BFS) layout (INV-FERR-081).
     ///
     /// Lazily builds the permutation on first access. The returned slice
     /// has `n + 1` elements: index 0 is a sentinel (`u32::MAX`), root at index 1.
     /// Use `perm_txid_sorted()` for the original sorted permutation.
     /// Enables O(log N) temporal range queries across all entities.
+    ///
+    /// Uses canonical position as a stable tiebreaker when two datoms share
+    /// the same `TxId`, ensuring deterministic permutation order regardless
+    /// of sort algorithm stability (INV-FERR-081).
     #[must_use]
     pub fn perm_txid(&self) -> &[u32] {
         self.perm_txid.get_or_init(|| {
-            let sorted = build_permutation(&self.canonical, Datom::tx);
-            layout_permutation(&sorted)
+            let mut indices: Vec<u32> =
+                (0..u32::try_from(self.canonical.len()).unwrap_or(0)).collect();
+            indices.sort_by(|&a, &b| {
+                self.canonical[a as usize]
+                    .tx()
+                    .cmp(&self.canonical[b as usize].tx())
+                    .then_with(|| a.cmp(&b))
+            });
+            layout_permutation(&indices)
         })
     }
 
-    /// Recover the sorted `TxId` permutation from Eytzinger layout (bd-3ta0).
+    /// Recover the sorted `TxId` permutation from Eytzinger layout (INV-FERR-081).
     ///
     /// O(n) in-order traversal. Used for checkpoint serialization where
     /// the original sorted permutation order is required.
@@ -561,17 +572,18 @@ impl PositionalStore {
     /// Unlike `col_entities`/`col_txids`/`col_ops`, the attribute column
     /// cannot be lazily self-built because `PositionalStore` does not own an
     /// `AttributeIntern`. The caller provides the intern table and receives
-    /// the column. 2 bytes per datom.
+    /// the column. 2 bytes per datom plus `Option` tag.
     ///
-    /// Returns `None` entries as-is via `filter_map` -- attributes not present
-    /// in the intern table are silently skipped. Callers that require a
-    /// complete column should ensure the intern table covers all attributes
-    /// in the store.
+    /// Returns `Option<AttributeId>` per position to preserve positional
+    /// correspondence with the canonical array. `None` means the attribute
+    /// at that position is not present in the intern table. Callers that
+    /// require a complete column should ensure the intern table covers all
+    /// attributes in the store.
     #[must_use]
-    pub fn build_col_attrs(&self, intern: &AttributeIntern) -> Vec<AttributeId> {
+    pub fn build_col_attrs(&self, intern: &AttributeIntern) -> Vec<Option<AttributeId>> {
         self.canonical
             .iter()
-            .filter_map(|d| intern.id_of(d.attribute()))
+            .map(|d| intern.id_of(d.attribute()))
             .collect()
     }
 }

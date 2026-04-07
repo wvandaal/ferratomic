@@ -1,4 +1,4 @@
-//! LIVE bitvector construction and kernels (INV-FERR-029).
+//! LIVE bitvector construction and kernels (INV-FERR-029, INV-FERR-080).
 //!
 //! A datom is live iff it is the last (highest `TxId`) Assert in its
 //! `(entity, attribute, value)` group. Since canonical datoms are
@@ -206,82 +206,11 @@ pub fn rebuild_live_incremental(
         return build_live_bitvector(canonical);
     }
 
-    // Expand dirty set: an (e,a,v) group at a chunk boundary requires
-    // both the chunk and its neighbor to be recomputed. We collect
-    // expanded dirty flags.
-    let mut dirty_flags = vec![false; num_chunks];
-    for &ci in &dirty {
-        dirty_flags[ci] = true;
-    }
-    expand_dirty_for_boundaries(canonical, chunk_size, &mut dirty_flags);
-
-    // Build LIVE bitvector chunk by chunk. For clean chunks, run the
-    // kernel over just that chunk's range (correctness: each chunk is
-    // self-contained after boundary expansion). For dirty chunks, same
-    // thing. In Phase 4a, we always rebuild every chunk through the
-    // kernel — the "incremental" benefit is that a future phase can
-    // cache clean-chunk results. For now, the infrastructure is what
-    // matters, and correctness is guaranteed by running the kernel on
-    // each chunk's range independently.
-    //
-    // NOTE: We cannot skip clean chunks entirely because the kernel
-    // needs to see full (e,a,v) groups. After boundary expansion,
-    // every chunk whose groups are fully contained can be processed
-    // independently. We rebuild ALL chunks to guarantee bit-identical
-    // output with the full `build_live_bitvector`.
-    //
-    // Phase 4b optimization: cache clean-chunk LIVE results and only
-    // recompute dirty chunks. Requires position-provenance tracking
-    // during merge to know which old LIVE bits map to new positions.
+    // Phase 4b: use dirty flags to rebuild only changed chunks.
+    // For now, fall back to full rebuild.
     build_live_bitvector(canonical)
 }
 
-/// Expand dirty flags to cover (entity, attribute, value) groups that
-/// span chunk boundaries (INV-FERR-080 boundary safety).
-///
-/// If the last datom in chunk `i` and the first datom in chunk `i+1`
-/// share the same `(entity, attribute, value)` triple, and either
-/// chunk is dirty, mark both as dirty. Repeat until stable.
-pub fn expand_dirty_for_boundaries(
-    canonical: &[Datom],
-    chunk_size: usize,
-    dirty_flags: &mut [bool],
-) {
-    if canonical.is_empty() || dirty_flags.len() <= 1 {
-        return;
-    }
-
-    // Single pass: check each boundary between chunk i and chunk i+1.
-    // If the (e,a,v) group spans the boundary and either side is dirty,
-    // mark both. Iterate until no new dirty flags are set (convergence
-    // guaranteed because dirty flags only grow).
-    let mut changed = true;
-    while changed {
-        changed = false;
-        for boundary in 0..dirty_flags.len() - 1 {
-            let last_in_chunk = (boundary + 1) * chunk_size - 1;
-            let first_in_next = (boundary + 1) * chunk_size;
-            if first_in_next >= canonical.len() {
-                break;
-            }
-            let last_idx = last_in_chunk.min(canonical.len() - 1);
-            let spans = same_eav_group(&canonical[last_idx], &canonical[first_in_next]);
-            if spans && (dirty_flags[boundary] || dirty_flags[boundary + 1]) {
-                if !dirty_flags[boundary] {
-                    dirty_flags[boundary] = true;
-                    changed = true;
-                }
-                if !dirty_flags[boundary + 1] {
-                    dirty_flags[boundary + 1] = true;
-                    changed = true;
-                }
-            }
-        }
-    }
-}
-
-/// Check if two datoms belong to the same `(entity, attribute, value)` group.
-#[must_use]
-pub fn same_eav_group(a: &Datom, b: &Datom) -> bool {
-    a.entity() == b.entity() && a.attribute() == b.attribute() && a.value() == b.value()
-}
+// Phase 4b: expand_dirty_for_boundaries and same_eav_group will be
+// re-added when the incremental LIVE path skips clean chunks instead
+// of falling back to full rebuild. See INV-FERR-080 Level 1.

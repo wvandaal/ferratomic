@@ -1,21 +1,23 @@
-//! Entity run-length encoding for the entity column (bd-mdfq).
+//! Entity run-length encoding for the entity column (INV-FERR-082, bd-mdfq).
 //!
 //! EAVT sort order guarantees that all datoms for the same entity are
 //! contiguous. The entity column is a series of runs:
 //! `[e1, e1, e1, e2, e2, e3, e3, e3, e3]` encodes as
 //! `[(e1, 3), (e2, 2), (e3, 4)]`.
 //!
-//! The prefix-sum array enables O(1) group boundary lookup:
+//! The prefix-sum array enables O(log G) position-to-group, O(1) group boundary
+//! lookup:
 //! - `group_of(position)` -- which entity group contains canonical position p
 //! - `group_range(group_idx)` -- (start, end) position range for an entity group
 
 use ferratom::EntityId;
 
-/// Run-length encoded entity column with prefix-sum index (bd-mdfq).
+/// Run-length encoded entity column with prefix-sum index (INV-FERR-082, bd-mdfq).
 ///
 /// Compresses the flat entity column into `(EntityId, u32)`
-/// run pairs plus a prefix-sum array for O(1) group boundary lookup.
-/// EAVT sort guarantees entity contiguity (INV-FERR-076).
+/// run pairs plus a prefix-sum array for O(log G) position-to-group,
+/// O(1) group boundary lookup. EAVT sort guarantees entity contiguity
+/// (INV-FERR-076).
 ///
 /// Memory: for `G` distinct entity groups, stores `G * 36` bytes (runs)
 /// plus `(G + 1) * 4` bytes (prefix sums) instead of `N * 32` bytes
@@ -31,7 +33,7 @@ pub struct EntityRle {
 }
 
 impl EntityRle {
-    /// Build from the entity column (bd-mdfq).
+    /// Build from the entity column (INV-FERR-082, bd-mdfq).
     ///
     /// Scans `entities` left-to-right, collapsing consecutive identical
     /// `EntityId` values into `(entity, run_length)` pairs. Simultaneously
@@ -41,6 +43,10 @@ impl EntityRle {
     /// (entity contiguity guaranteed by INV-FERR-076).
     #[must_use]
     pub fn from_entities(entities: &[EntityId]) -> Self {
+        debug_assert!(
+            u32::try_from(entities.len()).is_ok(),
+            "INV-FERR-076: entity column exceeds u32 position space"
+        );
         if entities.is_empty() {
             return Self {
                 runs: Vec::new(),
@@ -85,7 +91,7 @@ impl EntityRle {
         Self { runs, prefix_sums }
     }
 
-    /// Number of distinct entity groups (bd-mdfq).
+    /// Number of distinct entity groups (INV-FERR-082, bd-mdfq).
     #[must_use]
     pub fn group_count(&self) -> usize {
         self.runs.len()
@@ -97,7 +103,7 @@ impl EntityRle {
         self.prefix_sums.last().copied().unwrap_or(0)
     }
 
-    /// Which entity group contains canonical position `position` (bd-mdfq).
+    /// Which entity group contains canonical position `position` (INV-FERR-082, bd-mdfq).
     ///
     /// Binary search on the prefix-sum array: O(log G) where G is the
     /// number of distinct entity groups. Returns `None` if `position`
@@ -122,7 +128,7 @@ impl EntityRle {
         Some(pp.saturating_sub(1))
     }
 
-    /// Start and end canonical positions for entity group `group_idx` (bd-mdfq).
+    /// Start and end canonical positions for entity group `group_idx` (INV-FERR-082, bd-mdfq).
     ///
     /// Returns `(start, end)` where datoms for this group occupy positions
     /// `[start, end)`. Returns `None` if `group_idx >= group_count()`.
@@ -136,12 +142,18 @@ impl EntityRle {
         Some((start, end))
     }
 
-    /// Entity for group `group_idx` (bd-mdfq).
+    /// Entity for group `group_idx` (INV-FERR-082).
     ///
     /// Returns `None` if `group_idx >= group_count()`.
     #[must_use]
     pub fn entity_at_group(&self, group_idx: usize) -> Option<EntityId> {
         self.runs.get(group_idx).map(|(eid, _)| *eid)
+    }
+
+    /// Entity at a canonical position. O(log G) via `group_of` + O(1) lookup.
+    #[must_use]
+    pub fn entity_at_position(&self, pos: usize) -> Option<EntityId> {
+        self.entity_at_group(self.group_of(pos)?)
     }
 
     /// Borrow the run pairs slice.
