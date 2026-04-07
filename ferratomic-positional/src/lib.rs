@@ -23,6 +23,7 @@ pub(crate) mod mph;
 pub(crate) mod perm;
 mod search;
 pub mod store;
+pub mod succinct;
 
 #[cfg(test)]
 mod tests;
@@ -34,3 +35,4 @@ pub use live::build_live_bitvector_pub;
 pub use live::{live_positions_for_test, live_positions_from_sorted_run_keys_for_test};
 pub use merge::{merge_positional, merge_sort_dedup};
 pub use store::PositionalStore;
+pub use succinct::SuccinctBitVec;
