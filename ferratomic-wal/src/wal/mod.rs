@@ -28,6 +28,7 @@
 //! - `writer`: Append and fsync — the write path.
 //! - `recover`: Recovery and frame parsing — the read path.
 
+pub mod dedup_bloom;
 mod recover;
 mod writer;
 
@@ -110,6 +111,9 @@ pub struct Wal {
     /// ME-012: The highest epoch written since last fsync. Updated to
     /// `last_synced_epoch` on successful `fsync()` (INV-FERR-007).
     pub(crate) pending_epoch: u64,
+    /// Advisory Bloom filter for deduplicating redundant WAL writes
+    /// from bursty event sources (INV-FERR-084). Cleared on checkpoint.
+    pub(crate) dedup_bloom: dedup_bloom::WalDedupBloom,
 }
 
 impl Wal {
@@ -147,6 +151,7 @@ impl Wal {
             file,
             last_synced_epoch: 0,
             pending_epoch: 0,
+            dedup_bloom: dedup_bloom::WalDedupBloom::new(),
         })
     }
 
@@ -172,7 +177,17 @@ impl Wal {
             file,
             last_synced_epoch: 0,
             pending_epoch: 0,
+            dedup_bloom: dedup_bloom::WalDedupBloom::new(),
         })
+    }
+
+    /// Mutable access to the dedup Bloom filter (INV-FERR-084).
+    ///
+    /// The caller (Database layer) uses this to check/insert datom
+    /// content hashes before WAL writes. Advisory — false positives
+    /// are safe due to set semantics (INV-FERR-003).
+    pub fn dedup_bloom_mut(&mut self) -> &mut dedup_bloom::WalDedupBloom {
+        &mut self.dedup_bloom
     }
 
     /// The epoch of the last entry confirmed during recovery.
