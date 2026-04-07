@@ -357,4 +357,37 @@ mod tests {
         assert_eq!(rle.runs(), &[(e1, 2), (e2, 3)]);
         assert_eq!(rle.prefix_sums(), &[0, 2, 5]);
     }
+
+    // -- Test 7: Proptest roundtrip (INV-FERR-082) --
+
+    use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn test_inv_ferr_082_rle_roundtrip(
+            // Generate sorted entity sequences (simulate EAVT entity contiguity)
+            group_sizes in prop::collection::vec(1u32..20, 1..50),
+        ) {
+            let mut entities = Vec::new();
+            for (i, &size) in group_sizes.iter().enumerate() {
+                let mut bytes = [0u8; 32];
+                bytes[0] = u8::try_from(i >> 8).unwrap_or(0);
+                bytes[1] = u8::try_from(i & 0xFF).unwrap_or(0);
+                let eid = EntityId::from_bytes(bytes);
+                for _ in 0..size {
+                    entities.push(eid);
+                }
+            }
+
+            let rle = EntityRle::from_entities(&entities);
+            prop_assert_eq!(rle.total_datoms() as usize, entities.len());
+            prop_assert_eq!(rle.group_count(), group_sizes.len());
+
+            for (pos, expected_entity) in entities.iter().enumerate() {
+                let actual = rle.entity_at_position(pos);
+                prop_assert_eq!(actual, Some(*expected_entity),
+                    "INV-FERR-082: entity_at_position({}) mismatch", pos);
+            }
+        }
+    }
 }

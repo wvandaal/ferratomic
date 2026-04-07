@@ -469,4 +469,51 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn test_adr_ferr_030_overflow_rejected() {
+        // u16 max + 2 = 65537 attributes should be rejected
+        let attrs = (0u32..65537).map(|i| Attribute::from(format!("attr/{i}").as_str()));
+        let result = AttributeIntern::from_attributes(attrs);
+        assert!(
+            result.is_err(),
+            "ADR-FERR-030: >65536 attributes must be rejected"
+        );
+    }
+
+    #[test]
+    fn test_adr_ferr_030_intern_breaks_sorted_order() {
+        let attrs = vec![Attribute::from("a"), Attribute::from("c")];
+        let mut table = AttributeIntern::from_attributes(attrs).expect("intern");
+        let id_a = table.id_of(&Attribute::from("a")).expect("a");
+        let id_c = table.id_of(&Attribute::from("c")).expect("c");
+        // Dynamically intern "b" -- gets appended, NOT sorted between a and c
+        let id_b = table.intern(&Attribute::from("b")).expect("b");
+        assert!(
+            id_b > id_c,
+            "ADR-FERR-030: intern() appends -- b gets ID after c, breaking sort"
+        );
+        // But a < c still holds from original sorted construction
+        assert!(
+            id_a < id_c,
+            "ADR-FERR-030: original sorted order preserved for a < c"
+        );
+    }
+
+    use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn test_adr_ferr_030_intern_roundtrip_proptest(
+            names in prop::collection::hash_set("[a-z]{1,10}/[a-z]{1,10}", 1..100),
+        ) {
+            let attrs: Vec<Attribute> = names.iter().map(|s| Attribute::from(s.as_str())).collect();
+            let table = AttributeIntern::from_attributes(attrs.clone()).expect("intern");
+            for attr in &attrs {
+                let id = table.id_of(attr).expect("must be interned");
+                let resolved = table.resolve(id).expect("must resolve");
+                prop_assert_eq!(resolved, attr.as_str());
+            }
+        }
+    }
 }

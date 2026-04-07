@@ -560,6 +560,39 @@ mod soa_columnar_tests {
             "INV-FERR-078: cloned op column must match original"
         );
     }
+
+    /// INV-FERR-078: `build_col_attrs` produces an attribute column matching canonical.
+    #[test]
+    fn test_soa_build_col_attrs_matches_canonical() {
+        use ferratom::AttributeIntern;
+
+        let datoms: Vec<Datom> = (0..10u8)
+            .map(|i| {
+                let mut bytes = [0u8; 32];
+                bytes[31] = i;
+                Datom::new(
+                    EntityId::from_bytes(bytes),
+                    Attribute::from("test/attr"),
+                    Value::Long(i64::from(i)),
+                    TxId::new(1, 0, 0),
+                    Op::Assert,
+                )
+            })
+            .collect();
+        let ps = PositionalStore::from_datoms(datoms.into_iter());
+        let intern =
+            AttributeIntern::from_attributes(vec![Attribute::from("test/attr")]).expect("intern");
+
+        let col = ps.build_col_attrs(&intern);
+        assert_eq!(
+            col.len(),
+            ps.len(),
+            "col_attrs must have same length as canonical"
+        );
+        for opt_id in &col {
+            assert!(opt_id.is_some(), "all attributes should be interned");
+        }
+    }
 }
 
 mod perm_txid_tests {
@@ -681,6 +714,65 @@ mod perm_txid_tests {
         assert_eq!(
             recovered, sorted,
             "bd-3ta0: Eytzinger round-trip must recover sorted `TxId` permutation"
+        );
+    }
+
+    /// INV-FERR-081: duplicate `TxId` ordering is deterministic via tiebreaker.
+    #[test]
+    fn test_perm_txid_duplicate_txids_deterministic() {
+        // 4 datoms with only 2 distinct TxIds.
+        let mut bytes = [0u8; 32];
+
+        bytes[31] = 1;
+        let d1 = Datom::new(
+            EntityId::from_bytes(bytes),
+            Attribute::from("a"),
+            Value::Long(1),
+            TxId::new(5, 0, 0),
+            Op::Assert,
+        );
+        bytes[31] = 2;
+        let d2 = Datom::new(
+            EntityId::from_bytes(bytes),
+            Attribute::from("a"),
+            Value::Long(2),
+            TxId::new(5, 0, 0),
+            Op::Assert,
+        );
+        bytes[31] = 3;
+        let d3 = Datom::new(
+            EntityId::from_bytes(bytes),
+            Attribute::from("b"),
+            Value::Long(3),
+            TxId::new(3, 0, 0),
+            Op::Assert,
+        );
+        bytes[31] = 4;
+        let d4 = Datom::new(
+            EntityId::from_bytes(bytes),
+            Attribute::from("b"),
+            Value::Long(4),
+            TxId::new(3, 0, 0),
+            Op::Assert,
+        );
+
+        let datoms = vec![d1, d2, d3, d4];
+        let ps = PositionalStore::from_datoms(datoms.into_iter());
+        let sorted = ps.perm_txid_sorted();
+
+        // Verify TxId non-decreasing
+        for w in sorted.windows(2) {
+            let tx_a = ps.datom_at(w[0]).map(ferratom::Datom::tx);
+            let tx_b = ps.datom_at(w[1]).map(ferratom::Datom::tx);
+            assert!(tx_a <= tx_b, "INV-FERR-081: TxId must be non-decreasing");
+        }
+
+        // Verify deterministic: build again, same result
+        let ps2 = PositionalStore::from_datoms(ps.datoms().iter().cloned());
+        assert_eq!(
+            ps2.perm_txid_sorted(),
+            sorted,
+            "INV-FERR-081: perm_txid must be deterministic"
         );
     }
 }

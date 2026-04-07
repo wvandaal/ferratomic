@@ -486,8 +486,8 @@ mod tests {
         // We allow the estimate to be within 2x of the actual.
         let actual_diff = 200_usize;
         assert!(
-            diff <= actual_diff * 2 && diff >= actual_diff / 3,
-            "diff estimate {diff} should be within reasonable range of actual {actual_diff}"
+            diff <= actual_diff * 2 && diff >= actual_diff / 2,
+            "diff estimate {diff} should be within [actual/2, actual*2] range of actual {actual_diff}"
         );
     }
 
@@ -583,5 +583,35 @@ mod tests {
             (j - 1.0).abs() < f64::EPSILON,
             "identical single-datom sketches must have J=1.0"
         );
+    }
+
+    #[test]
+    fn test_sketch_merge_associative() {
+        let set_a: Vec<Datom> = (0..30)
+            .map(|i| make_datom(&format!("assoc-a-{i}")))
+            .collect();
+        let set_b: Vec<Datom> = (0..30)
+            .map(|i| make_datom(&format!("assoc-b-{i}")))
+            .collect();
+        let set_c: Vec<Datom> = (0..30)
+            .map(|i| make_datom(&format!("assoc-c-{i}")))
+            .collect();
+
+        let sa = StoreSketch::compute(set_a.iter(), 16).expect("a");
+        let sb = StoreSketch::compute(set_b.iter(), 16).expect("b");
+        let sc = StoreSketch::compute(set_c.iter(), 16).expect("c");
+
+        let ab = sa.merge(&sb).expect("ab");
+        let ab_c = ab.merge(&sc).expect("ab_c");
+
+        let bc = sb.merge(&sc).expect("bc");
+        let a_bc = sa.merge(&bc).expect("a_bc");
+
+        assert_eq!(
+            ab_c.min_hashes(),
+            a_bc.min_hashes(),
+            "merge(merge(a,b),c) must equal merge(a,merge(b,c))"
+        );
+        assert_eq!(ab_c.count(), a_bc.count());
     }
 }

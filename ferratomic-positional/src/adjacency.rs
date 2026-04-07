@@ -413,4 +413,39 @@ mod tests {
             "INV-FERR-083: datoms with un-interned attributes must be skipped"
         );
     }
+
+    // -----------------------------------------------------------------------
+    // Test 8: Build from PositionalStore with real LIVE bits (INV-FERR-083)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_inv_ferr_083_from_positional_store() {
+        let intern = make_intern(&["knows", "likes"]);
+        let datoms = vec![
+            ref_datom(b"alice", "knows", b"bob", 1),
+            ref_datom(b"alice", "likes", b"carol", 2),
+            ref_datom(b"bob", "knows", b"carol", 3),
+            long_datom(b"alice", "knows", 42, 4), // NOT a Ref -- should be ignored
+        ];
+        let ps = crate::store::PositionalStore::from_datoms(datoms.into_iter());
+        let index = AdjacencyIndex::from_canonical(ps.datoms(), &ps.live_bits_clone(), &intern);
+
+        let alice = EntityId::from_content(b"alice");
+        let bob = EntityId::from_content(b"bob");
+        let carol = EntityId::from_content(b"carol");
+
+        // alice has 2 forward edges (knows->bob, likes->carol)
+        assert_eq!(
+            index.neighbors(&alice).len(),
+            2,
+            "INV-FERR-083: alice should have 2 forward Ref edges"
+        );
+        // bob has 1 forward edge
+        assert_eq!(index.neighbors(&bob).len(), 1);
+        // carol has 0 forward edges
+        assert!(index.neighbors(&carol).is_empty());
+        // carol has 2 reverse edges (from alice and bob)
+        assert_eq!(index.reverse_neighbors(&carol).len(), 2);
+        assert_eq!(index.total_edges(), 3);
+    }
 }

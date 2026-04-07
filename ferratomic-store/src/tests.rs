@@ -654,3 +654,90 @@ fn test_inv_ferr_072_batch_splice_transact_rejects_empty_tx() {
         "INV-FERR-072: batch with empty transaction must return Err"
     );
 }
+
+/// INV-FERR-072: `batch_splice_transact` `OrdMap` fallback path.
+#[test]
+fn test_inv_ferr_072_batch_splice_ordmap_fallback() {
+    let mut store = Store::genesis();
+    let agent = AgentId::from_bytes([12u8; 16]);
+    // Force OrdMap representation
+    store.promote();
+    assert!(store.positional().is_none(), "must be OrdMap after promote");
+
+    let tx = Transaction::new(agent)
+        .assert_datom(
+            EntityId::from_content(b"ordmap-test"),
+            Attribute::from("db/doc"),
+            Value::String(Arc::from("via-ordmap")),
+        )
+        .commit(store.schema())
+        .expect("tx valid");
+
+    let batches = vec![(tx.into_datoms(), TxId::with_agent(100, 0, agent))];
+    let receipts = store
+        .batch_splice_transact(batches)
+        .expect("batch must succeed");
+    assert_eq!(receipts.len(), 1);
+    // After batch on OrdMap, store should be demoted back to Positional
+    assert!(
+        store.positional().is_some(),
+        "INV-FERR-072: OrdMap fallback must demote after batch"
+    );
+}
+
+/// INV-FERR-072: batch produces identical datom set to sequential transacts.
+#[test]
+fn test_inv_ferr_072_batch_equals_sequential() {
+    let agent = AgentId::from_bytes([13u8; 16]);
+
+    // Build two identical transaction sets
+    let make_txs = |schema: &ferratom::Schema| -> Vec<Transaction<ferratomic_tx::Committed>> {
+        vec![
+            Transaction::new(agent)
+                .assert_datom(
+                    EntityId::from_content(b"eq-1"),
+                    Attribute::from("db/doc"),
+                    Value::String(Arc::from("one")),
+                )
+                .commit(schema)
+                .expect("tx1"),
+            Transaction::new(agent)
+                .assert_datom(
+                    EntityId::from_content(b"eq-2"),
+                    Attribute::from("db/doc"),
+                    Value::String(Arc::from("two")),
+                )
+                .commit(schema)
+                .expect("tx2"),
+        ]
+    };
+
+    // Sequential path
+    let mut seq_store = Store::genesis();
+    for tx in make_txs(seq_store.schema()) {
+        seq_store.transact_test(tx).expect("seq transact");
+    }
+
+    // Batch path
+    let mut batch_store = Store::genesis();
+    let txs = make_txs(batch_store.schema());
+    let batches: Vec<_> = txs
+        .into_iter()
+        .enumerate()
+        .map(|(i, tx)| {
+            (
+                tx.into_datoms(),
+                TxId::with_agent(u64::try_from(i + 1).unwrap_or(0), 0, agent),
+            )
+        })
+        .collect();
+    batch_store.batch_splice_transact(batches).expect("batch");
+
+    // Compare datom sets (not epochs -- those differ by construction)
+    let seq_datoms: BTreeSet<_> = seq_store.datoms().cloned().collect();
+    let batch_datoms: BTreeSet<_> = batch_store.datoms().cloned().collect();
+    assert_eq!(
+        seq_datoms, batch_datoms,
+        "INV-FERR-072: batch must produce same datom set as sequential"
+    );
+}

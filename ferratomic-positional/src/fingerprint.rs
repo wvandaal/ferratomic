@@ -78,3 +78,40 @@ fn split_u128_ref(bytes: &[u8; 32]) -> (u128, u128) {
 fn split_u128(bytes: &[u8; 32]) -> (u128, u128) {
     split_u128_ref(bytes)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_xor_hash_into_identity() {
+        let mut fp = [0u8; 32];
+        let hash = [0xAB; 32];
+        xor_hash_into(&mut fp, &hash);
+        assert_eq!(fp, hash, "INV-FERR-074: XOR with zero is identity");
+    }
+
+    #[test]
+    fn test_xor_hash_into_self_inverse() {
+        let mut fp = [0x42; 32];
+        let original = fp;
+        let hash = [0xFF; 32];
+        xor_hash_into(&mut fp, &hash);
+        assert_ne!(fp, original);
+        xor_hash_into(&mut fp, &hash);
+        assert_eq!(fp, original, "INV-FERR-074: double XOR is identity");
+    }
+
+    #[test]
+    fn test_xor_hash_into_commutativity() {
+        let mut fp1 = [0u8; 32];
+        let mut fp2 = [0u8; 32];
+        let a = [0x11; 32];
+        let b = [0x22; 32];
+        xor_hash_into(&mut fp1, &a);
+        xor_hash_into(&mut fp1, &b);
+        xor_hash_into(&mut fp2, &b);
+        xor_hash_into(&mut fp2, &a);
+        assert_eq!(fp1, fp2, "INV-FERR-074: XOR is commutative");
+    }
+}
