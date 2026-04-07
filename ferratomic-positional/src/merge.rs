@@ -34,10 +34,14 @@ pub fn merge_positional(a: &PositionalStore, b: &PositionalStore) -> PositionalS
         perm_aevt: OnceLock::new(),
         perm_vaet: OnceLock::new(),
         perm_avet: OnceLock::new(),
+        perm_txid: OnceLock::new(),
         fingerprint,
         mph: OnceLock::new(),
         bloom: OnceLock::new(),
         chunk_fps: OnceLock::new(),
+        col_entities: OnceLock::new(),
+        col_txids: OnceLock::new(),
+        col_ops: OnceLock::new(),
     }
 }
 

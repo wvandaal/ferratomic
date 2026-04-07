@@ -18,3 +18,4 @@ test-utils = []
 
 [dev-dependencies]
 ferratom = { path = "../ferratom", features = ["test-utils"] }
+proptest = { workspace = true }

@@ -18,8 +18,10 @@
 //! Deserialization dispatches on the first 4 magic bytes:
 //! - `b"CHKP"` — V2 (legacy)
 //! - `b"CHK3"` — V3 (pre-sorted, LIVE bitvector persisted)
+//! - `b"CHK4"` — V4 (columnar, per-column bincode)
 //!
-//! Serialization always produces V3. V2 read support is retained for
+//! Serialization produces V3 by default. V4 serialization is available via
+//! [`serialize_v4_checkpoint_bytes`]. V2 read support is retained for
 //! backward compatibility with existing checkpoint files.
 //!
 //! ## V2 File Format (legacy)
@@ -66,6 +68,7 @@ use bitvec::prelude::{BitVec, Lsb0};
 use ferratom::{AgentId, AttributeDef, Datom, FerraError};
 
 pub mod v3;
+pub mod v4;
 
 pub mod mmap;
 
@@ -78,6 +81,10 @@ const CHECKPOINT_MAGIC: [u8; 4] = *b"CHKP";
 /// V3 checkpoint file magic bytes: ASCII "CHK3".
 /// Single source of truth — `v3.rs` imports this via `super::V3_MAGIC`.
 const V3_MAGIC: [u8; 4] = *b"CHK3";
+
+/// V4 checkpoint file magic bytes: ASCII "CHK4".
+/// Single source of truth — `v4.rs` imports this via `super::V4_MAGIC`.
+const V4_MAGIC: [u8; 4] = *b"CHK4";
 
 /// Checkpoint format version. Little-endian u16. V2: u64 length field.
 const CHECKPOINT_VERSION: u16 = 2;
@@ -196,6 +203,27 @@ pub fn serialize_live_first_bytes(data: &CheckpointData) -> Result<Vec<u8>, Ferr
     )
 }
 
+/// Serialize checkpoint data to V4 columnar checkpoint bytes.
+///
+/// V4 decomposes each datom into per-column arrays (entity, attribute,
+/// value, tx, op) and serializes them independently. This layout enables
+/// per-column compression in Phase 4b. Phase 4a uses bincode for all columns.
+///
+/// # Errors
+///
+/// Returns `FerraError::CheckpointWrite` if serialization fails or if
+/// `live_bits` is `None`.
+pub fn serialize_v4_checkpoint_bytes(data: &CheckpointData) -> Result<Vec<u8>, FerraError> {
+    let live_bits = data.require_live_bits()?;
+    v4::serialize_v4_bytes(
+        &data.datoms,
+        &data.schema_pairs,
+        data.epoch,
+        data.genesis_agent,
+        live_bits,
+    )
+}
+
 // ---------------------------------------------------------------------------
 // Deserialize
 // ---------------------------------------------------------------------------
@@ -205,6 +233,7 @@ pub fn serialize_live_first_bytes(data: &CheckpointData) -> Result<Vec<u8>, Ferr
 /// INV-FERR-013: Examines the first 4 bytes to determine the format:
 /// - `b"CHKP"` -> V2 (legacy)
 /// - `b"CHK3"` -> V3 (pre-sorted, LIVE bitvector persisted)
+/// - `b"CHK4"` -> V4 (columnar, per-column bincode)
 ///
 /// # Errors
 ///
@@ -246,8 +275,9 @@ pub fn deserialize_checkpoint_bytes(data: &[u8]) -> Result<CheckpointData, Ferra
                 }),
             }
         }
+        V4_MAGIC => v4::deserialize_v4_bytes(data),
         _ => Err(FerraError::CheckpointCorrupted {
-            expected: "CHKP or CHK3".to_string(),
+            expected: "CHKP, CHK3, or CHK4".to_string(),
             actual: String::from_utf8_lossy(&magic).to_string(),
         }),
     }

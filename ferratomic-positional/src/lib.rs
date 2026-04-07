@@ -17,6 +17,7 @@
 pub mod adjacency;
 mod bloom;
 pub mod chunk_fingerprints;
+pub mod entity_rle;
 mod fingerprint;
 pub mod live;
 pub mod merge;
@@ -32,9 +33,13 @@ mod tests;
 // Public re-exports for downstream crates.
 pub use adjacency::AdjacencyIndex;
 pub use chunk_fingerprints::{ChunkFingerprints, DEFAULT_CHUNK_SIZE};
+pub use entity_rle::EntityRle;
 pub use live::build_live_bitvector_pub;
 #[cfg(any(test, feature = "test-utils"))]
-pub use live::{live_positions_for_test, live_positions_from_sorted_run_keys_for_test};
+pub use live::{
+    live_positions_for_test, live_positions_from_sorted_run_keys_for_test,
+    rebuild_live_incremental_for_test,
+};
 pub use merge::{merge_positional, merge_sort_dedup};
 pub use store::PositionalStore;
 pub use succinct::SuccinctBitVec;

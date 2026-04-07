@@ -9,7 +9,7 @@
 use std::sync::OnceLock;
 
 use bitvec::prelude::{BitVec, Lsb0};
-use ferratom::Datom;
+use ferratom::{AttributeId, AttributeIntern, Datom, EntityId, Op, TxId};
 use ferratomic_index::{AevtKey, AvetKey, EavtKey, VaetKey};
 
 use crate::{
@@ -62,6 +62,10 @@ pub struct PositionalStore {
     /// Permutation: AVET-order index -> canonical position (INV-FERR-005).
     /// Lazily built on first access via `OnceLock`.
     pub(crate) perm_avet: OnceLock<Vec<u32>>,
+    /// Permutation: TxId-order index -> canonical position (bd-3ta0).
+    /// Lazily built on first access via `OnceLock`. Enables O(log N)
+    /// temporal range queries across all entities.
+    pub(crate) perm_txid: OnceLock<Vec<u32>>,
     /// XOR homomorphic fingerprint: `H(S) = XOR_{d in S} content_hash(d)` (INV-FERR-074).
     pub(crate) fingerprint: [u8; 32],
     /// CHD perfect hash for O(1) entity existence checks (INV-FERR-076, contributes to INV-FERR-027).
@@ -76,6 +80,27 @@ pub struct PositionalStore {
     /// (INV-FERR-079). Lazily built on first access. Decomposes the
     /// store fingerprint (INV-FERR-074) into per-chunk XOR sums.
     pub(crate) chunk_fps: OnceLock<ChunkFingerprints>,
+    /// Entity column: `col_entities[p] = canonical[p].entity()` (INV-FERR-078).
+    /// Lazily built on first access. 32 bytes per datom, cache-optimal for
+    /// entity-only scans that avoid loading full `Datom` cache lines.
+    pub(crate) col_entities: OnceLock<Vec<EntityId>>,
+    /// Transaction column: `col_txids[p] = canonical[p].tx()`.
+    /// Lazily built on first access. 28 bytes per datom, cache-optimal
+    /// for transaction-order scans without touching entity/attribute/value.
+    pub(crate) col_txids: OnceLock<Vec<TxId>>,
+    /// Op column: `col_ops[p] = (canonical[p].op() == Op::Assert)`.
+    /// Lazily built on first access. 1 bit per datom (same representation
+    /// as `live_bits`). `true` = Assert, `false` = Retract.
+    pub(crate) col_ops: OnceLock<BitVec<u64, Lsb0>>,
+}
+
+/// Clone a `OnceLock<T>`: if initialized, clone the value into a new lock.
+fn clone_once_lock<T: Clone>(src: &OnceLock<T>) -> OnceLock<T> {
+    src.get().map_or_else(OnceLock::new, |v| {
+        let lock = OnceLock::new();
+        let _ = lock.set(v.clone());
+        lock
+    })
 }
 
 impl Clone for PositionalStore {
@@ -83,37 +108,17 @@ impl Clone for PositionalStore {
         Self {
             canonical: self.canonical.clone(),
             live_bits: self.live_bits.clone(),
-            perm_aevt: self.perm_aevt.get().map_or_else(OnceLock::new, |v| {
-                let lock = OnceLock::new();
-                let _ = lock.set(v.clone());
-                lock
-            }),
-            perm_vaet: self.perm_vaet.get().map_or_else(OnceLock::new, |v| {
-                let lock = OnceLock::new();
-                let _ = lock.set(v.clone());
-                lock
-            }),
-            perm_avet: self.perm_avet.get().map_or_else(OnceLock::new, |v| {
-                let lock = OnceLock::new();
-                let _ = lock.set(v.clone());
-                lock
-            }),
+            perm_aevt: clone_once_lock(&self.perm_aevt),
+            perm_vaet: clone_once_lock(&self.perm_vaet),
+            perm_avet: clone_once_lock(&self.perm_avet),
+            perm_txid: clone_once_lock(&self.perm_txid),
             fingerprint: self.fingerprint,
-            mph: self.mph.get().map_or_else(OnceLock::new, |v| {
-                let lock = OnceLock::new();
-                let _ = lock.set(v.clone());
-                lock
-            }),
-            bloom: self.bloom.get().map_or_else(OnceLock::new, |v| {
-                let lock = OnceLock::new();
-                let _ = lock.set(v.clone());
-                lock
-            }),
-            chunk_fps: self.chunk_fps.get().map_or_else(OnceLock::new, |v| {
-                let lock = OnceLock::new();
-                let _ = lock.set(v.clone());
-                lock
-            }),
+            mph: clone_once_lock(&self.mph),
+            bloom: clone_once_lock(&self.bloom),
+            chunk_fps: clone_once_lock(&self.chunk_fps),
+            col_entities: clone_once_lock(&self.col_entities),
+            col_txids: clone_once_lock(&self.col_txids),
+            col_ops: clone_once_lock(&self.col_ops),
         }
     }
 }
@@ -126,10 +131,14 @@ impl std::fmt::Debug for PositionalStore {
             .field("perm_aevt_init", &self.perm_aevt.get().is_some())
             .field("perm_vaet_init", &self.perm_vaet.get().is_some())
             .field("perm_avet_init", &self.perm_avet.get().is_some())
+            .field("perm_txid_init", &self.perm_txid.get().is_some())
             .field("fingerprint", &self.fingerprint)
             .field("mph_init", &self.mph.get().is_some())
             .field("bloom_init", &self.bloom.get().is_some())
             .field("chunk_fps_init", &self.chunk_fps.get().is_some())
+            .field("col_entities_init", &self.col_entities.get().is_some())
+            .field("col_txids_init", &self.col_txids.get().is_some())
+            .field("col_ops_init", &self.col_ops.get().is_some())
             .finish()
     }
 }
@@ -165,10 +174,14 @@ impl PositionalStore {
             perm_aevt: OnceLock::new(),
             perm_vaet: OnceLock::new(),
             perm_avet: OnceLock::new(),
+            perm_txid: OnceLock::new(),
             fingerprint,
             mph: OnceLock::new(),
             bloom: OnceLock::new(),
             chunk_fps: OnceLock::new(),
+            col_entities: OnceLock::new(),
+            col_txids: OnceLock::new(),
+            col_ops: OnceLock::new(),
         }
     }
 
@@ -204,10 +217,14 @@ impl PositionalStore {
             perm_aevt: OnceLock::new(),
             perm_vaet: OnceLock::new(),
             perm_avet: OnceLock::new(),
+            perm_txid: OnceLock::new(),
             fingerprint,
             mph: OnceLock::new(),
             bloom: OnceLock::new(),
             chunk_fps: OnceLock::new(),
+            col_entities: OnceLock::new(),
+            col_txids: OnceLock::new(),
+            col_ops: OnceLock::new(),
         }
     }
 
@@ -374,6 +391,29 @@ impl PositionalStore {
         layout_to_sorted(self.perm_avet())
     }
 
+    /// TxId-order permutation array in Eytzinger (BFS) layout (bd-3ta0).
+    ///
+    /// Lazily builds the permutation on first access. The returned slice
+    /// has `n + 1` elements: index 0 is a sentinel (`u32::MAX`), root at index 1.
+    /// Use `perm_txid_sorted()` for the original sorted permutation.
+    /// Enables O(log N) temporal range queries across all entities.
+    #[must_use]
+    pub fn perm_txid(&self) -> &[u32] {
+        self.perm_txid.get_or_init(|| {
+            let sorted = build_permutation(&self.canonical, Datom::tx);
+            layout_permutation(&sorted)
+        })
+    }
+
+    /// Recover the sorted `TxId` permutation from Eytzinger layout (bd-3ta0).
+    ///
+    /// O(n) in-order traversal. Used for checkpoint serialization where
+    /// the original sorted permutation order is required.
+    #[must_use]
+    pub fn perm_txid_sorted(&self) -> Vec<u32> {
+        layout_to_sorted(self.perm_txid())
+    }
+
     /// Length of the LIVE bitvector (INV-FERR-076: equals `len()`).
     #[must_use]
     pub fn live_bits_len(&self) -> usize {
@@ -465,10 +505,73 @@ impl PositionalStore {
             perm_aevt: OnceLock::new(),
             perm_vaet: OnceLock::new(),
             perm_avet: OnceLock::new(),
+            perm_txid: OnceLock::new(),
             fingerprint,
             mph: OnceLock::new(),
             bloom: OnceLock::new(),
             chunk_fps: OnceLock::new(),
+            col_entities: OnceLock::new(),
+            col_txids: OnceLock::new(),
+            col_ops: OnceLock::new(),
         })
+    }
+
+    // -----------------------------------------------------------------------
+    // SoA columnar accessors (INV-FERR-078, bd-574c)
+    // -----------------------------------------------------------------------
+
+    /// Entity column: `col_entities[p] = canonical[p].entity()` (INV-FERR-078).
+    ///
+    /// Lazily built on first access. Returns a contiguous `&[EntityId]` slice
+    /// for cache-optimal entity-only scans. 32 bytes per datom, avoids loading
+    /// full `Datom` cache lines when only the entity is needed.
+    #[must_use]
+    pub fn col_entities(&self) -> &[EntityId] {
+        self.col_entities
+            .get_or_init(|| self.canonical.iter().map(Datom::entity).collect())
+    }
+
+    /// Transaction column: `col_txids[p] = canonical[p].tx()`.
+    ///
+    /// Lazily built on first access. Returns a contiguous `&[TxId]` slice
+    /// for cache-optimal transaction-order scans. 28 bytes per datom.
+    #[must_use]
+    pub fn col_txids(&self) -> &[TxId] {
+        self.col_txids
+            .get_or_init(|| self.canonical.iter().map(Datom::tx).collect())
+    }
+
+    /// Op column: `col_ops[p]` = `(canonical[p].op() == Op::Assert)`.
+    ///
+    /// Lazily built on first access. 1 bit per datom: `true` = Assert,
+    /// `false` = Retract. Same `BitVec<u64, Lsb0>` representation as
+    /// `live_bits` for consistency.
+    #[must_use]
+    pub fn col_ops(&self) -> &BitVec<u64, Lsb0> {
+        self.col_ops.get_or_init(|| {
+            self.canonical
+                .iter()
+                .map(|d| d.op() == Op::Assert)
+                .collect()
+        })
+    }
+
+    /// Build interned attribute column from an `AttributeIntern` table (ADR-FERR-030).
+    ///
+    /// Unlike `col_entities`/`col_txids`/`col_ops`, the attribute column
+    /// cannot be lazily self-built because `PositionalStore` does not own an
+    /// `AttributeIntern`. The caller provides the intern table and receives
+    /// the column. 2 bytes per datom.
+    ///
+    /// Returns `None` entries as-is via `filter_map` -- attributes not present
+    /// in the intern table are silently skipped. Callers that require a
+    /// complete column should ensure the intern table covers all attributes
+    /// in the store.
+    #[must_use]
+    pub fn build_col_attrs(&self, intern: &AttributeIntern) -> Vec<AttributeId> {
+        self.canonical
+            .iter()
+            .filter_map(|d| intern.id_of(d.attribute()))
+            .collect()
     }
 }
