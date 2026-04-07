@@ -78,11 +78,11 @@ const HASH_SIZE: usize = crate::mmap::HASH_SIZE;
 /// ADR-FERR-010: Only used for serialization. Deserialization uses
 /// `V3PayloadRead` with `WireDatom`.
 #[derive(Serialize)]
-struct V3PayloadWrite {
+struct V3PayloadWrite<'a> {
     /// Schema attributes sorted by name for deterministic output.
     schema_pairs: Vec<(String, AttributeDef)>,
-    /// All datoms in canonical EAVT order.
-    datoms: Vec<Datom>,
+    /// All datoms in canonical EAVT order (borrowed — zero-clone, bd-86ap).
+    datoms: &'a [Datom],
     /// LIVE bitvector (INV-FERR-029): `live_bits[p] = true` iff datom p is live.
     live_bits: BitVec<u64, Lsb0>,
 }
@@ -120,7 +120,7 @@ pub fn serialize_v3_bytes(
 ) -> Result<Vec<u8>, FerraError> {
     let payload = V3PayloadWrite {
         schema_pairs: schema_pairs.to_vec(),
-        datoms: datoms.to_vec(),
+        datoms,
         live_bits: live_bits.clone(),
     };
 
