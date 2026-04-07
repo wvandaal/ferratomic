@@ -13,9 +13,12 @@
 //! - [`Store::from_merge`] -- construct a merged store from two inputs.
 //! - [`Store::transact`] -- apply a committed transaction (epoch advance,
 //!   `TxId` stamping, schema evolution, index maintenance).
+//! - [`Store::batch_splice_transact`] -- apply multiple committed transactions
+//!   in a single merge-sort splice (bd-ks5d).
 //!
 //! Private helpers [`stamp_datoms`] and [`create_tx_metadata`] live here
-//! because they are only called by [`Store::transact`].
+//! because they are only called by [`Store::transact`] and
+//! [`Store::batch_splice_transact`].
 
 use std::sync::Arc;
 
@@ -207,7 +210,91 @@ impl Store {
         self.transact(transaction, tx_id)
     }
 
-    /// Merge-sort splice: INV-FERR-072 Path A (bd-886d).
+    /// Batch merge-sort splice: stamp all datoms, merge once into canonical.
+    ///
+    /// Each transaction gets a distinct epoch (INV-FERR-007) and schema
+    /// evolution happens per-transaction (INV-FERR-009), but the expensive
+    /// merge into the canonical array happens ONCE, amortizing the O(N)
+    /// copy across M transactions.
+    ///
+    /// INV-FERR-072: batch equivalence -- produces the same datom set as
+    /// M individual `transact` calls applied sequentially.
+    ///
+    /// Cost: O(N + K log K) where K = sum of all transaction sizes.
+    ///
+    /// # Errors
+    ///
+    /// Returns `FerraError::EmptyTransaction` if any batch entry has zero
+    /// datoms. Returns `FerraError::InvariantViolation` on epoch overflow.
+    /// Returns other `FerraError` variants if schema evolution fails.
+    pub fn batch_splice_transact(
+        &mut self,
+        batches: Vec<(Vec<Datom>, ferratom::TxId)>,
+    ) -> Result<Vec<TxReceipt>, FerraError> {
+        if batches.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut receipts = Vec::with_capacity(batches.len());
+
+        for (datoms, tx_id) in batches {
+            if datoms.is_empty() {
+                return Err(FerraError::EmptyTransaction);
+            }
+
+            // INV-FERR-007: advance epoch strictly per transaction.
+            self.epoch =
+                self.epoch
+                    .checked_add(1)
+                    .ok_or_else(|| FerraError::InvariantViolation {
+                        invariant: "INV-FERR-007".to_string(),
+                        details: "epoch counter overflow in batch".to_string(),
+                    })?;
+
+            // INV-FERR-020: read agent from TxId for metadata.
+            let agent = tx_id.agent();
+
+            // INV-FERR-015: stamp datoms with HLC-derived TxId.
+            let mut tx_datoms = stamp_datoms(datoms, tx_id);
+            tx_datoms.extend(create_tx_metadata(self.epoch, agent, tx_id));
+
+            // INV-FERR-009: schema evolution per transaction boundary.
+            crate::schema_evolution::evolve_schema(&mut self.schema, &tx_datoms)?;
+
+            receipts.push(TxReceipt {
+                epoch: self.epoch,
+                datoms: tx_datoms,
+            });
+        }
+
+        // Collect all datoms from receipts for the single merge pass.
+        // Borrows from receipts -- no extra allocation per datom.
+        let all_new_datoms: Vec<Datom> = receipts
+            .iter()
+            .flat_map(|r| r.datoms.iter().cloned())
+            .collect();
+
+        // Single merge into canonical (amortized across all transactions).
+        match &self.repr {
+            StoreRepr::Positional(_) => {
+                self.splice_transact_batch(&all_new_datoms);
+            }
+            StoreRepr::OrdMap { .. } => {
+                for datom in &all_new_datoms {
+                    if let StoreRepr::OrdMap { datoms, indexes } = &mut self.repr {
+                        datoms.insert(datom.clone());
+                        indexes.insert(datom);
+                    }
+                    self.live_apply(datom);
+                }
+                self.demote();
+            }
+        }
+
+        Ok(receipts)
+    }
+
+    /// Merge-sort splice for a single transaction: INV-FERR-072 Path A (bd-886d).
     ///
     /// Inserts datoms into Positional without `OrdMap` detour. Produces
     /// identical datom set to promote+insert+demote (batch equivalence
@@ -223,6 +310,14 @@ impl Store {
     /// 3. Build new `PositionalStore` (fingerprint + LIVE in parallel): O(N + K)
     /// 4. Update `live_causal`/`live_set` for new datoms only: O(K log M)
     fn splice_transact(&mut self, new_datoms: &[Datom]) {
+        self.splice_transact_batch(new_datoms);
+    }
+
+    /// Shared splice implementation for both single and batch transact paths.
+    ///
+    /// Sorts, deduplicates, and merges new datoms into the Positional canonical
+    /// array. No-op if the store is not in `Positional` representation.
+    fn splice_transact_batch(&mut self, new_datoms: &[Datom]) {
         if let StoreRepr::Positional(ps) = &self.repr {
             // 1. Sort + dedup new datoms into canonical EAVT order.
             // dedup() required: merge_sort_dedup precondition is strictly sorted input.

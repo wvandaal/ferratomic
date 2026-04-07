@@ -25,6 +25,7 @@
 //! - [`iter`] -- unified iteration over dual representation.
 //! - [`checkpoint`] -- byte serialization convenience methods.
 //! - [`schema_evolution`] -- genesis meta-schema and schema evolution.
+//! - [`sketch`] -- `MinHash` sketch for O(delta) federation reconciliation.
 
 #![forbid(unsafe_code)]
 #![deny(clippy::all, missing_docs)]
@@ -37,6 +38,7 @@ pub mod merge;
 pub(crate) mod query;
 pub(crate) mod repr;
 pub(crate) mod schema_evolution;
+pub mod sketch;
 pub mod store;
 
 #[cfg(test)]
@@ -47,6 +49,7 @@ pub use self::{
     checkpoint::{extract_checkpoint_data, store_from_checkpoint_data},
     iter::{DatomIter, DatomSetView, SnapshotDatoms},
     merge::{merge, SchemaConflict},
+    sketch::{StoreSketch, DEFAULT_CAPACITY},
     store::{Snapshot, Store, TxReceipt},
 };
 

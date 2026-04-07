@@ -4,6 +4,7 @@
 //! INV-FERR-008: WAL write + fsync before epoch advance.
 //! INV-FERR-020: transaction atomicity via full-batch swap.
 //! INV-FERR-021: backpressure via `WriteLimiter` pre-check.
+//! INV-FERR-072: batch transact -- amortized merge across M transactions (bd-ks5d).
 
 use std::sync::{atomic::Ordering, Arc};
 
@@ -74,6 +75,103 @@ impl Database<Ready> {
         let _ = self.notify_observers(receipt.epoch(), receipt.datoms());
 
         Ok(receipt)
+    }
+
+    /// Apply multiple committed transactions in a single batch.
+    ///
+    /// INV-FERR-072: batch equivalence -- produces the same result as applying
+    /// each transaction individually via `transact()`, but amortizes the O(N)
+    /// canonical array merge across M transactions.
+    ///
+    /// INV-FERR-007: each transaction gets a distinct epoch via separate HLC
+    /// ticks under the write lock. Epochs are strictly increasing.
+    ///
+    /// INV-FERR-008: all WAL entries are written and fsynced before the
+    /// `ArcSwap` publish, ensuring durability of the entire batch.
+    ///
+    /// INV-FERR-009: schema evolution happens per-transaction within the batch,
+    /// so later transactions in the batch can reference attributes defined by
+    /// earlier ones.
+    ///
+    /// # Errors
+    ///
+    /// Returns `FerraError::Backpressure` if the write lock is already held.
+    /// Returns `FerraError::EmptyTransaction` if any transaction in the batch
+    /// carries no datoms. Returns other `FerraError` variants if schema
+    /// evolution or WAL write fails. On error, no transactions from the batch
+    /// are applied (all-or-nothing).
+    pub fn batch_transact(
+        &self,
+        transactions: Vec<Transaction<Committed>>,
+    ) -> Result<Vec<TxReceipt>, FerraError> {
+        if transactions.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // INV-FERR-021: pre-check concurrency limit.
+        let write_slot = self
+            .write_limiter
+            .try_acquire()
+            .ok_or(FerraError::Backpressure)?;
+
+        // INV-FERR-007: serialize writes. Lock acquired ONCE for entire batch.
+        let guard = self.write_lock.try_lock().map_err(|e| match e {
+            std::sync::TryLockError::Poisoned(_) => FerraError::InvariantViolation {
+                invariant: "INV-FERR-007".to_string(),
+                details: "write lock mutex poisoned (previous panic)".to_string(),
+            },
+            std::sync::TryLockError::WouldBlock => FerraError::Backpressure,
+        })?;
+
+        // INV-FERR-015: tick HLC once per transaction for distinct TxIds.
+        let mut batches = Vec::with_capacity(transactions.len());
+        {
+            let mut clock = self
+                .clock
+                .lock()
+                .map_err(|_| FerraError::InvariantViolation {
+                    invariant: "INV-FERR-015".to_string(),
+                    details: "HLC mutex poisoned (previous panic)".to_string(),
+                })?;
+            for tx in transactions {
+                let tx_id = clock.tick();
+                let datoms = tx.into_datoms();
+                batches.push((datoms, tx_id));
+            }
+        }
+
+        // Step 1: Apply all transactions to a cloned store.
+        let current = self.current.load();
+        let mut new_store = Store::clone(&current);
+        let receipts = new_store.batch_splice_transact(batches)?;
+
+        // Step 2: INV-FERR-008: WAL for ALL entries before publish.
+        for receipt in &receipts {
+            self.write_wal(receipt.epoch(), receipt.datoms())?;
+        }
+
+        // Step 3: Atomic swap (single publish for entire batch).
+        self.publish_and_check(new_store);
+
+        // INV-FERR-005: release-mode bijection canary.
+        #[cfg(feature = "release_bijection_check")]
+        self.verify_bijection_canary()?;
+
+        // Release write lock and backpressure slot BEFORE observer delivery.
+        drop(guard);
+        drop(write_slot);
+
+        // Step 4: HI-004: Observer delivery for all datoms in the batch.
+        // Collect all datoms for a single notification.
+        if let Some(last_receipt) = receipts.last() {
+            let all_datoms: Vec<Datom> = receipts
+                .iter()
+                .flat_map(|r| r.datoms().iter().cloned())
+                .collect();
+            let _ = self.notify_observers(last_receipt.epoch(), &all_datoms);
+        }
+
+        Ok(receipts)
     }
 
     /// Acquire the write lock and tick the HLC under it.

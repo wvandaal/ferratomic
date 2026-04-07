@@ -14,6 +14,7 @@
 #![deny(clippy::all, missing_docs)]
 #![warn(clippy::pedantic)]
 
+pub mod adjacency;
 mod bloom;
 pub mod chunk_fingerprints;
 mod fingerprint;
@@ -29,6 +30,7 @@ pub mod succinct;
 mod tests;
 
 // Public re-exports for downstream crates.
+pub use adjacency::AdjacencyIndex;
 pub use chunk_fingerprints::{ChunkFingerprints, DEFAULT_CHUNK_SIZE};
 pub use live::build_live_bitvector_pub;
 #[cfg(any(test, feature = "test-utils"))]

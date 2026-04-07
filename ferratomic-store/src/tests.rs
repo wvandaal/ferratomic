@@ -5,7 +5,7 @@ use ferratomic_tx::Transaction;
 
 use crate::{
     schema_evolution::{parse_cardinality, parse_value_type},
-    store::Store,
+    store::{Store, TxReceipt},
 };
 
 /// Helper: build a sample datom for testing.
@@ -540,5 +540,117 @@ fn test_inv_ferr_007_epoch_overflow_rejected() {
     assert!(
         result.is_err(),
         "INV-FERR-007: transact at epoch u64::MAX must return Err"
+    );
+}
+
+/// INV-FERR-072: `batch_splice_transact` applies multiple transactions in a
+/// single merge, producing identical results to individual transacts.
+#[test]
+fn test_inv_ferr_072_batch_splice_epochs_and_datoms() {
+    let (store, receipts) = batch_splice_3tx_fixture();
+
+    assert_eq!(receipts.len(), 3, "INV-FERR-072: one receipt per tx");
+    assert_eq!(receipts[0].epoch(), 1, "INV-FERR-007: epoch 1");
+    assert_eq!(receipts[1].epoch(), 2, "INV-FERR-007: epoch 2");
+    assert_eq!(receipts[2].epoch(), 3, "INV-FERR-007: epoch 3");
+    assert_eq!(store.epoch(), 3, "INV-FERR-007: final epoch 3");
+
+    // tx1: 1 user + 2 meta, tx2: 3 schema + 2 meta, tx3: 1 user + 2 meta = 11
+    assert_eq!(store.len(), 11, "INV-FERR-072: all datoms present");
+}
+
+/// INV-FERR-072 + INV-FERR-009: schema evolution works across batch.
+#[test]
+fn test_inv_ferr_072_batch_splice_schema_and_repr() {
+    let (store, _) = batch_splice_3tx_fixture();
+
+    assert!(
+        store.schema().get(&Attribute::from("user/email")).is_some(),
+        "INV-FERR-009: schema evolution in batch must install user/email"
+    );
+    assert!(
+        store.positional().is_some(),
+        "INV-FERR-072: store must be Positional after batch_splice_transact"
+    );
+}
+
+/// Shared fixture: genesis store + 3 transactions via `batch_splice_transact`.
+fn batch_splice_3tx_fixture() -> (Store, Vec<TxReceipt>) {
+    let mut store = Store::genesis();
+    let agent = AgentId::from_bytes([10u8; 16]);
+
+    let tx1 = Transaction::new(agent)
+        .assert_datom(
+            EntityId::from_content(b"batch-e1"),
+            Attribute::from("db/doc"),
+            Value::String(Arc::from("batch-doc-1")),
+        )
+        .commit(store.schema())
+        .expect("tx1 valid");
+
+    let tx2 = Transaction::new(agent)
+        .assert_datom(
+            EntityId::from_content(b"attr-user-email"),
+            Attribute::from("db/ident"),
+            Value::Keyword("user/email".into()),
+        )
+        .assert_datom(
+            EntityId::from_content(b"attr-user-email"),
+            Attribute::from("db/valueType"),
+            Value::Keyword("db.type/string".into()),
+        )
+        .assert_datom(
+            EntityId::from_content(b"attr-user-email"),
+            Attribute::from("db/cardinality"),
+            Value::Keyword("db.cardinality/one".into()),
+        )
+        .commit(store.schema())
+        .expect("tx2 valid");
+
+    let tx3 = Transaction::new(agent)
+        .assert_datom(
+            EntityId::from_content(b"batch-e3"),
+            Attribute::from("db/doc"),
+            Value::String(Arc::from("batch-doc-3")),
+        )
+        .commit(store.schema())
+        .expect("tx3 valid");
+
+    let batches = vec![
+        (tx1.into_datoms(), TxId::with_agent(100, 0, agent)),
+        (tx2.into_datoms(), TxId::with_agent(200, 0, agent)),
+        (tx3.into_datoms(), TxId::with_agent(300, 0, agent)),
+    ];
+
+    let receipts = store
+        .batch_splice_transact(batches)
+        .expect("batch must succeed");
+    (store, receipts)
+}
+
+/// INV-FERR-072: `batch_splice_transact` with empty batch is a no-op.
+#[test]
+fn test_inv_ferr_072_batch_splice_transact_empty() {
+    let mut store = Store::genesis();
+    let receipts = store
+        .batch_splice_transact(Vec::new())
+        .expect("empty batch must succeed");
+    assert!(
+        receipts.is_empty(),
+        "INV-FERR-072: empty batch must return empty receipts"
+    );
+    assert_eq!(store.epoch(), 0, "epoch unchanged for empty batch");
+}
+
+/// INV-FERR-072: `batch_splice_transact` rejects empty transactions within batch.
+#[test]
+fn test_inv_ferr_072_batch_splice_transact_rejects_empty_tx() {
+    let mut store = Store::genesis();
+    let agent = AgentId::from_bytes([11u8; 16]);
+    let batches = vec![(Vec::new(), TxId::with_agent(100, 0, agent))];
+    let result = store.batch_splice_transact(batches);
+    assert!(
+        result.is_err(),
+        "INV-FERR-072: batch with empty transaction must return Err"
     );
 }
