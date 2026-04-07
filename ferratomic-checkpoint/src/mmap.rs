@@ -201,7 +201,11 @@ mod mmap_impl {
                 .collect();
 
             // Reconstruct BitVec from archived words
-            let live_bits_len: usize = archived.live_bits_len.to_native() as usize;
+            let live_bits_len: usize = usize::try_from(archived.live_bits_len.to_native())
+                .map_err(|_| FerraError::CheckpointCorrupted {
+                    expected: "live_bits_len fits in usize".to_string(),
+                    actual: format!("live_bits_len = {}", archived.live_bits_len.to_native()),
+                })?;
             let words: Vec<u64> = archived
                 .live_bits_words
                 .iter()
@@ -296,9 +300,16 @@ mod mmap_impl {
 
         let payload = MmapPayload {
             datoms_bytes,
-            datom_count: datoms.len() as u64,
+            datom_count: u64::try_from(datoms.len()).map_err(|_| {
+                FerraError::CheckpointWrite(format!("datom count {} exceeds u64", datoms.len()))
+            })?,
             live_bits_words: live_bits.as_raw_slice().to_vec(),
-            live_bits_len: live_bits.len() as u64,
+            live_bits_len: u64::try_from(live_bits.len()).map_err(|_| {
+                FerraError::CheckpointWrite(format!(
+                    "live_bits length {} exceeds u64",
+                    live_bits.len()
+                ))
+            })?,
             epoch,
             genesis_agent,
             schema_bytes: schema_bytes.to_vec(),

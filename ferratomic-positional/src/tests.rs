@@ -287,6 +287,39 @@ mod positional_tests {
         ]);
         assert_eq!(result, expected, "INV-FERR-001: partial overlap = union");
     }
+
+    // -- from_sorted_with_live error path tests (INV-FERR-076) ----------------
+
+    #[test]
+    fn test_inv_ferr_076_from_sorted_with_live_length_mismatch() {
+        use bitvec::prelude::{BitVec, Lsb0};
+
+        use crate::store::PositionalStore;
+
+        let datoms = vec![make_datom(1, 0)];
+        let wrong_bits = BitVec::<u64, Lsb0>::repeat(false, 5); // length 5 != 1
+        let result = PositionalStore::from_sorted_with_live(datoms, wrong_bits);
+        assert!(
+            result.is_err(),
+            "INV-FERR-076: mismatched live_bits length must be rejected"
+        );
+    }
+
+    #[test]
+    fn test_inv_ferr_076_from_sorted_with_live_unsorted() {
+        use bitvec::prelude::{BitVec, Lsb0};
+
+        use crate::store::PositionalStore;
+
+        // Intentionally unsorted: datom 2 before datom 1
+        let datoms = vec![make_datom(2, 0), make_datom(1, 0)];
+        let bits = BitVec::<u64, Lsb0>::repeat(true, 2);
+        let result = PositionalStore::from_sorted_with_live(datoms, bits);
+        assert!(
+            result.is_err(),
+            "INV-FERR-076: unsorted canonical must be rejected"
+        );
+    }
 }
 
 mod perm_tests {

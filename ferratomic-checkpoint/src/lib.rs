@@ -345,7 +345,7 @@ pub fn write_checkpoint(data: &CheckpointData, path: &Path) -> Result<(), FerraE
     let parent = path
         .parent()
         .ok_or_else(|| FerraError::CheckpointWrite("path has no parent directory".to_string()))?;
-    let tmp_path = parent.join(".checkpoint.tmp");
+    let tmp_path = parent.join(format!(".checkpoint.{}.tmp", std::process::id()));
 
     // Write to temp file and fsync the data.
     {
@@ -389,7 +389,7 @@ pub fn write_checkpoint_live_first(data: &CheckpointData, path: &Path) -> Result
     let parent = path
         .parent()
         .ok_or_else(|| FerraError::CheckpointWrite("path has no parent directory".to_string()))?;
-    let tmp_path = parent.join(".checkpoint_lf.tmp");
+    let tmp_path = parent.join(format!(".checkpoint_lf.{}.tmp", std::process::id()));
 
     {
         let file =

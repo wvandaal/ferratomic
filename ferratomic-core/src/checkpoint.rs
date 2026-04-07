@@ -132,7 +132,7 @@ impl PartialStore {
     pub fn load_historical(self) -> Result<Store, FerraError> {
         let live_datoms: Vec<ferratom::Datom> = self.store.datoms().cloned().collect();
         let merged = crate::positional::merge_sort_dedup(&live_datoms, &self.hist_datoms);
-        let live_bits = ferratomic_positional::build_live_bitvector_pub(&merged);
+        let live_bits = crate::positional::build_live_bitvector_pub(&merged);
         Store::from_checkpoint_v3(
             self.store.epoch(),
             self.store.genesis_agent(),
