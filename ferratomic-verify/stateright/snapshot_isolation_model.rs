@@ -774,7 +774,8 @@ mod tests {
         for (i, history) in s0.observer_epoch_history.iter().enumerate() {
             assert!(
                 history.is_empty(),
-                "INV-FERR-011: observer {i} must start with empty epoch history"
+                "INV-FERR-011: observer {} must start with empty epoch history",
+                i
             );
         }
     }

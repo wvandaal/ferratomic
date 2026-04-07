@@ -100,7 +100,7 @@ fn measure_write_amplification(count: usize) -> f64 {
             .assert_datom(entity, attr, val)
             .commit_unchecked();
         db.transact(tx)
-            .unwrap_or_else(|e| panic!("INV-FERR-026: transact {i} failed: {e}"));
+            .unwrap_or_else(|e| panic!("INV-FERR-026: transact {} failed: {}", i, e));
     }
 
     // Physical bytes = WAL file size on disk.
@@ -265,10 +265,17 @@ fn threshold_inv_ferr_027_read_latency() {
 
     assert!(
         p99_ns < MAX_READ_LATENCY_NS,
-        "INV-FERR-027: P99 EAVT lookup latency {p99_ns}ns exceeds \
-         threshold {MAX_READ_LATENCY_NS}ns (1ms). \
-         {lookup_count} lookups across {datom_count} datoms. \
-         Median: {median_ns}ns, P99: {p99_ns}ns, Max: {max_ns}ns."
+        "INV-FERR-027: P99 EAVT lookup latency {}ns exceeds \
+         threshold {}ns (1ms). \
+         {} lookups across {} datoms. \
+         Median: {}ns, P99: {}ns, Max: {}ns.",
+        p99_ns,
+        MAX_READ_LATENCY_NS,
+        lookup_count,
+        datom_count,
+        median_ns,
+        p99_ns,
+        max_ns
     );
 }
 
@@ -353,10 +360,17 @@ fn threshold_inv_ferr_027_read_latency_25k() {
 
     assert!(
         p99_ns < MAX_READ_LATENCY_NS,
-        "INV-FERR-027: P99 EAVT lookup latency {p99_ns}ns at 25K datoms \
-         exceeds threshold {MAX_READ_LATENCY_NS}ns (1ms). \
-         {lookup_count} lookups across {datom_count} datoms. \
-         Median: {median_ns}ns, P99: {p99_ns}ns, Max: {max_ns}ns."
+        "INV-FERR-027: P99 EAVT lookup latency {}ns at 25K datoms \
+         exceeds threshold {}ns (1ms). \
+         {} lookups across {} datoms. \
+         Median: {}ns, P99: {}ns, Max: {}ns.",
+        p99_ns,
+        MAX_READ_LATENCY_NS,
+        lookup_count,
+        datom_count,
+        median_ns,
+        p99_ns,
+        max_ns
     );
 }
 

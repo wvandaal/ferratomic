@@ -185,7 +185,9 @@ fn assert_entities_present(
         let expected_entity = EntityId::from_content(format!("user-{i}").as_bytes());
         assert!(
             datoms.iter().any(|d| d.entity() == expected_entity),
-            "{context}: user-{i} entity must be present"
+            "{}: user-{} entity must be present",
+            context,
+            i
         );
     }
 }
@@ -283,9 +285,9 @@ fn assert_db_state_equal(
         ferratom::Schema,
     ),
 ) {
-    assert_eq!(expected.1, actual.1, "{label}: epoch mismatch");
-    assert_eq!(expected.2, actual.2, "{label}: schema mismatch");
-    assert_eq!(expected.0, actual.0, "{label}: datom set mismatch");
+    assert_eq!(expected.1, actual.1, "{}: epoch mismatch", label);
+    assert_eq!(expected.2, actual.2, "{}: schema mismatch", label);
+    assert_eq!(expected.0, actual.0, "{}: datom set mismatch", label);
 }
 
 /// INV-FERR-008: WAL entry must precede snapshot visibility.
@@ -346,7 +348,9 @@ fn assert_dc_entities_present(db: &Database, count: u64, context: &str) {
         let expected = EntityId::from_content(format!("dc-entity-{i}").as_bytes());
         assert!(
             snap.datoms().any(|d| d.entity() == expected),
-            "{context}: dc-entity-{i} must be present"
+            "{}: dc-entity-{} must be present",
+            context,
+            i
         );
     }
 }
@@ -526,7 +530,9 @@ fn assert_tc_entities_present(db: &Database, count: u64, context: &str) {
         let expected = EntityId::from_content(format!("tc-entity-{i}").as_bytes());
         assert!(
             snap.datoms().any(|d| d.entity() == expected),
-            "{context}: tc-entity-{i} must be present"
+            "{}: tc-entity-{} must be present",
+            context,
+            i
         );
     }
 }
@@ -707,7 +713,9 @@ fn assert_pc_entities_present(db: &Database, count: u64, context: &str) {
         let expected = EntityId::from_content(format!("pc-entity-{i}").as_bytes());
         assert!(
             snap.datoms().any(|d| d.entity() == expected),
-            "{context}: pc-entity-{i} must be present"
+            "{}: pc-entity-{} must be present",
+            context,
+            i
         );
     }
 }

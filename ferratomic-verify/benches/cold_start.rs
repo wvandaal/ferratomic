@@ -76,7 +76,9 @@ fn bench_cold_start(c: &mut Criterion) {
                     assert!(
                         recovered >= datom_count,
                         "INV-FERR-014: recovered fixture must contain at least \
-                         {datom_count} user datoms, got {recovered}",
+                         {} user datoms, got {}",
+                        datom_count,
+                        recovered,
                     );
                     black_box(recovered);
                 });
@@ -125,7 +127,9 @@ fn bench_checkpoint_roundtrip(c: &mut Criterion) {
                     assert!(
                         recovered >= datom_count,
                         "INV-FERR-014: recovered roundtrip must contain at least \
-                         {datom_count} user datoms, got {recovered}",
+                         {} user datoms, got {}",
+                        datom_count,
+                        recovered,
                     );
                     black_box(recovered);
                 });

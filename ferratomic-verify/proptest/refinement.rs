@@ -77,7 +77,8 @@ fn ci_ferr_002_value_variant_count() {
         let debug_repr = format!("{variant:?}");
         assert!(
             !debug_repr.is_empty(),
-            "CI-FERR-002: Value variant {i} must have a non-empty Debug representation"
+            "CI-FERR-002: Value variant {} must have a non-empty Debug representation",
+            i
         );
     }
 
@@ -87,7 +88,9 @@ fn ci_ferr_002_value_variant_count() {
             assert_ne!(
                 std::mem::discriminant(&variants[i]),
                 std::mem::discriminant(&variants[j]),
-                "CI-FERR-002: Value variants {i} and {j} must have distinct discriminants"
+                "CI-FERR-002: Value variants {} and {} must have distinct discriminants",
+                i,
+                j
             );
         }
     }

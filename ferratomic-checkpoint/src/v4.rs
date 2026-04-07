@@ -412,11 +412,11 @@ mod tests {
             lb_ref,
         )
         .map_err(|e| format!("serialize: {e}"))
-        .unwrap_or_else(|e| panic!("{e}"));
+        .unwrap_or_else(|e| panic!("{}", e));
 
         let loaded = deserialize_v4_bytes(&bytes)
             .map_err(|e| format!("deserialize: {e}"))
-            .unwrap_or_else(|e| panic!("{e}"));
+            .unwrap_or_else(|e| panic!("{}", e));
 
         assert_eq!(
             loaded.epoch, data.epoch,
@@ -458,11 +458,11 @@ mod tests {
             data.live_bits.as_ref().map_or(&BitVec::new(), |b| b),
         )
         .map_err(|e| format!("serialize empty: {e}"))
-        .unwrap_or_else(|e| panic!("{e}"));
+        .unwrap_or_else(|e| panic!("{}", e));
 
         let loaded = deserialize_v4_bytes(&bytes)
             .map_err(|e| format!("deserialize empty: {e}"))
-            .unwrap_or_else(|e| panic!("{e}"));
+            .unwrap_or_else(|e| panic!("{}", e));
 
         assert_eq!(loaded.epoch, 0);
         assert_eq!(loaded.datoms.len(), 0);
@@ -482,7 +482,7 @@ mod tests {
             data.live_bits.as_ref().map_or(&BitVec::new(), |b| b),
         )
         .map_err(|e| format!("serialize: {e}"))
-        .unwrap_or_else(|e| panic!("{e}"));
+        .unwrap_or_else(|e| panic!("{}", e));
 
         // Verify magic.
         assert_eq!(&bytes[0..4], b"CHK4", "V4 must start with CHK4 magic");
@@ -514,11 +514,11 @@ mod tests {
             lb_ref,
         )
         .map_err(|e| format!("V4 serialize: {e}"))
-        .unwrap_or_else(|e| panic!("{e}"));
+        .unwrap_or_else(|e| panic!("{}", e));
 
         let v4_loaded = deserialize_v4_bytes(&v4_bytes)
             .map_err(|e| format!("V4 deserialize: {e}"))
-            .unwrap_or_else(|e| panic!("{e}"));
+            .unwrap_or_else(|e| panic!("{}", e));
 
         // Serialize as V3 for comparison.
         let v3_bytes = crate::v3::serialize_v3_bytes(
@@ -529,11 +529,11 @@ mod tests {
             lb_ref,
         )
         .map_err(|e| format!("V3 serialize: {e}"))
-        .unwrap_or_else(|e| panic!("{e}"));
+        .unwrap_or_else(|e| panic!("{}", e));
 
         let v3_loaded = crate::v3::deserialize_v3_bytes(&v3_bytes)
             .map_err(|e| format!("V3 deserialize: {e}"))
-            .unwrap_or_else(|e| panic!("{e}"));
+            .unwrap_or_else(|e| panic!("{}", e));
 
         // V4 must produce identical CheckpointData as V3.
         assert_eq!(v4_loaded.epoch, v3_loaded.epoch, "V4 epoch must match V3");
@@ -587,11 +587,11 @@ mod tests {
             &live_bits,
         )
         .map_err(|e| format!("serialize: {e}"))
-        .unwrap_or_else(|e| panic!("{e}"));
+        .unwrap_or_else(|e| panic!("{}", e));
 
         let loaded = deserialize_v4_bytes(&bytes)
             .map_err(|e| format!("deserialize: {e}"))
-            .unwrap_or_else(|e| panic!("{e}"));
+            .unwrap_or_else(|e| panic!("{}", e));
 
         assert_eq!(loaded.datoms, datoms, "Retraction roundtrip");
 
@@ -617,11 +617,11 @@ mod tests {
             lb_ref,
         )
         .map_err(|e| format!("serialize: {e}"))
-        .unwrap_or_else(|e| panic!("{e}"));
+        .unwrap_or_else(|e| panic!("{}", e));
 
         let loaded = crate::deserialize_checkpoint_bytes(&bytes)
             .map_err(|e| format!("dispatch deserialize: {e}"))
-            .unwrap_or_else(|e| panic!("{e}"));
+            .unwrap_or_else(|e| panic!("{}", e));
 
         assert_eq!(loaded.epoch, data.epoch);
         assert_eq!(loaded.datoms, data.datoms);

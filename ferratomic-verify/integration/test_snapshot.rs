@@ -366,15 +366,18 @@ fn assert_invariant_violation(
         ferratom::FerraError::InvariantViolation { invariant, details } => {
             assert_eq!(
                 invariant, expected_invariant,
-                "error must cite {expected_invariant}, got invariant={invariant}"
+                "error must cite {}, got invariant={}",
+                expected_invariant, invariant
             );
             assert!(
                 details.contains(expected_keyword),
-                "error details must mention '{expected_keyword}', got details={details}"
+                "error details must mention '{}', got details={}",
+                expected_keyword,
+                details
             );
         }
         other => {
-            panic!("expected InvariantViolation, got {other:?}");
+            panic!("expected InvariantViolation, got {:?}", other);
         }
     }
 }
@@ -667,7 +670,12 @@ fn assert_limiter_count(
     expected: usize,
     context: &str,
 ) {
-    assert_eq!(limiter.active_count(), expected, "INV-FERR-021: {context}");
+    assert_eq!(
+        limiter.active_count(),
+        expected,
+        "INV-FERR-021: {}",
+        context
+    );
 }
 
 /// INV-FERR-021: `WriteLimiter` correctly bounds concurrent writes.
@@ -765,7 +773,10 @@ fn test_inv_ferr_013_checkpoint_corruption() {
         ferratom::FerraError::CheckpointCorrupted { expected, actual } => {
             assert_ne!(expected, actual, "INV-FERR-013: checksums must differ");
         }
-        other => panic!("INV-FERR-013: expected CheckpointCorrupted, got {other:?}"),
+        other => panic!(
+            "INV-FERR-013: expected CheckpointCorrupted, got {:?}",
+            other
+        ),
     }
 }
 

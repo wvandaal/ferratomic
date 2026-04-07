@@ -495,7 +495,8 @@ fn test_inv_ferr_030_replica_filter() {
     for (i, datom) in datoms.iter().enumerate() {
         assert!(
             filter.accepts(datom),
-            "INV-FERR-030: AcceptAll must accept datom {i}, got false"
+            "INV-FERR-030: AcceptAll must accept datom {}, got false",
+            i
         );
     }
 
@@ -586,22 +587,26 @@ fn assert_eavt_field_convergence(forward: &Store, reverse: &Store) {
         assert_eq!(
             f.entity(),
             r.entity(),
-            "INV-FERR-010: EAVT entity diverged at position {i}"
+            "INV-FERR-010: EAVT entity diverged at position {}",
+            i
         );
         assert_eq!(
             f.attribute(),
             r.attribute(),
-            "INV-FERR-010: EAVT attribute diverged at position {i}"
+            "INV-FERR-010: EAVT attribute diverged at position {}",
+            i
         );
         assert_eq!(
             f.value(),
             r.value(),
-            "INV-FERR-010: EAVT value diverged at position {i}"
+            "INV-FERR-010: EAVT value diverged at position {}",
+            i
         );
         assert_eq!(
             f.tx(),
             r.tx(),
-            "INV-FERR-010: EAVT tx diverged at position {i}"
+            "INV-FERR-010: EAVT tx diverged at position {}",
+            i
         );
     }
 }
@@ -615,12 +620,14 @@ fn assert_secondary_index_convergence(
     assert_eq!(
         forward_datoms.len(),
         reverse_datoms.len(),
-        "INV-FERR-010: {index_name} index cardinality diverged"
+        "INV-FERR-010: {} index cardinality diverged",
+        index_name
     );
     for (i, (f, r)) in forward_datoms.iter().zip(reverse_datoms.iter()).enumerate() {
         assert_eq!(
             f, r,
-            "INV-FERR-010: {index_name} index diverged at position {i}"
+            "INV-FERR-010: {} index diverged at position {}",
+            index_name, i
         );
     }
 }

@@ -153,7 +153,7 @@ proptest! {
             // Catch-all: any new FerraError variant not listed above will fail the test,
             // ensuring explicit review when the error taxonomy expands.
             Err(e) => {
-                prop_assert!(false, "INV-FERR-056: unexpected error category: {e}");
+                prop_assert!(false, "INV-FERR-056: unexpected error category: {}", e);
             }
         }
     }
@@ -208,7 +208,7 @@ proptest! {
             // Catch-all: any new FerraError variant not listed above will fail the test,
             // ensuring explicit review when the error taxonomy expands.
             Err(e) => {
-                prop_assert!(false, "INV-FERR-056: unexpected error category: {e}");
+                prop_assert!(false, "INV-FERR-056: unexpected error category: {}", e);
             }
         }
     }
@@ -262,7 +262,7 @@ proptest! {
             // Catch-all: any new FerraError variant not listed above will fail the test,
             // ensuring explicit review when the error taxonomy expands.
             Err(e) => {
-                prop_assert!(false, "INV-FERR-056: unexpected error category: {e}");
+                prop_assert!(false, "INV-FERR-056: unexpected error category: {}", e);
             }
         }
     }

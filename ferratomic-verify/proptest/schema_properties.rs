@@ -597,7 +597,7 @@ fn inv_ferr_023_no_unsafe_code() {
 
     for path in &lib_files {
         let content = std::fs::read_to_string(path)
-            .unwrap_or_else(|e| panic!("INV-FERR-023: cannot read {path}: {e}"));
+            .unwrap_or_else(|e| panic!("INV-FERR-023: cannot read {}: {}", path, e));
 
         // ADR-FERR-020: ferratomic-db uses #![deny(unsafe_code)] instead of
         // #![forbid(unsafe_code)] to allow the localized mmap.rs unsafe boundary.

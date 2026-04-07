@@ -36,7 +36,8 @@ fn accept_all_never_rejects() {
         let datom = make_datom(seed);
         assert!(
             filter.accepts(&datom),
-            "INV-FERR-030: AcceptAll must accept datom with seed {seed}"
+            "INV-FERR-030: AcceptAll must accept datom with seed {}",
+            seed
         );
     }
 }

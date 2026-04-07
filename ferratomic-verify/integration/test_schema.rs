@@ -313,21 +313,22 @@ fn build_all_ferra_error_variants() -> Vec<FerraError> {
 
 /// Assert fields valid for message-only FerraError variants.
 fn assert_message_variant_valid(msg: &str, variant: &str) {
-    assert!(!msg.is_empty(), "{variant} message should not be empty");
+    assert!(!msg.is_empty(), "{} message should not be empty", variant);
 }
 
 /// Assert non-empty attribute, plus distinct left/right for dual-field variants.
 fn assert_attr_non_empty(attribute: &str, variant: &str) {
     assert!(
         !attribute.is_empty(),
-        "{variant} attribute should not be empty"
+        "{} attribute should not be empty",
+        variant
     );
 }
 
 /// Assert struct-field FerraError variants with attribute + pair fields.
 fn assert_attr_pair_distinct(attr: &str, left: &str, right: &str, variant: &str) {
     assert_attr_non_empty(attr, variant);
-    assert_ne!(left, right, "{variant} fields should differ");
+    assert_ne!(left, right, "{} fields should differ", variant);
 }
 
 /// Exhaustive match on every `FerraError` variant -- no wildcards.
@@ -493,17 +494,20 @@ fn assert_display_and_error_match(name: &str, error: &FerraError) {
     let display = format!("{error}");
     assert!(
         !display.is_empty(),
-        "INV-FERR-019: Display for {name} must produce non-empty output"
+        "INV-FERR-019: Display for {} must produce non-empty output",
+        name
     );
     let as_error: &dyn std::error::Error = error;
     let error_str = format!("{as_error}");
     assert!(
         !error_str.is_empty(),
-        "INV-FERR-019: Error trait for {name} must produce non-empty output"
+        "INV-FERR-019: Error trait for {} must produce non-empty output",
+        name
     );
     assert_eq!(
         display, error_str,
-        "INV-FERR-019: Display and Error output must match for {name}"
+        "INV-FERR-019: Display and Error output must match for {}",
+        name
     );
 }
 
@@ -546,7 +550,7 @@ fn test_inv_ferr_023_forbid_unsafe_code() {
 
     for path in &lib_files {
         let content = std::fs::read_to_string(path)
-            .unwrap_or_else(|e| panic!("INV-FERR-023: cannot read {path}: {e}"));
+            .unwrap_or_else(|e| panic!("INV-FERR-023: cannot read {}: {}", path, e));
 
         // ADR-FERR-020: ferratomic-db uses #![deny(unsafe_code)] instead of
         // #![forbid(unsafe_code)] to allow the localized mmap.rs unsafe boundary.

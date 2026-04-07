@@ -248,7 +248,12 @@ fn try_commit(steps: [WalPhase; 4]) -> CommitResult {
 
 /// Assert that a particular step ordering is rejected by the WAL state machine.
 fn assert_ordering_rejected(steps: [WalPhase; 4], msg: &str) {
-    assert_eq!(try_commit(steps), CommitResult::OrderingViolation, "{msg}");
+    assert_eq!(
+        try_commit(steps),
+        CommitResult::OrderingViolation,
+        "{}",
+        msg
+    );
 }
 
 /// Part 1+2: Verify canonical ordering succeeds and Kani symbolic exploration.

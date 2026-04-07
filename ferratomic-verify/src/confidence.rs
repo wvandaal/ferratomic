@@ -168,7 +168,8 @@ mod tests {
         let (lower, _) = compute_beta_posterior(10_000, 0, 1.0, 1.0);
         assert!(
             lower >= GATE_THRESHOLD,
-            "ADR-FERR-012: n=10000 k=0 should pass gate, L={lower}"
+            "ADR-FERR-012: n=10000 k=0 should pass gate, L={}",
+            lower
         );
     }
 
@@ -178,7 +179,8 @@ mod tests {
         let (lower, _) = compute_beta_posterior(100, 0, 1.0, 1.0);
         assert!(
             lower < GATE_THRESHOLD,
-            "ADR-FERR-012: n=100 k=0 should fail gate, L={lower}"
+            "ADR-FERR-012: n=100 k=0 should fail gate, L={}",
+            lower
         );
     }
 
@@ -258,7 +260,9 @@ mod tests {
         assert!(
             lower_clean > lower_fail,
             "ADR-FERR-012: failures must reduce confidence: \
-             clean={lower_clean} vs fail={lower_fail}"
+             clean={} vs fail={}",
+            lower_clean,
+            lower_fail
         );
     }
 }

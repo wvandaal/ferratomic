@@ -1066,7 +1066,10 @@ mod tests {
         for (stage, covered, total) in &counts {
             assert!(
                 covered <= total,
-                "ADR-FERR-013: {stage:?} covered ({covered}) > total ({total})"
+                "ADR-FERR-013: {:?} covered ({}) > total ({})",
+                stage,
+                covered,
+                total
             );
         }
     }
