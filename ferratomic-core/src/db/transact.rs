@@ -54,10 +54,9 @@ impl Database<Ready> {
         let current = self.current.load();
         let mut new_store = Store::clone(&current);
         let receipt = new_store.transact(transaction, tx_id)?;
-        let new_datoms = receipt.datoms().to_vec();
 
-        // Step 2: INV-FERR-008: WAL before publish.
-        self.write_wal(receipt.epoch(), &new_datoms)?;
+        // Step 2: INV-FERR-008: WAL before publish (zero-clone: borrow from receipt).
+        self.write_wal(receipt.epoch(), receipt.datoms())?;
 
         // Step 3: Atomic swap.
         self.publish_and_check(new_store);
@@ -72,7 +71,7 @@ impl Database<Ready> {
         drop(write_slot);
 
         // Step 4: HI-004: Observer delivery is advisory-only.
-        let _ = self.notify_observers(receipt.epoch(), &new_datoms);
+        let _ = self.notify_observers(receipt.epoch(), receipt.datoms());
 
         Ok(receipt)
     }

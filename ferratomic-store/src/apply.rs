@@ -102,12 +102,10 @@ impl Store {
         transaction: Transaction<Committed>,
         tx_id: ferratom::TxId,
     ) -> Result<TxReceipt, FerraError> {
-        // INV-FERR-020: extract datoms and agent, then consume the transaction.
-        // Ownership transfer enforces single-application: a committed transaction
-        // cannot be applied twice.
-        let datoms = transaction.datoms().to_vec();
+        // INV-FERR-020: read agent FIRST, then consume the transaction via
+        // into_datoms(). Ownership transfer enforces single-application.
         let agent = transaction.agent();
-        drop(transaction);
+        let datoms = transaction.into_datoms();
         if datoms.is_empty() {
             return Err(FerraError::EmptyTransaction);
         }

@@ -141,6 +141,16 @@ impl Transaction<Committed> {
         &self.datoms
     }
 
+    /// Consume the transaction and yield the owned datom vector.
+    ///
+    /// INV-FERR-020: Ownership transfer prevents double-application.
+    /// The caller must read [`agent()`](Self::agent) BEFORE calling this
+    /// method, since `self` is consumed.
+    #[must_use]
+    pub fn into_datoms(self) -> Vec<Datom> {
+        self.datoms
+    }
+
     /// The agent who created this transaction.
     ///
     /// INV-FERR-015: The agent identity is used by `HybridClock::tick` to
