@@ -32,9 +32,26 @@ pub(crate) fn compute_fingerprint(canonical: &[Datom]) -> [u8; 32] {
     let mut fp = [0u8; 32];
     for datom in canonical {
         let hash = datom.content_hash();
-        for (acc, byte) in fp.iter_mut().zip(hash.iter()) {
-            *acc ^= byte;
-        }
+        xor_hash_into(&mut fp, &hash);
     }
     fp
+}
+
+/// XOR-accumulate a 32-byte hash into a 32-byte fingerprint using u128
+/// widening (bd-iltk, INV-FERR-074).
+///
+/// 2 XOR + 2 store operations instead of 32 (16x throughput over
+/// byte-by-byte). Safe code only — no `unsafe`, no platform-specific
+/// intrinsics. LLVM may further vectorize to AVX2 at `-O2`.
+#[inline]
+pub(crate) fn xor_hash_into(fp: &mut [u8; 32], hash: &[u8; 32]) {
+    // Low 128 bits (bytes 0..16).
+    let fp_lo = u128::from_ne_bytes(fp[..16].try_into().unwrap_or([0; 16]));
+    let h_lo = u128::from_ne_bytes(hash[..16].try_into().unwrap_or([0; 16]));
+    fp[..16].copy_from_slice(&(fp_lo ^ h_lo).to_ne_bytes());
+
+    // High 128 bits (bytes 16..32).
+    let fp_hi = u128::from_ne_bytes(fp[16..].try_into().unwrap_or([0; 16]));
+    let h_hi = u128::from_ne_bytes(hash[16..].try_into().unwrap_or([0; 16]));
+    fp[16..].copy_from_slice(&(fp_hi ^ h_hi).to_ne_bytes());
 }

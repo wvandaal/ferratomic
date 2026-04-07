@@ -12,6 +12,8 @@
 use bitvec::prelude::{BitVec, Lsb0};
 use ferratom::Datom;
 
+use crate::fingerprint::xor_hash_into;
+
 /// Default chunk size: 1024 datoms.
 pub const DEFAULT_CHUNK_SIZE: usize = 1024;
 
@@ -66,9 +68,7 @@ impl ChunkFingerprints {
         for (pos, datom) in canonical.iter().enumerate() {
             let chunk_idx = pos / chunk_size;
             let hash = datom.content_hash();
-            for (a, b) in chunks[chunk_idx].iter_mut().zip(hash.iter()) {
-                *a ^= b;
-            }
+            xor_hash_into(&mut chunks[chunk_idx], &hash);
         }
 
         let mut dirty = BitVec::<u64, Lsb0>::new();
@@ -93,9 +93,7 @@ impl ChunkFingerprints {
             self.chunks.resize(chunk_idx + 1, [0u8; 32]);
             self.dirty.resize(chunk_idx + 1, false);
         }
-        for (a, b) in self.chunks[chunk_idx].iter_mut().zip(datom_hash.iter()) {
-            *a ^= b;
-        }
+        xor_hash_into(&mut self.chunks[chunk_idx], datom_hash);
         self.dirty.set(chunk_idx, true);
     }
 
@@ -107,9 +105,7 @@ impl ChunkFingerprints {
     pub fn store_fingerprint(&self) -> [u8; 32] {
         let mut result = [0u8; 32];
         for chunk in &self.chunks {
-            for (a, b) in result.iter_mut().zip(chunk.iter()) {
-                *a ^= b;
-            }
+            xor_hash_into(&mut result, chunk);
         }
         result
     }
