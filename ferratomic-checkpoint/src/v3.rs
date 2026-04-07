@@ -53,10 +53,9 @@ use bitvec::prelude::{BitVec, Lsb0};
 use ferratom::{AgentId, AttributeDef, Datom, FerraError};
 use serde::{Deserialize, Serialize};
 
+/// V3 magic bytes: re-exported from lib.rs for single source of truth.
+use super::V3_MAGIC;
 use crate::{CheckpointData, PartialCheckpointData};
-
-/// V3 magic bytes: ASCII "CHK3".
-const V3_MAGIC: [u8; 4] = *b"CHK3";
 
 /// V3 standard format version.
 const V3_VERSION: u16 = 3;

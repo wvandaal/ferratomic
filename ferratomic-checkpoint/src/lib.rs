@@ -77,6 +77,7 @@ mod tests;
 const CHECKPOINT_MAGIC: [u8; 4] = *b"CHKP";
 
 /// V3 checkpoint file magic bytes: ASCII "CHK3".
+/// Single source of truth — `v3.rs` imports this via `super::V3_MAGIC`.
 const V3_MAGIC: [u8; 4] = *b"CHK3";
 
 /// Checkpoint format version. Little-endian u16. V2: u64 length field.
@@ -85,8 +86,8 @@ const CHECKPOINT_VERSION: u16 = 2;
 /// Fixed header size: magic(4) + version(2) + epoch(8) + length(8) = 22 bytes.
 const HEADER_SIZE: usize = 22;
 
-/// BLAKE3 hash size: 32 bytes.
-const HASH_SIZE: usize = 32;
+/// BLAKE3 hash size: 32 bytes. Canonical definition in `mmap.rs`.
+const HASH_SIZE: usize = crate::mmap::HASH_SIZE;
 
 /// Minimum checkpoint file size: header + hash (empty payload).
 const MIN_FILE_SIZE: usize = HEADER_SIZE + HASH_SIZE;

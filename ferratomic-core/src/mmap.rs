@@ -1,80 +1,73 @@
 //! Unsafe boundary for memory-mapped zero-copy access (ADR-FERR-020).
 //!
-//! This module re-exports the BLAKE3 verification and mmap types from
-//! `ferratomic_checkpoint::mmap`. It is the ONLY location in ferratomic-core
-//! where unsafe code is permitted.
+//! Production mmap types are re-exported from `ferratomic_checkpoint::mmap`.
+//! A local `validate_and_cast` is retained for test builds because the
+//! checkpoint crate's copy is cfg-gated behind `feature = "mmap"` which
+//! is not active in default test builds.
 //!
 //! ## Unsafe Budget
 //!
-//! - bd-erfj: 1 unsafe block in `validate_and_cast` (in ferratomic-checkpoint)
-//! - bd-ta8c: adds `MappedStore::archived()` + `memmap2::Mmap::map` (in ferratomic-checkpoint)
-//!
-//! Total: 3 unsafe sites, all in `ferratomic-checkpoint::mmap`, re-exported here.
+//! - Production: 3 unsafe sites in `ferratomic-checkpoint::mmap` (ADR-FERR-020)
+//! - Test-only: 1 unsafe block in local `make_test_data` + 1 unsafe trait impl
 #![allow(unsafe_code)]
 
-// Feature-gated mmap types
+// Feature-gated mmap types (production)
 #[cfg(feature = "mmap")]
 pub(crate) use ferratomic_checkpoint::mmap::{
     mmap_cold_start, serialize_mmap_checkpoint, MappedStore, MmapPayload,
 };
+// For mmap feature builds, re-export from ferratomic-checkpoint
+#[cfg(feature = "mmap")]
+pub(crate) use ferratomic_checkpoint::mmap::{validate_and_cast, ValidMmapTarget};
 
-// ---------------------------------------------------------------------------
-// ValidMmapTarget + validate_and_cast (ADR-FERR-020)
-// Kept inline for ferratomic-core tests (cfg(test) from another crate
-// is invisible here). Feature-gated mmap builds use the checkpoint crate.
-// ---------------------------------------------------------------------------
+// For test-only builds (no mmap feature), provide local definitions
+// that delegate to ferratomic_checkpoint::mmap::verify_blake3.
+#[cfg(all(test, not(feature = "mmap")))]
+mod test_support {
+    use ferratom::FerraError;
 
-/// Marker trait: implementor is repr(C), no padding, all bit patterns valid.
-///
-/// # Safety
-///
-/// Only `#[repr(C)]` types with no interior references, pointers, or
-/// interior mutability should implement this.
-#[cfg(any(feature = "mmap", test))]
-pub(crate) unsafe trait ValidMmapTarget: Sized {}
+    /// Marker trait: implementor is repr(C), no padding, all bit patterns valid.
+    ///
+    /// # Safety
+    ///
+    /// Only `#[repr(C)]` types with no interior references, pointers, or
+    /// interior mutability should implement this.
+    pub(crate) unsafe trait ValidMmapTarget: Sized {}
 
-/// BLAKE3-verified cast from raw bytes to typed reference (ADR-FERR-020).
-///
-/// Checks: size, BLAKE3 integrity, alignment. Single unsafe ptr cast.
-///
-/// # Errors
-///
-/// Returns `FerraError::CheckpointCorrupted` on any check failure.
-#[cfg(any(feature = "mmap", test))]
-pub(crate) fn validate_and_cast<T: ValidMmapTarget>(
-    bytes: &[u8],
-) -> Result<&T, ferratom::FerraError> {
-    ferratomic_checkpoint::mmap::verify_blake3(bytes, std::mem::size_of::<T>()).and_then(
-        |content| {
-            let ptr = content.as_ptr();
-            let align = std::mem::align_of::<T>();
-            if (ptr as usize) % align != 0 {
-                return Err(ferratom::FerraError::CheckpointCorrupted {
-                    expected: format!("{align}-byte alignment"),
-                    actual: format!("alignment offset {}", (ptr as usize) % align),
-                });
-            }
-
-            // SAFETY: BLAKE3 verified, size checked, alignment checked, T: ValidMmapTarget.
-            Ok(unsafe { &*ptr.cast::<T>() })
-        },
-    )
+    /// BLAKE3-verified cast from raw bytes to typed reference (ADR-FERR-020).
+    pub(crate) fn validate_and_cast<T: ValidMmapTarget>(bytes: &[u8]) -> Result<&T, FerraError> {
+        ferratomic_checkpoint::mmap::verify_blake3(bytes, std::mem::size_of::<T>()).and_then(
+            |content| {
+                let ptr = content.as_ptr();
+                let align = std::mem::align_of::<T>();
+                if (ptr as usize) % align != 0 {
+                    return Err(FerraError::CheckpointCorrupted {
+                        expected: format!("{align}-byte alignment"),
+                        actual: format!("alignment offset {}", (ptr as usize) % align),
+                    });
+                }
+                // SAFETY: BLAKE3 verified, size checked, alignment checked, T: ValidMmapTarget.
+                Ok(unsafe { &*ptr.cast::<T>() })
+            },
+        )
+    }
 }
+
+#[cfg(all(test, not(feature = "mmap")))]
+pub(crate) use test_support::{validate_and_cast, ValidMmapTarget};
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
 
     #[repr(C)]
     #[derive(Debug, PartialEq)]
     struct TestPayload {
         a: u64,
-        b: u32,
+        b: u64, // u64 instead of u32 to eliminate struct padding
     }
 
-    // SAFETY: TestPayload is repr(C). All fields are integer types.
-    // All bit patterns of u64 and u32 are valid.
+    // SAFETY: TestPayload is repr(C), all fields u64, no padding, all bit patterns valid.
     unsafe impl ValidMmapTarget for TestPayload {}
 
     fn make_test_data(payload: &TestPayload) -> Vec<u8> {
@@ -128,20 +121,15 @@ mod tests {
     }
 
     /// INV-FERR-070: mmap round-trip test.
-    ///
-    /// Serializes a store to rkyv mmap format, writes to tempfile,
-    /// mmaps it back, promotes to PositionalStore, verifies datom identity.
     #[cfg(feature = "mmap")]
     #[test]
     fn test_inv_ferr_070_mmap_roundtrip() {
         use std::collections::BTreeSet;
 
-        use bitvec::prelude::{BitVec, Lsb0};
         use ferratom::{Attribute, Datom, EntityId, Op, TxId, Value};
 
         use crate::positional::PositionalStore;
 
-        // Build test datoms.
         let datoms: Vec<Datom> = (0..10)
             .map(|i| {
                 Datom::new(
@@ -159,42 +147,28 @@ mod tests {
         let schema_bytes = bincode::serialize(&Vec::<(String, ferratom::AttributeDef)>::new())
             .expect("empty schema serializable");
 
-        // Serialize to mmap format.
         let mmap_bytes = serialize_mmap_checkpoint(
             positional.datoms(),
             &live_bits,
-            42,        // epoch
-            [7u8; 16], // genesis_agent
+            42,
+            [7u8; 16],
             &schema_bytes,
         )
         .expect("INV-FERR-070: mmap serialize must succeed");
 
-        // Write to tempfile and mmap back.
         let dir = tempfile::TempDir::new().unwrap();
         let path = dir.path().join("test.mmap");
         std::fs::write(&path, &mmap_bytes).unwrap();
 
         let mapped = mmap_cold_start(&path).expect("INV-FERR-070: mmap cold start must succeed");
-        assert_eq!(
-            mapped.epoch(),
-            42,
-            "INV-FERR-070: epoch must survive round-trip"
-        );
-        assert_eq!(
-            mapped.datom_count(),
-            10,
-            "INV-FERR-070: datom count must survive round-trip"
-        );
+        assert_eq!(mapped.epoch(), 42);
+        assert_eq!(mapped.datom_count(), 10);
 
-        // Promote to PositionalStore and compare datom sets.
         let recovered = mapped
             .promote_to_positional()
             .expect("INV-FERR-070: promote must succeed");
         let original_set: BTreeSet<&Datom> = positional.datoms().iter().collect();
         let recovered_set: BTreeSet<&Datom> = recovered.datoms().iter().collect();
-        assert_eq!(
-            original_set, recovered_set,
-            "INV-FERR-070: datom sets must be identical after mmap round-trip"
-        );
+        assert_eq!(original_set, recovered_set);
     }
 }

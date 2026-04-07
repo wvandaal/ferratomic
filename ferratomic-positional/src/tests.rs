@@ -1,6 +1,5 @@
 //! Tests for positional store, LIVE bitvector, merge, and permutation layout.
 
-#[cfg(test)]
 mod positional_tests {
     use ferratom::{Attribute, Datom, EntityId, Op, TxId, Value};
 
@@ -290,7 +289,6 @@ mod positional_tests {
     }
 }
 
-#[cfg(test)]
 mod perm_tests {
     use ferratom::{Attribute, Datom, EntityId, Op, TxId, Value};
 

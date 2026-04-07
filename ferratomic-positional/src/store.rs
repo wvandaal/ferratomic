@@ -1,14 +1,10 @@
-//! Positional content addressing store (INV-FERR-076).
+//! [`PositionalStore`] — contiguous-array representation of the datom set.
 //!
-//! Every datom in the store has a canonical position `p : u32` in the
-//! sorted canonical array. Positions serve as internal addresses for
-//! index permutations, LIVE bitvector, and merge bookkeeping.
-//!
-//! This is a faithful functor from the datom semilattice to the natural
-//! number ordering: same datom set -> same sort -> same positions.
-//!
-//! INV-FERR-076: positional determinism, stability under append,
-//! LIVE as bitvector, merge as merge-sort.
+//! Replaces `OrdSet<Datom>` + 4x`OrdMap` with a sorted `Vec<Datom>` plus
+//! lazy permutation arrays, LIVE bitvector, XOR fingerprint, Bloom filter,
+//! and CHD perfect hash. Memory: ~26 MB at 200K datoms vs ~159 MB with
+//! `im::OrdMap`. Construction via `from_datoms` (O(n log n) sort) or
+//! `from_sorted_canonical` (O(n) for pre-sorted merge results).
 
 use std::sync::OnceLock;
 

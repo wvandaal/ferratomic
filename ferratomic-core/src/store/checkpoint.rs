@@ -16,7 +16,7 @@ impl Store {
     ///
     /// INV-FERR-013: `Store::from_checkpoint_bytes(&store.to_checkpoint_bytes()?) == store`.
     /// The byte format is identical to what [`write_checkpoint`](crate::checkpoint::write_checkpoint)
-    /// produces: magic, version, epoch, JSON payload, BLAKE3 hash.
+    /// produces: magic, version, epoch, bincode payload, BLAKE3 hash.
     ///
     /// # Errors
     ///

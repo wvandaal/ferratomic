@@ -50,8 +50,8 @@ pub fn merge_positional(a: &PositionalStore, b: &PositionalStore) -> PositionalS
 /// `PositionalStore::datoms()` and `OrdSet::iter()` both yield this order.
 /// See `Datom` doc comment for the field-order invariant.
 ///
-/// `pub` because `ferratomic-store` uses this for mixed-repr merge
-/// (Positional + `OrdMap`) to avoid the O(n log n) sort in `from_datoms`.
+/// `pub` because `ferratomic-core` and `ferratomic-checkpoint` use this
+/// for mixed-repr merge and LIVE-first deserialization.
 #[must_use]
 pub fn merge_sort_dedup(a: &[Datom], b: &[Datom]) -> Vec<Datom> {
     debug_assert!(
