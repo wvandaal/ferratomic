@@ -6,6 +6,11 @@
 //! | AEVT  | attribute, entity, value, tx, op | "all entities with attr A"  |
 //! | VAET  | value, attribute, entity, tx, op | "reverse ref: who points here?" |
 //! | AVET  | attribute, value, entity, tx, op | "unique lookup by attr+val" |
+//!
+//! Field accessors are added on demand: `EavtKey::entity()` exists because
+//! `positional.rs` needs it (INV-FERR-076). Other fields are accessed only
+//! within this crate via `pub(crate)` visibility. Add accessors when
+//! downstream consumers require them, not speculatively.
 
 use ferratom::{Attribute, Datom, EntityId, Op, TxId, Value};
 

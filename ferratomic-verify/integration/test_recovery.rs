@@ -77,6 +77,28 @@ fn inv_ferr_008_wal_write_and_recover() {
     );
 }
 
+/// Regression: bd-32t — WAL payload content roundtrip preserves datom attributes.
+///
+/// Migrated from ferratomic-wal unit tests during crate extraction (bd-bc41).
+/// The WAL crate tests raw byte roundtrip; this test verifies the full
+/// serialize-write-recover-deserialize path through the ADR-FERR-010 trust boundary.
+#[test]
+fn test_bug_bd_32t_payload_content_roundtrip() {
+    let dir = TempDir::new().expect("failed to create temp dir");
+    let wal_path = dir.path().join("test.wal");
+    let agent = AgentId::from_bytes([1u8; 16]);
+
+    write_single_wal_entry(&wal_path, agent);
+    let datoms = recover_and_deserialize_datoms(&wal_path);
+
+    assert!(!datoms.is_empty(), "bd-32t: payload must contain datoms");
+    assert_eq!(
+        datoms[0].attribute().as_str(),
+        "user/name",
+        "bd-32t: datom attribute must survive WAL roundtrip"
+    );
+}
+
 /// INV-FERR-008: Crash mid-write — incomplete entry truncated on recovery.
 #[test]
 fn inv_ferr_008_crash_mid_write_recovery() {

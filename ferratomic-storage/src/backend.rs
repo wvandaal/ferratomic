@@ -435,3 +435,90 @@ impl StorageBackend for InMemoryBackend {
         Ok(())
     }
 }
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use std::io::{Read as IoRead, Write as IoWrite};
+
+    use super::*;
+
+    #[test]
+    fn test_inv_ferr_024_in_memory_checkpoint_roundtrip() {
+        let backend = InMemoryBackend::new();
+        assert!(
+            !backend.checkpoint_exists(),
+            "INV-FERR-024: fresh backend must have no checkpoint"
+        );
+
+        let data = b"checkpoint content for roundtrip test";
+        let mut writer = backend.open_checkpoint_writer().unwrap();
+        writer.write_all(data).unwrap();
+        writer.flush().unwrap();
+        drop(writer);
+
+        assert!(
+            backend.checkpoint_exists(),
+            "INV-FERR-024: checkpoint must exist after write"
+        );
+
+        let mut reader = backend.open_checkpoint_reader().unwrap();
+        let mut buf = Vec::new();
+        reader.read_to_end(&mut buf).unwrap();
+        assert_eq!(
+            buf, data,
+            "INV-FERR-024: checkpoint content must survive roundtrip"
+        );
+    }
+
+    #[test]
+    fn test_inv_ferr_024_in_memory_wal_append_roundtrip() {
+        let backend = InMemoryBackend::new();
+        assert!(
+            !backend.wal_exists(),
+            "INV-FERR-024: fresh backend must have no WAL"
+        );
+
+        let data = b"wal entry content";
+        {
+            let mut writer = backend.open_wal_writer().unwrap();
+            writer.write_all(data).unwrap();
+            writer.flush().unwrap();
+        }
+
+        assert!(
+            backend.wal_exists(),
+            "INV-FERR-024: WAL must exist after write"
+        );
+
+        let mut reader = backend.open_wal_reader().unwrap();
+        let mut buf = Vec::new();
+        reader.read_to_end(&mut buf).unwrap();
+        assert_eq!(
+            buf, data,
+            "INV-FERR-024: WAL content must survive roundtrip"
+        );
+    }
+
+    #[test]
+    fn test_inv_ferr_024_fs_backend_paths() {
+        let dir = std::path::Path::new("/tmp/ferratomic-test-paths");
+        let backend = FsBackend::new(dir);
+        assert_eq!(
+            backend.checkpoint_path(),
+            dir.join(crate::CHECKPOINT_FILENAME)
+        );
+        assert_eq!(backend.wal_path(), dir.join(crate::WAL_FILENAME));
+        assert_eq!(backend.data_dir(), dir);
+    }
+
+    #[test]
+    fn test_inv_ferr_024_in_memory_default() {
+        let backend = InMemoryBackend::default();
+        assert!(!backend.checkpoint_exists());
+        assert!(!backend.wal_exists());
+    }
+}

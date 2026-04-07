@@ -2,6 +2,7 @@
 //!
 //! Each index uses a distinct sort ordering via its key type. The backend
 //! is interchangeable via the [`IndexBackend`] trait (INV-FERR-025).
+//! Runtime bijection enforcement via [`GenericIndexes::verify_bijection`].
 
 use ferratom::Datom;
 use im::OrdMap;

@@ -131,7 +131,7 @@ pub struct Database<S = Ready> {
     /// Monotonic transaction counter for release-mode bijection canary.
     /// Incremented after every successful `transact()`. When the
     /// `release_bijection_check` feature is enabled, every 100th
-    /// transaction triggers `SecondaryIndexes::verify_bijection()`.
+    /// transaction triggers `GenericIndexes::verify_bijection()`.
     transaction_count: AtomicU64,
 
     /// HI-011: HLC providing causally-ordered `TxId` values for transactions.

@@ -24,9 +24,9 @@
 //!
 //! # Module structure
 //!
-//! - [`mod.rs`](self): Core types, constants, constructors, CRC32.
-//! - [`writer`]: Append and fsync — the write path.
-//! - [`recover`]: Recovery and frame parsing — the read path.
+//! - `mod.rs`: Core types, constants, constructors, CRC32.
+//! - `writer`: Append and fsync — the write path.
+//! - `recover`: Recovery and frame parsing — the read path.
 
 mod recover;
 mod writer;
