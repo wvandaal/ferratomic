@@ -1,0 +1,29 @@
+[package]
+name = "ferratomic-checkpoint"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "BLAKE3-verified checkpoint serialization for Ferratomic: V2/V3 formats, LIVE-first, mmap"
+
+# Algebraic role: SERIALIZATION (checkpoint format over types from ferratom)
+[dependencies]
+ferratom = { path = "../ferratom" }
+ferratomic-positional = { path = "../ferratomic-positional" }
+bincode = { workspace = true }
+blake3 = { workspace = true }
+bitvec = { workspace = true }
+serde = { workspace = true }
+# mmap zero-copy cold start (INV-FERR-070, bd-ta8c)
+memmap2 = { version = "0.9", optional = true }
+rkyv = { version = "0.8", optional = true, features = ["bytecheck"] }
+
+[features]
+## ALIEN-S1: mmap zero-copy cold start (INV-FERR-070, bd-ta8c).
+## Enables MappedStore, mmap_cold_start, serialize_mmap_checkpoint.
+mmap = ["dep:memmap2", "dep:rkyv"]
+
+[dev-dependencies]
+ferratom = { path = "../ferratom", features = ["test-utils"] }
+ferratomic-positional = { path = "../ferratomic-positional", features = ["test-utils"] }
+tempfile = "3"

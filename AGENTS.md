@@ -102,12 +102,13 @@ ferratomic-storage/ Leaf: StorageBackend trait, FsBackend, InMemoryBackend (depe
 ferratomic-wal/     Leaf: WAL frames, CRC32, fsync, recovery (depends on ferratom)
 ferratomic-index/   Leaf: Index key types, IndexBackend trait, SortedVecBackend (depends on ferratom + im)
 ferratomic-positional/ PositionalStore, Bloom, CHD, Eytzinger, LIVE bitvector (depends on ferratom + index)
-ferratomic-core/    Core: Store, Database, checkpoint, merge
+ferratomic-checkpoint/ BLAKE3 snapshots, V3/LIVE-first format, mmap (depends on ferratom + positional)
+ferratomic-core/    Core: Store, Database, merge (facade over extracted crates)
 ferratomic-datalog/ Facade: Datalog parser, planner, evaluator (stubs — Phase 4d)
 ferratomic-verify/  Proofs: Lean 4, Stateright, Kani, proptest, fault injection
 ```
 
-Dependency: clock -> ferratom -> {tx, storage, wal} -> index -> positional -> core -> datalog. Acyclic.
+Dependency: clock -> ferratom -> {tx, storage, wal} -> index -> positional -> checkpoint -> core -> datalog. Acyclic.
 
 ---
 

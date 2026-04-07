@@ -2,8 +2,14 @@ use std::sync::Arc;
 
 use ferratom::{Attribute, EntityId, Value};
 
-use super::*;
-use crate::{store::StoreRepr, writer::Transaction};
+use crate::{
+    checkpoint::{
+        deserialize_checkpoint_bytes, load_checkpoint, serialize_checkpoint_bytes,
+        serialize_live_first_bytes, write_checkpoint,
+    },
+    store::{Store, StoreRepr},
+    writer::Transaction,
+};
 
 #[test]
 fn test_inv_ferr_013_roundtrip_empty() {
@@ -116,7 +122,8 @@ fn test_inv_ferr_013_wrong_magic_rejected() {
 
     let mut data = std::fs::read(&path).unwrap();
     data[0..4].copy_from_slice(b"XXXX");
-    let content_len = data.len() - HASH_SIZE;
+    let hash_size = 32;
+    let content_len = data.len() - hash_size;
     let hash = blake3::hash(&data[..content_len]);
     data[content_len..].copy_from_slice(hash.as_bytes());
     std::fs::write(&path, &data).unwrap();
@@ -155,8 +162,8 @@ fn test_inv_ferr_013_deterministic_output() {
 #[test]
 fn test_inv_ferr_013_v3_genesis_roundtrip() {
     let store = Store::genesis();
-    let bytes = v3::serialize_v3_bytes(&store).unwrap();
-    let loaded = v3::deserialize_v3_bytes(&bytes).unwrap();
+    let bytes = serialize_checkpoint_bytes(&store).unwrap();
+    let loaded = deserialize_checkpoint_bytes(&bytes).unwrap();
 
     assert_eq!(
         loaded.epoch(),
@@ -199,8 +206,8 @@ fn test_inv_ferr_013_v3_store_roundtrip() {
         .commit_unchecked();
     store.transact_test(tx).unwrap();
 
-    let bytes = v3::serialize_v3_bytes(&store).unwrap();
-    let loaded = v3::deserialize_v3_bytes(&bytes).unwrap();
+    let bytes = serialize_checkpoint_bytes(&store).unwrap();
+    let loaded = deserialize_checkpoint_bytes(&bytes).unwrap();
 
     assert_eq!(
         loaded.datom_set(),
@@ -234,67 +241,15 @@ fn test_inv_ferr_013_v3_store_roundtrip() {
 }
 
 #[test]
-fn test_inv_ferr_013_v2_v3_equivalence() {
-    let mut store = Store::genesis();
-
-    let tx = Transaction::new(store.genesis_agent())
-        .assert_datom(
-            EntityId::from_content(b"equiv-entity"),
-            Attribute::from("db/doc"),
-            Value::String(Arc::from("equivalence test")),
-        )
-        .commit_unchecked();
-    store.transact_test(tx).unwrap();
-
-    // Serialize with V2 and V3, load both, compare datom sets.
-    let v2_bytes = serialize_v2_bytes(&store).unwrap();
-    let v3_bytes = v3::serialize_v3_bytes(&store).unwrap();
-
-    let v2_loaded = deserialize_v2_bytes(&v2_bytes).unwrap();
-    let v3_loaded = v3::deserialize_v3_bytes(&v3_bytes).unwrap();
-
-    assert_eq!(
-        v2_loaded.datom_set(),
-        v3_loaded.datom_set(),
-        "INV-FERR-013: V2 and V3 must produce identical datom sets"
-    );
-    assert_eq!(
-        v2_loaded.epoch(),
-        v3_loaded.epoch(),
-        "INV-FERR-013: V2 and V3 must produce identical epoch"
-    );
-    assert_eq!(
-        v2_loaded.schema().len(),
-        v3_loaded.schema().len(),
-        "INV-FERR-013: V2 and V3 must produce identical schema"
-    );
-
-    // Magic dispatch: V2 bytes dispatched correctly.
-    let dispatched_v2 = deserialize_checkpoint_bytes(&v2_bytes).unwrap();
-    assert_eq!(
-        dispatched_v2.datom_set(),
-        store.datom_set(),
-        "Magic dispatch must correctly handle V2 bytes"
-    );
-    // Magic dispatch: V3 bytes dispatched correctly.
-    let dispatched_v3 = deserialize_checkpoint_bytes(&v3_bytes).unwrap();
-    assert_eq!(
-        dispatched_v3.datom_set(),
-        store.datom_set(),
-        "Magic dispatch must correctly handle V3 bytes"
-    );
-}
-
-#[test]
 fn test_inv_ferr_013_v3_corrupted_hash() {
     let store = Store::genesis();
-    let mut bytes = v3::serialize_v3_bytes(&store).unwrap();
+    let mut bytes = serialize_checkpoint_bytes(&store).unwrap();
 
     // Flip a bit in the middle of the payload (before the hash).
     let midpoint = bytes.len() / 2;
     bytes[midpoint] ^= 0xFF;
 
-    let result = v3::deserialize_v3_bytes(&bytes);
+    let result = deserialize_checkpoint_bytes(&bytes);
     assert!(
         result.is_err(),
         "INV-FERR-013: V3 corrupted hash must be rejected"
@@ -304,69 +259,14 @@ fn test_inv_ferr_013_v3_corrupted_hash() {
 #[test]
 fn test_inv_ferr_013_v3_truncated() {
     let store = Store::genesis();
-    let bytes = v3::serialize_v3_bytes(&store).unwrap();
+    let bytes = serialize_checkpoint_bytes(&store).unwrap();
 
     // Truncate to less than minimum size.
     let truncated = &bytes[..10];
-    let result = v3::deserialize_v3_bytes(truncated);
+    let result = deserialize_checkpoint_bytes(truncated);
     assert!(
         result.is_err(),
         "INV-FERR-013: V3 truncated data must be rejected"
-    );
-}
-
-#[test]
-fn test_inv_ferr_013_v3_live_bits_mismatch() {
-    #[derive(serde::Deserialize, serde::Serialize)]
-    struct TamperPayload {
-        schema_pairs: Vec<(String, ferratom::AttributeDef)>,
-        datoms: Vec<ferratom::wire::WireDatom>,
-        live_bits: bitvec::prelude::BitVec<u64, bitvec::prelude::Lsb0>,
-    }
-
-    let mut store = Store::genesis();
-
-    let tx = Transaction::new(store.genesis_agent())
-        .assert_datom(
-            EntityId::from_content(b"live-bits-test"),
-            Attribute::from("db/doc"),
-            Value::String(Arc::from("mismatch test")),
-        )
-        .commit_unchecked();
-    store.transact_test(tx).unwrap();
-
-    let bytes = v3::serialize_v3_bytes(&store).unwrap();
-
-    // Deserialize the raw payload to tamper with live_bits length.
-    // Strategy: take a valid V3, deserialize its payload, alter live_bits,
-    // re-serialize, and recompute the BLAKE3 hash.
-    let header_size: usize = 4 + 2 + 8 + 16; // V3_HEADER_SIZE
-    let hash_size: usize = 32;
-
-    // Extract header.
-    let header = &bytes[..header_size];
-    // Extract payload (between header and hash).
-    let payload_bytes = &bytes[header_size..bytes.len() - hash_size];
-
-    let mut payload: TamperPayload = bincode::deserialize(payload_bytes).unwrap();
-
-    // Add extra bits to make length mismatch.
-    payload.live_bits.push(true);
-    payload.live_bits.push(false);
-
-    let tampered_payload = bincode::serialize(&payload).unwrap();
-
-    // Rebuild: header + tampered payload + fresh BLAKE3.
-    let mut tampered = Vec::with_capacity(header.len() + tampered_payload.len() + hash_size);
-    tampered.extend_from_slice(header);
-    tampered.extend_from_slice(&tampered_payload);
-    let hash = blake3::hash(&tampered);
-    tampered.extend_from_slice(hash.as_bytes());
-
-    let result = v3::deserialize_v3_bytes(&tampered);
-    assert!(
-        result.is_err(),
-        "INV-FERR-013: V3 live_bits length mismatch must be rejected"
     );
 }
 
@@ -440,7 +340,7 @@ fn test_inv_ferr_075_partial_store_live_only() {
     );
 
     // Verify via partial path: load LIVE-only, then merge historical.
-    let partial = v3::deserialize_v3_live_first_partial(&bytes).expect("partial load");
+    let partial = super::deserialize_live_first_partial(&bytes).expect("partial load");
 
     // Compute expected LIVE count independently from the full store.
     let expected_live_count = {
@@ -516,7 +416,7 @@ fn test_inv_ferr_075_100_percent_live() {
         "INV-FERR-075: 100%% LIVE round-trip must preserve datom set"
     );
     // Partial then historical must also recover everything.
-    let partial = v3::deserialize_v3_live_first_partial(&bytes).expect("partial");
+    let partial = super::deserialize_live_first_partial(&bytes).expect("partial");
     let full = partial
         .load_historical()
         .expect("INV-FERR-076: load_historical");
@@ -551,7 +451,7 @@ fn test_inv_ferr_075_live_only_query() {
     store.transact_test(tx).unwrap();
 
     let bytes = serialize_live_first_bytes(&store).expect("serialize");
-    let partial = v3::deserialize_v3_live_first_partial(&bytes).expect("partial");
+    let partial = super::deserialize_live_first_partial(&bytes).expect("partial");
 
     // Query the LIVE-only store via the accessor.
     let live = partial.live_store();
@@ -640,7 +540,7 @@ fn test_inv_ferr_075_mixed_live_groups() {
     );
 
     // Partial → full also preserves all datoms.
-    let partial = v3::deserialize_v3_live_first_partial(&bytes).expect("partial");
+    let partial = super::deserialize_live_first_partial(&bytes).expect("partial");
     let full = partial
         .load_historical()
         .expect("INV-FERR-076: load_historical");
@@ -686,20 +586,5 @@ fn test_inv_ferr_075_truncated_live_first_rejected() {
     assert!(
         result.is_err(),
         "INV-FERR-013: truncated LIVE-first data must be rejected"
-    );
-}
-
-#[test]
-fn test_inv_ferr_075_version_cross_rejection() {
-    // LIVE-first bytes (version 0x0103) fed to standard V3 deserializer
-    // must be rejected (version mismatch).
-    let store = Store::genesis();
-    let bytes = serialize_live_first_bytes(&store).expect("serialize");
-
-    // Direct call to standard V3 deserializer (expects version 3).
-    let result = v3::deserialize_v3_bytes(&bytes);
-    assert!(
-        result.is_err(),
-        "INV-FERR-075: LIVE-first bytes (0x0103) must be rejected by standard V3 deserializer"
     );
 }

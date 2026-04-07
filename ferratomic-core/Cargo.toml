@@ -14,6 +14,7 @@ ferratomic-storage = { path = "../ferratomic-storage" }
 ferratomic-wal = { path = "../ferratomic-wal" }
 ferratomic-index = { path = "../ferratomic-index" }
 ferratomic-positional = { path = "../ferratomic-positional" }
+ferratomic-checkpoint = { path = "../ferratomic-checkpoint" }
 im = { workspace = true }
 arc-swap = { workspace = true }
 blake3 = { workspace = true }
@@ -37,7 +38,7 @@ release_bijection_check = []
 test-utils = ["ferratomic-tx/test-utils", "ferratomic-positional/test-utils"]
 ## ALIEN-S1: mmap zero-copy cold start (INV-FERR-070, bd-ta8c).
 ## Enables MappedStore, mmap_cold_start, promote_to_positional.
-mmap = ["dep:memmap2", "dep:rkyv"]
+mmap = ["dep:memmap2", "dep:rkyv", "ferratomic-checkpoint/mmap"]
 
 [dev-dependencies]
 ferratom = { path = "../ferratom", features = ["test-utils"] }
