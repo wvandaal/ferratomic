@@ -167,6 +167,6 @@ fn test_inv_ferr_006_snapshot_stable_under_write() {
 | Module | One concept. `store.rs` must not contain WAL logic. |
 | ferratom-clock | < 1,000 LOC |
 | ferratom | < 2,000 LOC |
-| ferratomic-core | < 10,000 LOC |
+| ferratomic-db | < 2,000 LOC |
 | ferratomic-datalog | < 5,000 LOC |
 | ferratomic-verify | No limit |

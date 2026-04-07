@@ -293,10 +293,26 @@ mod tests {
         store.ensure_indexes_sorted();
 
         let primary: BTreeSet<&Datom> = store.datoms().collect();
-        let eavt: BTreeSet<&Datom> = store.indexes().unwrap().eavt_datoms().collect();
+        let idx = store.indexes().unwrap();
+        let eavt: BTreeSet<&Datom> = idx.eavt_datoms().collect();
+        let aevt: BTreeSet<&Datom> = idx.aevt_datoms().collect();
+        let vaet: BTreeSet<&Datom> = idx.vaet_datoms().collect();
+        let avet: BTreeSet<&Datom> = idx.avet_datoms().collect();
         assert_eq!(
             primary, eavt,
             "INV-FERR-005: EAVT must match primary after insert"
+        );
+        assert_eq!(
+            primary, aevt,
+            "INV-FERR-005: AEVT must match primary after insert"
+        );
+        assert_eq!(
+            primary, vaet,
+            "INV-FERR-005: VAET must match primary after insert"
+        );
+        assert_eq!(
+            primary, avet,
+            "INV-FERR-005: AVET must match primary after insert"
         );
         assert_eq!(primary.len(), 1);
     }

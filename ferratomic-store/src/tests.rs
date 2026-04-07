@@ -1,6 +1,7 @@
 use std::{collections::BTreeSet, sync::Arc};
 
-use ferratom::{Attribute, Cardinality, Datom, EntityId, Op, TxId, Value, ValueType};
+use ferratom::{AgentId, Attribute, Cardinality, Datom, EntityId, Op, TxId, Value, ValueType};
+use ferratomic_tx::Transaction;
 
 use crate::{
     schema_evolution::{parse_cardinality, parse_value_type},
@@ -521,5 +522,23 @@ fn test_inv_ferr_027_entity_exists_empty() {
     assert!(
         !ps.entity_exists(&any_eid),
         "INV-FERR-027: entity_exists on empty store must return false"
+    );
+}
+
+#[test]
+fn test_inv_ferr_007_epoch_overflow_rejected() {
+    let mut store = Store::genesis();
+    store.epoch = u64::MAX;
+    let tx = Transaction::new(AgentId::from_bytes([1u8; 16]))
+        .assert_datom(
+            EntityId::from_content(b"overflow"),
+            Attribute::from("db/doc"),
+            Value::String("test".into()),
+        )
+        .commit_unchecked();
+    let result = store.transact_test(tx);
+    assert!(
+        result.is_err(),
+        "INV-FERR-007: transact at epoch u64::MAX must return Err"
     );
 }

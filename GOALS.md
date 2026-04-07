@@ -328,7 +328,7 @@ the abstraction boundary IS the safety guarantee.
 
 | Metric | Minimum Threshold | Tool | Rationale |
 |--------|------------------|------|-----------|
-| **Line coverage** | 90% per crate (ferratom, ferratomic-core) | `cargo-llvm-cov` | You cannot claim zero-defect without knowing the denominator. |
+| **Line coverage** | 90% per crate (ferratom, ferratomic-db, ferratomic-store) | `cargo-llvm-cov` | You cannot claim zero-defect without knowing the denominator. |
 | **Branch coverage** | 80% per crate | `cargo-llvm-cov` | Untested branches are unverified code paths. |
 | **Proptest confidence** | Beta(n+1,1) lower bound >= 0.9997 at 10K cases | ADR-FERR-012 | Bayesian quantification of statistical confidence. |
 | **Mutation kill rate** | >80% of injected mutants killed | `cargo-mutants` | Verifies test assertions are strong enough to catch defects. |

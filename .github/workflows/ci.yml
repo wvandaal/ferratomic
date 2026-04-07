@@ -90,13 +90,29 @@ jobs:
       - uses: actions/checkout@v4
       - name: Verify #![forbid(unsafe_code)] in all crates
         run: |
-          for lib in ferratom/src/lib.rs ferratomic-core/src/lib.rs ferratomic-datalog/src/lib.rs ferratomic-verify/src/lib.rs; do
+          # All crates must use forbid(unsafe_code) EXCEPT ferratomic-core
+          # which uses deny(unsafe_code) per ADR-FERR-020 (mmap exception).
+          for lib in ferratom-clock/src/lib.rs ferratom/src/lib.rs \
+                     ferratomic-tx/src/lib.rs ferratomic-storage/src/lib.rs \
+                     ferratomic-wal/src/lib.rs ferratomic-index/src/lib.rs \
+                     ferratomic-positional/src/lib.rs ferratomic-store/src/lib.rs \
+                     ferratomic-datalog/src/lib.rs ferratomic-verify/src/lib.rs; do
             if ! grep -q 'forbid(unsafe_code)' "$lib"; then
               echo "FAIL: $lib missing #![forbid(unsafe_code)]"
               exit 1
             fi
           done
-          echo "All crates enforce #![forbid(unsafe_code)]"
+          # ADR-FERR-020: ferratomic-core (ferratomic-db) uses deny, not forbid
+          if ! grep -q 'deny(unsafe_code)' ferratomic-core/src/lib.rs; then
+            echo "FAIL: ferratomic-core/src/lib.rs missing #![deny(unsafe_code)]"
+            exit 1
+          fi
+          # ferratomic-checkpoint uses deny for mmap containment
+          if ! grep -q 'deny(unsafe_code)' ferratomic-checkpoint/src/lib.rs; then
+            echo "FAIL: ferratomic-checkpoint/src/lib.rs missing #![deny(unsafe_code)]"
+            exit 1
+          fi
+          echo "All crates enforce unsafe containment"
 
   # ──────────────────────────────────────────────────────────────────
   # Gate 7: Documentation — all public items documented

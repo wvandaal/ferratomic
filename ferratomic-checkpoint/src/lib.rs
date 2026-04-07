@@ -67,7 +67,6 @@ use ferratom::{AgentId, AttributeDef, Datom, FerraError};
 
 pub mod v3;
 
-#[allow(unsafe_code)]
 pub mod mmap;
 
 #[cfg(test)]

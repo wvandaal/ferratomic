@@ -3,6 +3,7 @@
 //! This module is the ONLY location in ferratomic-checkpoint where unsafe code
 //! is permitted. It provides [`validate_and_cast`] — a BLAKE3-guarded
 //! pointer cast from raw bytes to a typed reference.
+#![allow(unsafe_code)]
 //!
 //! ## Unsafe Budget
 //!

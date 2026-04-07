@@ -8,7 +8,7 @@
 
 Phases 0-3 COMPLETE. **Phase 4a (core implementation) approaching gate closure.**
 Gate chain: bd-7fub.22.10 (re-review) → bd-y1w5 (tag v0.4.0-gate) → bd-add (gate → unblocks 17 Phase 4b beads).
-Planned: 11-crate decomposition (bd-cly9) — ferratomic-core splits into 8 focused crates.
+DONE: 11-crate decomposition (bd-cly9) — ferratomic-core (now ferratomic-db) split into 8 focused crates.
 
 | Phase | Status |
 |-------|--------|

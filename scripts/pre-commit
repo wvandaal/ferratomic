@@ -20,11 +20,23 @@ cargo clippy --workspace --all-targets -- -D warnings 2>/dev/null || {
     exit 1
 }
 
-# 3. No unsafe code
+# 3. No unsafe code (Gate 6)
 echo "[3/5] unsafe check..."
-for lib in ferratom/src/lib.rs ferratomic-core/src/lib.rs ferratomic-datalog/src/lib.rs ferratomic-verify/src/lib.rs; do
+# All crates use forbid(unsafe_code) except ferratomic-core and ferratomic-checkpoint
+# which use deny(unsafe_code) per ADR-FERR-020 (mmap containment).
+for lib in ferratom-clock/src/lib.rs ferratom/src/lib.rs \
+           ferratomic-tx/src/lib.rs ferratomic-storage/src/lib.rs \
+           ferratomic-wal/src/lib.rs ferratomic-index/src/lib.rs \
+           ferratomic-positional/src/lib.rs ferratomic-store/src/lib.rs \
+           ferratomic-datalog/src/lib.rs ferratomic-verify/src/lib.rs; do
     if [ -f "$lib" ] && ! grep -q 'forbid(unsafe_code)' "$lib"; then
         echo "FAIL: $lib missing #![forbid(unsafe_code)]"
+        exit 1
+    fi
+done
+for lib in ferratomic-core/src/lib.rs ferratomic-checkpoint/src/lib.rs; do
+    if [ -f "$lib" ] && ! grep -q 'deny(unsafe_code)' "$lib"; then
+        echo "FAIL: $lib missing #![deny(unsafe_code)] (ADR-FERR-020)"
         exit 1
     fi
 done
