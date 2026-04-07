@@ -190,6 +190,31 @@ mod tests {
     }
 
     #[test]
+    fn test_inv_ferr_007_epoch_monotonicity_rejection() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("test.wal");
+        let mut wal = Wal::create(&path).unwrap();
+        wal.append_raw(1, &sample_payload()).unwrap();
+
+        // Duplicate epoch must be rejected (INV-FERR-007).
+        let err = wal.append_raw(1, &sample_payload());
+        assert!(
+            err.is_err(),
+            "INV-FERR-007: duplicate epoch must be rejected"
+        );
+
+        // Decreasing epoch must be rejected (INV-FERR-007).
+        let err = wal.append_raw(0, &sample_payload());
+        assert!(
+            err.is_err(),
+            "INV-FERR-007: decreasing epoch must be rejected"
+        );
+
+        // Next epoch must still succeed.
+        wal.append_raw(2, &sample_payload()).unwrap();
+    }
+
+    #[test]
     fn test_inv_ferr_008_payload_roundtrip() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("test.wal");

@@ -70,7 +70,7 @@ impl EavtKey {
         )
     }
 
-    /// The entity component of this key.
+    /// The entity component of this key (INV-FERR-005, INV-FERR-076).
     #[must_use]
     pub fn entity(&self) -> EntityId {
         self.0
