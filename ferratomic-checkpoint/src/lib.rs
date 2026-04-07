@@ -168,6 +168,13 @@ pub struct PartialCheckpointData {
 /// wire format. A trailing BLAKE3 hash covers all preceding bytes for
 /// tamper detection.
 ///
+/// **Performance: O(n) where n is the total datom count in the store.**
+/// INV-FERR-013 (round-trip identity) requires the checkpoint to capture
+/// the complete datom set; any omission would violate `load(checkpoint(S)) = S`.
+/// The BLAKE3 hash is also O(n) over the serialized bytes. Phase 4b
+/// optimization path: incremental/delta checkpoints that serialize only
+/// datoms added since the previous checkpoint, with a merge-on-load strategy.
+///
 /// # Errors
 ///
 /// Returns `FerraError::CheckpointWrite` if serialization fails or if

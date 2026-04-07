@@ -28,6 +28,65 @@
 //!
 //! - Backend types re-exported from `ferratomic-storage`: [`StorageBackend`], [`FsBackend`], [`InMemoryBackend`]
 //! - [`recovery`]: Cold-start recovery cascade (generic + filesystem)
+//!
+//! # Examples
+//!
+//! ## WAL-backed durability and crash recovery
+//!
+//! Open a data directory, transact datoms with WAL durability, then
+//! simulate a crash by dropping the database. Reopen via `cold_start`
+//! and verify all committed datoms survive (INV-FERR-014).
+//!
+//! ```rust,no_run
+//! use std::sync::Arc;
+//! use ferratom::{AgentId, Attribute, EntityId, Value};
+//! use ferratomic_db::db::Database;
+//! use ferratomic_db::writer::Transaction;
+//! use ferratomic_db::storage::{cold_start, RecoveryLevel};
+//!
+//! let data_dir = std::path::Path::new("/tmp/ferratomic-example");
+//!
+//! // Phase 1: open, transact, then "crash" (drop the database).
+//! let epoch_before_crash;
+//! {
+//!     let result = cold_start(data_dir).unwrap();
+//!     let db = result.database;
+//!     let agent = AgentId::from_bytes([1u8; 16]);
+//!
+//!     // Transact two datoms — each is WAL-fsynced before becoming visible.
+//!     let tx1 = Transaction::new(agent)
+//!         .assert_datom(
+//!             EntityId::from_content(b"node-a"),
+//!             Attribute::from("db/doc"),
+//!             Value::String(Arc::from("first write")),
+//!         )
+//!         .commit(&db.schema())
+//!         .unwrap();
+//!     db.transact(tx1).unwrap();
+//!
+//!     let tx2 = Transaction::new(agent)
+//!         .assert_datom(
+//!             EntityId::from_content(b"node-b"),
+//!             Attribute::from("db/doc"),
+//!             Value::String(Arc::from("second write")),
+//!         )
+//!         .commit(&db.schema())
+//!         .unwrap();
+//!     db.transact(tx2).unwrap();
+//!
+//!     epoch_before_crash = db.epoch();
+//!     // db is dropped here — simulates a crash.
+//! }
+//!
+//! // Phase 2: reopen from the same directory.
+//! let recovered = cold_start(data_dir).unwrap();
+//! assert_ne!(recovered.level, RecoveryLevel::Genesis, "must recover from WAL");
+//!
+//! // INV-FERR-014: all committed datoms are present after recovery.
+//! assert_eq!(recovered.database.epoch(), epoch_before_crash);
+//! let snap = recovered.database.snapshot();
+//! assert!(snap.datoms().count() > 0, "committed datoms survived the crash");
+//! ```
 
 mod recovery;
 

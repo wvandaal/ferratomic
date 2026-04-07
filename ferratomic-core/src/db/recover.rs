@@ -34,6 +34,13 @@ impl Database<Ready> {
     /// INV-FERR-014: Recovery replays all complete WAL entries into a
     /// genesis store, producing the last committed state.
     ///
+    /// **Performance: O(n) where n is the number of WAL frames since the
+    /// last checkpoint.** This is inherent: each frame encodes one committed
+    /// transaction and must be deserialized and replayed sequentially to
+    /// reconstruct the in-memory store. Frame ordering carries causal
+    /// dependency (INV-FERR-014). Phase 4b optimization path: incremental
+    /// checkpointing reduces the WAL tail that must be replayed on cold start.
+    ///
     /// # Errors
     ///
     /// Returns `FerraError` if the WAL cannot be opened or recovery fails.

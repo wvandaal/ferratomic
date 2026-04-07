@@ -11,6 +11,64 @@
 //!
 //! Merge is pure set union. No schema validation (C4).
 //! No datoms are added or removed beyond the union.
+//!
+//! # Examples
+//!
+//! Merge two independently-evolved stores and verify the result contains
+//! datoms from both (INV-FERR-001: commutativity).
+//!
+//! ```rust,no_run
+//! use std::sync::Arc;
+//! use ferratom::{AgentId, Attribute, EntityId, Value};
+//! use ferratomic_db::db::Database;
+//! use ferratomic_db::writer::Transaction;
+//! use ferratomic_db::store::Store;
+//! use ferratomic_db::merge::merge;
+//!
+//! // Create two independent replicas from genesis.
+//! let db_a = Database::genesis();
+//! let db_b = Database::genesis();
+//! let agent = AgentId::from_bytes([1u8; 16]);
+//!
+//! // Replica A records a temperature reading.
+//! let tx_a = Transaction::new(agent)
+//!     .assert_datom(
+//!         EntityId::from_content(b"sensor-1"),
+//!         Attribute::from("db/doc"),
+//!         Value::String(Arc::from("temp=22C")),
+//!     )
+//!     .commit(&db_a.schema())
+//!     .unwrap();
+//! db_a.transact(tx_a).unwrap();
+//!
+//! // Replica B records a humidity reading.
+//! let tx_b = Transaction::new(agent)
+//!     .assert_datom(
+//!         EntityId::from_content(b"sensor-2"),
+//!         Attribute::from("db/doc"),
+//!         Value::String(Arc::from("humidity=45%")),
+//!     )
+//!     .commit(&db_b.schema())
+//!     .unwrap();
+//! db_b.transact(tx_b).unwrap();
+//!
+//! // Collect datoms from each replica into stores for merge.
+//! let snap_a = db_a.snapshot();
+//! let store_a = Store::from_datoms(snap_a.datoms().cloned().collect());
+//! let snap_b = db_b.snapshot();
+//! let store_b = Store::from_datoms(snap_b.datoms().cloned().collect());
+//!
+//! // Merge: pure set union (C4 -- no coordination needed).
+//! let merged = merge(&store_a, &store_b).unwrap();
+//!
+//! // The merged store contains datoms from both replicas.
+//! assert!(merged.len() >= store_a.len());
+//! assert!(merged.len() >= store_b.len());
+//!
+//! // INV-FERR-001: merge(A, B) == merge(B, A)
+//! let merged_ba = merge(&store_b, &store_a).unwrap();
+//! assert_eq!(merged.len(), merged_ba.len());
+//! ```
 
 use std::sync::Arc;
 
@@ -89,6 +147,13 @@ impl Store {
     /// bd-h2fz: merge ALWAYS produces a Positional result. The 4-way match
     /// on (a.repr, b.repr) extracts datom slices/iterators and feeds them
     /// into `merge_positional` or `PositionalStore::from_datoms`.
+    ///
+    /// **Performance: O(n+m) where n, m are the datom counts of each store.**
+    /// ADR-FERR-001: `im::OrdSet` union produces a new logical set; all 4
+    /// positional indexes (EAVT, AEVT, AVET, VAET) must be rebuilt from the
+    /// merged datom array. O(n+m) is the theoretical minimum for merging two
+    /// unordered-with-respect-to-each-other sets. Phase 4b optimization path:
+    /// incremental index maintenance via sorted merge of pre-existing indexes.
     #[must_use]
     pub fn from_merge(a: &Store, b: &Store) -> Self {
         let positional = merge_repr(&a.repr, &b.repr);

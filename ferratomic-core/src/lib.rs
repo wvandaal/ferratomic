@@ -158,6 +158,54 @@
 //! assert!(snap.datoms().count() > 0);
 //! ```
 //!
+//! # Examples
+//!
+//! ## Create, transact, and query
+//!
+//! ```rust,no_run
+//! use std::sync::Arc;
+//! use ferratom::{AgentId, Attribute, EntityId, Value};
+//! use ferratomic_db::db::Database;
+//! use ferratomic_db::writer::Transaction;
+//!
+//! // 1. Create a genesis database (INV-FERR-031: deterministic initial state)
+//! let db = Database::genesis();
+//!
+//! // 2. Build and commit a transaction
+//! let agent = AgentId::from_bytes([1u8; 16]);
+//! let tx = Transaction::new(agent)
+//!     .assert_datom(
+//!         EntityId::from_content(b"sensor-42"),
+//!         Attribute::from("db/doc"),
+//!         Value::String(Arc::from("temperature reading")),
+//!     )
+//!     .commit(&db.schema())
+//!     .expect("genesis schema accepts db/doc");
+//!
+//! // 3. Transact — advances epoch, returns receipt
+//! let receipt = db.transact(tx).unwrap();
+//! assert!(receipt.epoch() > 0);
+//!
+//! // 4. Take a snapshot — immutable, lock-free (INV-FERR-006)
+//! let snap = db.snapshot();
+//! for datom in snap.datoms() {
+//!     println!("{:?} {:?} {:?}", datom.entity(), datom.attribute(), datom.value());
+//! }
+//!
+//! // Snapshot is frozen: new writes do not affect it
+//! let snap_count = snap.datoms().count();
+//! let tx2 = Transaction::new(agent)
+//!     .assert_datom(
+//!         EntityId::from_content(b"sensor-43"),
+//!         Attribute::from("db/doc"),
+//!         Value::String(Arc::from("humidity reading")),
+//!     )
+//!     .commit(&db.schema())
+//!     .unwrap();
+//! db.transact(tx2).unwrap();
+//! assert_eq!(snap.datoms().count(), snap_count, "INV-FERR-006: snapshot is immutable");
+//! ```
+//!
 //! ## Algebraic Role
 //!
 //! Core crate. ALGEBRAS — operations over types from ferratom.

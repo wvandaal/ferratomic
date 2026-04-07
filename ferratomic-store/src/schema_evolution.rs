@@ -7,6 +7,55 @@
 //! - The genesis meta-schema (19 axiomatic attributes)
 //! - Schema evolution logic (transact-time attribute installation)
 //! - Value type and cardinality parsing from datom keywords
+//!
+//! # Examples
+//!
+//! Schema evolution happens automatically at transact time when datoms
+//! define new attributes via the `db/ident`, `db/valueType`, and
+//! `db/cardinality` meta-attributes.
+//!
+//! ```rust,no_run
+//! use std::sync::Arc;
+//! use ferratom::{AgentId, Attribute, EntityId, Value};
+//! use ferratomic_db::db::Database;
+//! use ferratomic_db::writer::Transaction;
+//!
+//! let db = Database::genesis();
+//! let agent = AgentId::from_bytes([1u8; 16]);
+//!
+//! // The genesis schema contains 19 axiomatic attributes (INV-FERR-031).
+//! // "db/doc" is one of them -- it accepts String values.
+//! let schema = db.schema();
+//! assert!(schema.get(&Attribute::from("db/doc")).is_some());
+//!
+//! // Define a new attribute by transacting meta-schema datoms.
+//! // All three meta-attributes must share the same entity.
+//! let attr_entity = EntityId::from_content(b"user/email-def");
+//! let tx = Transaction::new(agent)
+//!     .assert_datom(
+//!         attr_entity,
+//!         Attribute::from("db/ident"),
+//!         Value::Keyword(Arc::from("user/email")),
+//!     )
+//!     .assert_datom(
+//!         attr_entity,
+//!         Attribute::from("db/valueType"),
+//!         Value::Keyword(Arc::from("db.type/string")),
+//!     )
+//!     .assert_datom(
+//!         attr_entity,
+//!         Attribute::from("db/cardinality"),
+//!         Value::Keyword(Arc::from("db.cardinality/one")),
+//!     )
+//!     .commit(&schema)
+//!     .unwrap();
+//!
+//! db.transact(tx).unwrap();
+//!
+//! // After transact, the new attribute is installed in the schema.
+//! let updated_schema = db.schema();
+//! assert!(updated_schema.get(&Attribute::from("user/email")).is_some());
+//! ```
 
 use std::{collections::HashMap, sync::Arc};
 

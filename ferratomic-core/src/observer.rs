@@ -175,6 +175,13 @@ fn buffered_delta_since(recent: &VecDeque<BroadcastEntry>, from_epoch: u64) -> O
 /// behind that the bounded `recent` buffer no longer covers the gap. The
 /// observer receives the entire store state and resets its baseline.
 ///
+/// **Performance: O(n) where n is the total datom count in the store.**
+/// INV-FERR-011: the observer must process all datoms since its last-seen
+/// epoch to maintain monotonic ordering guarantees, and without an
+/// epoch-indexed structure the only correct path is a full store scan.
+/// Phase 4b optimization path: cursor-based incremental observer with an
+/// epoch-to-position index, delivering only the delta since `last_seen`.
+///
 /// HI-012: The previous implementation filtered by `datom.tx().physical() >
 /// from_epoch`, which compared wall-clock milliseconds (from HLC) against an
 /// epoch counter — always true for any real timestamp. With HLC wired in,
