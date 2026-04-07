@@ -411,3 +411,186 @@ mod perm_tests {
         }
     }
 }
+
+mod chunk_fingerprint_tests {
+    use ferratom::{Attribute, Datom, EntityId, Op, TxId, Value};
+
+    use crate::{
+        chunk_fingerprints::ChunkFingerprints, fingerprint::compute_fingerprint,
+        store::PositionalStore,
+    };
+
+    fn test_datom(id: u8, tx: u64) -> Datom {
+        let mut bytes = [0u8; 32];
+        bytes[31] = id;
+        Datom::new(
+            EntityId::from_bytes(bytes),
+            Attribute::from("test/attr"),
+            Value::Long(i64::from(id)),
+            TxId::new(tx, 0, 0),
+            Op::Assert,
+        )
+    }
+
+    #[test]
+    fn test_inv_ferr_079_empty_store() {
+        let cf = ChunkFingerprints::from_canonical(&[], 64);
+        assert_eq!(cf.num_chunks(), 0, "INV-FERR-079: empty store has 0 chunks");
+        assert_eq!(
+            cf.store_fingerprint(),
+            [0u8; 32],
+            "INV-FERR-079: empty store fingerprint is identity"
+        );
+    }
+
+    #[test]
+    fn test_inv_ferr_079_single_chunk() {
+        let datoms: Vec<Datom> = (0..10u8).map(|i| test_datom(i, 1)).collect();
+        let ps = PositionalStore::from_datoms(datoms.into_iter());
+        let cf = ChunkFingerprints::from_canonical(ps.datoms(), 64);
+
+        assert_eq!(
+            cf.num_chunks(),
+            1,
+            "INV-FERR-079: 10 datoms in chunk_size=64 → 1 chunk"
+        );
+        assert_eq!(
+            cf.store_fingerprint(),
+            *ps.fingerprint(),
+            "INV-FERR-079: single-chunk fingerprint == store fingerprint"
+        );
+    }
+
+    #[test]
+    fn test_inv_ferr_079_decomposition_multi_chunk() {
+        // 10 datoms, chunk_size=4 → 3 chunks (4+4+2).
+        let datoms: Vec<Datom> = (0..10u8).map(|i| test_datom(i, 1)).collect();
+        let ps = PositionalStore::from_datoms(datoms.into_iter());
+        let cf = ChunkFingerprints::from_canonical(ps.datoms(), 4);
+
+        assert_eq!(
+            cf.num_chunks(),
+            3,
+            "INV-FERR-079: 10 datoms / chunk_size=4 → 3 chunks"
+        );
+        let manual_fp = compute_fingerprint(ps.datoms());
+        assert_eq!(
+            cf.store_fingerprint(),
+            manual_fp,
+            "INV-FERR-079: XOR of chunk fingerprints must equal store fingerprint"
+        );
+    }
+
+    #[test]
+    fn test_inv_ferr_079_decomposition_via_accessor() {
+        let datoms: Vec<Datom> = (0..50u8).map(|i| test_datom(i, 1)).collect();
+        let ps = PositionalStore::from_datoms(datoms.into_iter());
+        let cf = ps.chunk_fingerprints();
+
+        assert_eq!(
+            cf.store_fingerprint(),
+            *ps.fingerprint(),
+            "INV-FERR-079: lazy-built chunk fingerprints decompose store fingerprint"
+        );
+    }
+
+    #[test]
+    fn test_inv_ferr_079_diff_identical_stores() {
+        let datoms: Vec<Datom> = (0..20u8).map(|i| test_datom(i, 1)).collect();
+        let ps = PositionalStore::from_datoms(datoms.into_iter());
+        let cf_a = ChunkFingerprints::from_canonical(ps.datoms(), 8);
+        let cf_b = ChunkFingerprints::from_canonical(ps.datoms(), 8);
+
+        assert!(
+            cf_a.diff_chunks(&cf_b).is_empty(),
+            "INV-FERR-079: identical stores have zero differing chunks"
+        );
+    }
+
+    #[test]
+    fn test_inv_ferr_079_diff_detects_changes() {
+        let datoms_a: Vec<Datom> = (0..8u8).map(|i| test_datom(i, 1)).collect();
+        let datoms_b: Vec<Datom> = (0..8u8)
+            .map(|i| {
+                if i == 5 {
+                    test_datom(55, 1) // different datom in second chunk
+                } else {
+                    test_datom(i, 1)
+                }
+            })
+            .collect();
+        let ps_a = PositionalStore::from_datoms(datoms_a.into_iter());
+        let ps_b = PositionalStore::from_datoms(datoms_b.into_iter());
+        let cf_a = ChunkFingerprints::from_canonical(ps_a.datoms(), 4);
+        let cf_b = ChunkFingerprints::from_canonical(ps_b.datoms(), 4);
+
+        let diffs = cf_a.diff_chunks(&cf_b);
+        assert!(
+            !diffs.is_empty(),
+            "INV-FERR-079: different stores must have differing chunks"
+        );
+    }
+
+    #[test]
+    fn test_inv_ferr_079_insert_hash_marks_dirty() {
+        let datoms: Vec<Datom> = (0..8u8).map(|i| test_datom(i, 1)).collect();
+        let mut cf = ChunkFingerprints::from_canonical(&datoms, 4);
+
+        // Initially no dirty chunks.
+        assert_eq!(
+            cf.dirty_chunks().count(),
+            0,
+            "INV-FERR-079: fresh chunk fingerprints have no dirty chunks"
+        );
+
+        // Insert a hash into chunk 0.
+        let hash = datoms[0].content_hash();
+        cf.insert_hash(1, &hash);
+        let dirty: Vec<usize> = cf.dirty_chunks().collect();
+        assert_eq!(
+            dirty,
+            vec![0],
+            "INV-FERR-079: insert at position 1 dirties chunk 0"
+        );
+
+        // Clear dirty.
+        cf.clear_dirty();
+        assert_eq!(
+            cf.dirty_chunks().count(),
+            0,
+            "INV-FERR-079: clear_dirty resets all dirty flags"
+        );
+    }
+
+    #[test]
+    fn test_inv_ferr_079_insert_updates_single_chunk() {
+        let datoms: Vec<Datom> = (0..8u8).map(|i| test_datom(i, 1)).collect();
+        let mut cf = ChunkFingerprints::from_canonical(&datoms, 4);
+        let original_fp = cf.store_fingerprint();
+
+        // XOR the same hash twice = identity (XOR is self-inverse).
+        let hash = [0xABu8; 32];
+        cf.insert_hash(2, &hash);
+        cf.insert_hash(2, &hash);
+        assert_eq!(
+            cf.store_fingerprint(),
+            original_fp,
+            "INV-FERR-079: double XOR is identity"
+        );
+    }
+
+    #[test]
+    fn test_inv_ferr_079_diff_different_sizes() {
+        let datoms_small: Vec<Datom> = (0..4u8).map(|i| test_datom(i, 1)).collect();
+        let datoms_large: Vec<Datom> = (0..12u8).map(|i| test_datom(i, 1)).collect();
+        let cf_small = ChunkFingerprints::from_canonical(&datoms_small, 4);
+        let cf_large = ChunkFingerprints::from_canonical(&datoms_large, 4);
+
+        let diffs = cf_small.diff_chunks(&cf_large);
+        // The first chunk might match (same datoms), extra chunks always differ.
+        assert!(
+            diffs.len() >= 2,
+            "INV-FERR-079: extra chunks in larger store must appear as diffs"
+        );
+    }
+}

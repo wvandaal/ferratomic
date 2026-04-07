@@ -550,3 +550,81 @@ fn xor_fingerprints(a: &[u8; 32], b: &[u8; 32]) -> [u8; 32] {
     }
     result
 }
+
+// ---------------------------------------------------------------------------
+// INV-FERR-079: Chunk Fingerprint Array
+// ---------------------------------------------------------------------------
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(10_000))]
+
+    /// INV-FERR-079: decomposition theorem.
+    ///
+    /// The store-level fingerprint (INV-FERR-074) must equal the XOR of all
+    /// chunk fingerprints. This is the direct-sum decomposition of the
+    /// homomorphism over a partition into contiguous chunks.
+    ///
+    /// Falsification: `cf.store_fingerprint() != compute_fingerprint(datoms)`.
+    #[test]
+    fn inv_ferr_079_chunk_decomposition(
+        datoms in prop::collection::btree_set(arb_datom(), 0..500),
+    ) {
+        use ferratomic_db::positional::ChunkFingerprints;
+
+        let ps = PositionalStore::from_datoms(datoms.into_iter());
+
+        // Test with multiple chunk sizes to exercise boundary conditions.
+        for chunk_size in [4, 16, 64, 1024] {
+            let cf = ChunkFingerprints::from_canonical(ps.datoms(), chunk_size);
+            prop_assert_eq!(
+                cf.store_fingerprint(),
+                *ps.fingerprint(),
+                "INV-FERR-079: chunk decomposition failed for chunk_size={}. \
+                 store_len={}, num_chunks={}",
+                chunk_size, ps.len(), cf.num_chunks()
+            );
+        }
+    }
+
+    /// INV-FERR-079: identical stores produce zero differing chunks.
+    ///
+    /// Falsification: diff_chunks returns non-empty for identical stores.
+    #[test]
+    fn inv_ferr_079_identical_stores_zero_diff(
+        datoms in prop::collection::btree_set(arb_datom(), 0..200),
+    ) {
+        use ferratomic_db::positional::ChunkFingerprints;
+
+        let ps = PositionalStore::from_datoms(datoms.into_iter());
+        let cf_a = ChunkFingerprints::from_canonical(ps.datoms(), 64);
+        let cf_b = ChunkFingerprints::from_canonical(ps.datoms(), 64);
+
+        prop_assert!(
+            cf_a.diff_chunks(&cf_b).is_empty(),
+            "INV-FERR-079: identical stores must have zero differing chunks"
+        );
+    }
+
+    /// INV-FERR-079: lazy accessor decomposition.
+    ///
+    /// The OnceLock-based `chunk_fingerprints()` accessor must produce a
+    /// ChunkFingerprints whose store_fingerprint equals the precomputed
+    /// fingerprint.
+    ///
+    /// Falsification: lazy-built chunk fingerprints disagree with eager fingerprint.
+    #[test]
+    fn inv_ferr_079_lazy_accessor_decomposition(
+        datoms in prop::collection::btree_set(arb_datom(), 0..300),
+    ) {
+        let ps = PositionalStore::from_datoms(datoms.into_iter());
+        let cf = ps.chunk_fingerprints();
+
+        prop_assert_eq!(
+            cf.store_fingerprint(),
+            *ps.fingerprint(),
+            "INV-FERR-079: lazy chunk fingerprints disagree with store fingerprint. \
+             store_len={}, num_chunks={}",
+            ps.len(), cf.num_chunks()
+        );
+    }
+}

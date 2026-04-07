@@ -14,6 +14,7 @@ use ferratomic_index::{AevtKey, AvetKey, EavtKey, VaetKey};
 
 use crate::{
     bloom::EntityBloom,
+    chunk_fingerprints::{ChunkFingerprints, DEFAULT_CHUNK_SIZE},
     fingerprint::compute_fingerprint,
     live::build_live_bitvector,
     mph::Mph,
@@ -71,6 +72,10 @@ pub struct PositionalStore {
     /// Lazily built on first `entity_exists()` call. ~1% false positive rate
     /// at 10 bits/element. Zero false negatives by construction.
     pub(crate) bloom: OnceLock<EntityBloom>,
+    /// Chunk fingerprint array for O(delta) federation reconciliation
+    /// (INV-FERR-079). Lazily built on first access. Decomposes the
+    /// store fingerprint (INV-FERR-074) into per-chunk XOR sums.
+    pub(crate) chunk_fps: OnceLock<ChunkFingerprints>,
 }
 
 impl Clone for PositionalStore {
@@ -104,6 +109,11 @@ impl Clone for PositionalStore {
                 let _ = lock.set(v.clone());
                 lock
             }),
+            chunk_fps: self.chunk_fps.get().map_or_else(OnceLock::new, |v| {
+                let lock = OnceLock::new();
+                let _ = lock.set(v.clone());
+                lock
+            }),
         }
     }
 }
@@ -119,6 +129,7 @@ impl std::fmt::Debug for PositionalStore {
             .field("fingerprint", &self.fingerprint)
             .field("mph_init", &self.mph.get().is_some())
             .field("bloom_init", &self.bloom.get().is_some())
+            .field("chunk_fps_init", &self.chunk_fps.get().is_some())
             .finish()
     }
 }
@@ -157,6 +168,7 @@ impl PositionalStore {
             fingerprint,
             mph: OnceLock::new(),
             bloom: OnceLock::new(),
+            chunk_fps: OnceLock::new(),
         }
     }
 
@@ -195,6 +207,7 @@ impl PositionalStore {
             fingerprint,
             mph: OnceLock::new(),
             bloom: OnceLock::new(),
+            chunk_fps: OnceLock::new(),
         }
     }
 
@@ -383,6 +396,16 @@ impl PositionalStore {
         &self.fingerprint
     }
 
+    /// Chunk fingerprint array for O(delta) reconciliation (INV-FERR-079).
+    ///
+    /// Built lazily on first access. The store-level fingerprint
+    /// (INV-FERR-074) equals the XOR of all chunk fingerprints.
+    #[must_use]
+    pub fn chunk_fingerprints(&self) -> &ChunkFingerprints {
+        self.chunk_fps
+            .get_or_init(|| ChunkFingerprints::from_canonical(&self.canonical, DEFAULT_CHUNK_SIZE))
+    }
+
     /// Clone the LIVE bitvector for checkpoint serialization (INV-FERR-076).
     ///
     /// V3 checkpoints persist the bitvector to skip recomputation on load.
@@ -445,6 +468,7 @@ impl PositionalStore {
             fingerprint,
             mph: OnceLock::new(),
             bloom: OnceLock::new(),
+            chunk_fps: OnceLock::new(),
         })
     }
 }

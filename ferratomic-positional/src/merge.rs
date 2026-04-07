@@ -37,6 +37,7 @@ pub fn merge_positional(a: &PositionalStore, b: &PositionalStore) -> PositionalS
         fingerprint,
         mph: OnceLock::new(),
         bloom: OnceLock::new(),
+        chunk_fps: OnceLock::new(),
     }
 }
 

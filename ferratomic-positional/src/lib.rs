@@ -15,6 +15,7 @@
 #![warn(clippy::pedantic)]
 
 mod bloom;
+pub mod chunk_fingerprints;
 mod fingerprint;
 pub mod live;
 pub mod merge;
@@ -27,6 +28,7 @@ pub mod store;
 mod tests;
 
 // Public re-exports for downstream crates.
+pub use chunk_fingerprints::{ChunkFingerprints, DEFAULT_CHUNK_SIZE};
 pub use live::build_live_bitvector_pub;
 #[cfg(any(test, feature = "test-utils"))]
 pub use live::{live_positions_for_test, live_positions_from_sorted_run_keys_for_test};

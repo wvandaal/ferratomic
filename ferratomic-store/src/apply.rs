@@ -17,7 +17,10 @@
 //! Private helpers [`stamp_datoms`] and [`create_tx_metadata`] live here
 //! because they are only called by [`Store::transact`].
 
+use std::sync::Arc;
+
 use ferratom::{AgentId, Attribute, Datom, FerraError};
+use ferratomic_positional::{merge_sort_dedup, PositionalStore};
 use ferratomic_tx::{Committed, Transaction};
 
 use crate::{
@@ -126,28 +129,27 @@ impl Store {
         // INV-FERR-009: evolve schema from schema-defining datoms.
         crate::schema_evolution::evolve_schema(&mut self.schema, &all_datoms)?;
 
-        // bd-h2fz: lazy promotion -- Positional -> OrdMap on first write.
-        self.promote();
-        // INV-FERR-004/005: insert into primary then indexes (bd-4pg).
-        // MI-007: Insert from references, then move vec into receipt
-        // (eliminates receipt_datoms.clone() double-clone).
-        for datom in &all_datoms {
-            if let StoreRepr::OrdMap { datoms, indexes } = &mut self.repr {
-                datoms.insert(datom.clone());
-                indexes.insert(datom);
+        // bd-886d: dispatch based on representation.
+        // Positional → splice (O(N+K), no promote/demote cycle).
+        // OrdMap → fallback to direct insertion (rare: only during batch_replay).
+        match &self.repr {
+            StoreRepr::Positional(_) => self.splice_transact(&all_datoms),
+            StoreRepr::OrdMap { .. } => {
+                for datom in &all_datoms {
+                    if let StoreRepr::OrdMap { datoms, indexes } = &mut self.repr {
+                        datoms.insert(datom.clone());
+                        indexes.insert(datom);
+                    }
+                    self.live_apply(datom);
+                }
+                self.demote();
             }
-            self.live_apply(datom);
         }
 
-        let receipt = TxReceipt {
+        Ok(TxReceipt {
             epoch: self.epoch,
             datoms: all_datoms,
-        };
-
-        // INV-FERR-072: rebuild Positional for ns-level reads after write.
-        self.demote();
-
-        Ok(receipt)
+        })
     }
 
     /// Batch WAL replay: promote once, replay all entries, demote once (INV-FERR-014).
@@ -203,6 +205,36 @@ impl Store {
         let agent = transaction.agent();
         let tx_id = ferratom::TxId::with_agent(self.epoch.wrapping_add(1), 0, agent);
         self.transact(transaction, tx_id)
+    }
+
+    /// Merge-sort splice: insert datoms into Positional without `OrdMap`
+    /// detour (bd-886d, INV-FERR-072).
+    ///
+    /// Produces identical datom set to promote+insert+demote.
+    /// Cost: O(N + K log K) — N = store size, K = transaction size.
+    ///
+    /// 1. Sort new datoms into canonical EAVT order: O(K log K)
+    /// 2. Merge into existing canonical array: O(N + K)
+    /// 3. Build new `PositionalStore` (fingerprint + LIVE in parallel): O(N + K)
+    /// 4. Update `live_causal`/`live_set` for new datoms only: O(K log M)
+    fn splice_transact(&mut self, new_datoms: &[Datom]) {
+        if let StoreRepr::Positional(ps) = &self.repr {
+            // 1. Sort new datoms into canonical EAVT order.
+            let mut sorted_new: Vec<Datom> = new_datoms.to_vec();
+            sorted_new.sort_unstable();
+
+            // 2. Merge into existing canonical: O(N + K), cache-sequential.
+            let merged = merge_sort_dedup(ps.datoms(), &sorted_new);
+
+            // 3. Build new PositionalStore (fingerprint + LIVE in parallel).
+            let new_ps = PositionalStore::from_sorted_canonical(merged);
+            self.repr = StoreRepr::Positional(Arc::new(new_ps));
+
+            // 4. Update live_causal/live_set incrementally for new datoms.
+            for datom in new_datoms {
+                self.live_apply(datom);
+            }
+        }
     }
 }
 

@@ -86,7 +86,7 @@ impl Invariant {
     }
 }
 
-/// Complete catalog of all 61 invariants (59 INV-FERR + 2 CI-FERR).
+/// Complete catalog of all 69 invariants (67 INV-FERR + 2 CI-FERR).
 ///
 /// Order matches spec module order: 01-core, 02-concurrency, 03-performance,
 /// 04-decisions, 05-federation, 06-prolly, 07-refinement, 08-verification.
@@ -792,6 +792,97 @@ pub const CATALOG: &[Invariant] = &[
         type_level: None,
     },
     // -----------------------------------------------------------------------
+    // 09-performance-architecture.md: INV-FERR-070..077 (Stage 0/1)
+    // -----------------------------------------------------------------------
+    Invariant {
+        id: "INV-FERR-070",
+        name: "Zero-Copy Cold Start via Memory-Mapped Checkpoint",
+        stage: Stage::Stage0,
+        lean_theorem: None,
+        proptest_fn: None,
+        kani_harness: None,
+        stateright_model: None,
+        integration_test: None,
+        type_level: Some("mmap behind safe API (ADR-FERR-020), CheckpointData type"),
+    },
+    Invariant {
+        id: "INV-FERR-071",
+        name: "Sorted-Array Index Backend (Cache-Optimal Representation)",
+        stage: Stage::Stage0,
+        lean_theorem: None,
+        proptest_fn: Some("inv_ferr_071_sorted_vec_equiv_ordmap, inv_ferr_071_sorted_vec_indexes_full_pipeline"),
+        kani_harness: None,
+        stateright_model: None,
+        integration_test: None,
+        type_level: Some("SortedVecBackend, SortedVecIndexes types"),
+    },
+    Invariant {
+        id: "INV-FERR-072",
+        name: "Lazy Representation Promotion / Demotion",
+        stage: Stage::Stage0,
+        lean_theorem: Some("promote_preserves_content, demote_preserves_content"),
+        proptest_fn: None,
+        kani_harness: None,
+        stateright_model: None,
+        integration_test: None,
+        type_level: Some("StoreRepr enum (OrdMap/Positional), OnceLock lazy permutations"),
+    },
+    Invariant {
+        id: "INV-FERR-073",
+        name: "Yoneda Index Fusion (Single Store, Permutation Indexes)",
+        stage: Stage::Stage1,
+        lean_theorem: None,
+        proptest_fn: None,
+        kani_harness: None,
+        stateright_model: None,
+        integration_test: None,
+        type_level: Some("OnceLock<Vec<u32>> permutation arrays on PositionalStore"),
+    },
+    Invariant {
+        id: "INV-FERR-074",
+        name: "Homomorphic Store Fingerprint",
+        stage: Stage::Stage1,
+        lean_theorem: Some("fingerprint_merge"),
+        proptest_fn: Some("inv_ferr_074_fingerprint_deterministic, inv_ferr_074_fingerprint_commutative, inv_ferr_074_fingerprint_homomorphic_disjoint, inv_ferr_074_fingerprint_nondisjoint"),
+        kani_harness: None,
+        stateright_model: None,
+        integration_test: None,
+        type_level: None,
+    },
+    Invariant {
+        id: "INV-FERR-075",
+        name: "LIVE-First Lattice Reduction Checkpoint",
+        stage: Stage::Stage1,
+        lean_theorem: None,
+        proptest_fn: Some("inv_ferr_075_live_first_full_roundtrip, inv_ferr_075_live_first_partial_then_historical"),
+        kani_harness: None,
+        stateright_model: None,
+        integration_test: None,
+        type_level: None,
+    },
+    Invariant {
+        id: "INV-FERR-076",
+        name: "Positional Content Addressing",
+        stage: Stage::Stage0,
+        lean_theorem: None,
+        proptest_fn: Some("inv_ferr_076_datoms_match_store, inv_ferr_076_live_view_matches_store, inv_ferr_076_merge_matches_store, inv_ferr_076_live_bits_length, inv_ferr_076_permutations_valid"),
+        kani_harness: None,
+        stateright_model: None,
+        integration_test: None,
+        type_level: Some("PositionalStore type with canonical Vec<Datom>"),
+    },
+    Invariant {
+        id: "INV-FERR-077",
+        name: "Interpolation Search for BLAKE3-Uniform Keys",
+        stage: Stage::Stage1,
+        lean_theorem: Some("interpolation_search_equiv"),
+        proptest_fn: None,
+        kani_harness: None,
+        stateright_model: None,
+        integration_test: None,
+        type_level: None,
+    },
+    // -----------------------------------------------------------------------
     // 07-refinement.md: CI-FERR-001..002 (Stage 0 -- foundational coupling)
     // -----------------------------------------------------------------------
     Invariant {
@@ -899,20 +990,21 @@ pub fn invariants_without_test() -> Vec<&'static str> {
 mod tests {
     use super::*;
 
-    /// ADR-FERR-013: catalog must contain all 61 invariants (59 INV + 2 CI).
+    /// ADR-FERR-013: catalog must contain all 69 invariants (67 INV + 2 CI).
     ///
     /// Breakdown: 12 core (001-012) + 12 concurrency (013-024) +
     /// 8 performance (025-032) + 4 decisions (033-036) +
     /// 8 federation (037-044) + 6 prolly (045-050) +
-    /// 5 VKN (051-055) + 4 verification (056-059) + 2 CI-FERR (001-002).
+    /// 5 VKN (051-055) + 4 verification (056-059) +
+    /// 8 perf-architecture (070-077) + 2 CI-FERR (001-002).
     ///
     /// Update this count and breakdown if the spec adds or removes invariants.
     #[test]
     fn test_catalog_count() {
         assert_eq!(
             CATALOG.len(),
-            61,
-            "ADR-FERR-013: expected 61 invariants (59 INV-FERR + 2 CI-FERR), got {}",
+            69,
+            "ADR-FERR-013: expected 69 invariants (67 INV-FERR + 2 CI-FERR), got {}",
             CATALOG.len()
         );
     }
@@ -936,19 +1028,19 @@ mod tests {
     fn test_coverage_by_stage() {
         let counts = coverage_by_stage();
 
-        // Stage 0: all invariants currently marked Stage 0 in the spec = 46
+        // Stage 0: 46 original + 4 perf-architecture (070, 071, 072, 076) = 50
         assert_eq!(
-            counts[0].2, 46,
-            "Stage 0 total: expected 46, got {}",
+            counts[0].2, 50,
+            "Stage 0 total: expected 50, got {}",
             counts[0].2
         );
-        // Stage 1: all invariants currently marked Stage 1 in the spec = 14
+        // Stage 1: 14 original + 4 perf-architecture (073, 074, 075, 077) = 18
         assert_eq!(
-            counts[1].2, 14,
-            "Stage 1 total: expected 14, got {}",
+            counts[1].2, 18,
+            "Stage 1 total: expected 18, got {}",
             counts[1].2
         );
-        // Stage 2: all invariants currently marked Stage 2 in the spec = 1
+        // Stage 2: unchanged = 1
         assert_eq!(
             counts[2].2, 1,
             "Stage 2 total: expected 1, got {}",
