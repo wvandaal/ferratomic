@@ -94,6 +94,19 @@ impl AevtKey {
             d.op(),
         )
     }
+
+    /// Compare this key against a datom's AEVT fields without constructing
+    /// an intermediate key. Zero Arc refcount operations (INV-FERR-027).
+    #[inline]
+    #[must_use]
+    pub fn cmp_datom(&self, datom: &Datom) -> std::cmp::Ordering {
+        self.0
+            .cmp(datom.attribute())
+            .then_with(|| self.1.cmp(&datom.entity()))
+            .then_with(|| self.2.cmp(datom.value()))
+            .then_with(|| self.3.cmp(&datom.tx()))
+            .then_with(|| self.4.cmp(&datom.op()))
+    }
 }
 
 impl VaetKey {
@@ -108,6 +121,19 @@ impl VaetKey {
             d.op(),
         )
     }
+
+    /// Compare this key against a datom's VAET fields without constructing
+    /// an intermediate key. Zero Arc refcount operations (INV-FERR-027).
+    #[inline]
+    #[must_use]
+    pub fn cmp_datom(&self, datom: &Datom) -> std::cmp::Ordering {
+        self.0
+            .cmp(datom.value())
+            .then_with(|| self.1.cmp(datom.attribute()))
+            .then_with(|| self.2.cmp(&datom.entity()))
+            .then_with(|| self.3.cmp(&datom.tx()))
+            .then_with(|| self.4.cmp(&datom.op()))
+    }
 }
 
 impl AvetKey {
@@ -121,5 +147,18 @@ impl AvetKey {
             d.tx(),
             d.op(),
         )
+    }
+
+    /// Compare this key against a datom's AVET fields without constructing
+    /// an intermediate key. Zero Arc refcount operations (INV-FERR-027).
+    #[inline]
+    #[must_use]
+    pub fn cmp_datom(&self, datom: &Datom) -> std::cmp::Ordering {
+        self.0
+            .cmp(datom.attribute())
+            .then_with(|| self.1.cmp(datom.value()))
+            .then_with(|| self.2.cmp(&datom.entity()))
+            .then_with(|| self.3.cmp(&datom.tx()))
+            .then_with(|| self.4.cmp(&datom.op()))
     }
 }

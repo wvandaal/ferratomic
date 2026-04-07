@@ -268,7 +268,7 @@ impl PositionalStore {
             let sorted = build_permutation(&self.canonical, AevtKey::from_datom);
             layout_permutation(&sorted)
         });
-        layout_search(perm, &self.canonical, |d| AevtKey::from_datom(d).cmp(key))
+        layout_search(perm, &self.canonical, |d| key.cmp_datom(d).reverse())
     }
 
     /// VAET lookup: O(log n) cache-oblivious search on Eytzinger layout (INV-FERR-027, INV-FERR-071).
@@ -280,7 +280,7 @@ impl PositionalStore {
             let sorted = build_permutation(&self.canonical, VaetKey::from_datom);
             layout_permutation(&sorted)
         });
-        layout_search(perm, &self.canonical, |d| VaetKey::from_datom(d).cmp(key))
+        layout_search(perm, &self.canonical, |d| key.cmp_datom(d).reverse())
     }
 
     /// AVET lookup: O(log n) cache-oblivious search on Eytzinger layout (INV-FERR-027, INV-FERR-071).
@@ -292,7 +292,7 @@ impl PositionalStore {
             let sorted = build_permutation(&self.canonical, AvetKey::from_datom);
             layout_permutation(&sorted)
         });
-        layout_search(perm, &self.canonical, |d| AvetKey::from_datom(d).cmp(key))
+        layout_search(perm, &self.canonical, |d| key.cmp_datom(d).reverse())
     }
 
     /// Access the AEVT permutation array in Eytzinger (BFS) order (INV-FERR-071, INV-FERR-076).
