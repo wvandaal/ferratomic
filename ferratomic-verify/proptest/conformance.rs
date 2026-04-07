@@ -59,8 +59,8 @@ proptest! {
     /// CI-FERR-001 bridge for Lean theorem `merge_comm`.
     #[test]
     fn ci_ferr_001_merge_comm_conformance(
-        a in arb_store(12),
-        b in arb_store(12),
+        a in arb_store(50),
+        b in arb_store(50),
     ) {
         let case = ConformanceCase {
             operation: "merge(A, B)",
@@ -97,9 +97,9 @@ proptest! {
     /// CI-FERR-001 bridge for Lean theorem `merge_assoc`.
     #[test]
     fn ci_ferr_001_merge_assoc_conformance(
-        a in arb_store(8),
-        b in arb_store(8),
-        c in arb_store(8),
+        a in arb_store(50),
+        b in arb_store(50),
+        c in arb_store(50),
     ) {
         let case = ConformanceCase {
             operation: "merge(merge(A, B), C)",
@@ -143,7 +143,7 @@ proptest! {
     /// CI-FERR-001 bridge for Lean theorem `merge_idemp`.
     #[test]
     fn ci_ferr_001_merge_idemp_conformance(
-        store in arb_store(12),
+        store in arb_store(50),
     ) {
         let case = ConformanceCase {
             operation: "merge(A, A)",
@@ -176,7 +176,7 @@ proptest! {
     /// `apply_superset` and `apply_monotone` (spec alias: monotonic growth).
     #[test]
     fn ci_ferr_001_apply_superset_conformance(
-        store in arb_store(12),
+        store in arb_store(50),
         datom in arb_datom(),
     ) {
         let case = ConformanceCase {

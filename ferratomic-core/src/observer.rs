@@ -120,6 +120,11 @@ impl ObserverBroadcast {
     }
 
     /// Publish a freshly committed batch to all observers.
+    ///
+    /// `on_catchup` observers receive the full current epoch, which subsumes
+    /// the current epoch's incremental delivery (INV-FERR-011). An observer
+    /// that falls behind by more than one epoch gets a single catchup batch
+    /// rather than replaying each missed epoch individually.
     pub(crate) fn publish(&mut self, epoch: u64, datoms: &[Datom], store: &Store) {
         self.recent.push_back(BroadcastEntry {
             epoch,

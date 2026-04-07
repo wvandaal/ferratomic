@@ -193,9 +193,10 @@ where
 
     /// Verify that all four indexes contain the same datom set (INV-FERR-005 bijection).
     ///
-    /// INV-FERR-005: bijection implies both equal cardinality AND identical
-    /// datom identity across all four indexes. Returns `true` if all four
-    /// indexes agree on the count and the exact set of datom references.
+    /// INV-FERR-005: bijection implies datom set identity — not merely equal
+    /// cardinality but identical datom membership across all four indexes.
+    /// Returns `true` if all four indexes agree on the exact set of datom
+    /// references (count equality is a necessary but insufficient check).
     #[must_use]
     pub fn verify_bijection(&self) -> bool {
         let n = self.eavt.backend_len();

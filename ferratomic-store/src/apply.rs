@@ -206,7 +206,7 @@ impl Store {
         transaction: Transaction<Committed>,
     ) -> Result<TxReceipt, FerraError> {
         let agent = transaction.agent();
-        let tx_id = ferratom::TxId::with_agent(self.epoch.wrapping_add(1), 0, agent);
+        let tx_id = ferratom::TxId::with_agent(self.epoch.saturating_add(1), 0, agent);
         self.transact(transaction, tx_id)
     }
 

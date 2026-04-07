@@ -18,7 +18,7 @@ use std::fmt;
 /// | Concurrency | Transient | Yes (backoff) | `Backpressure` |
 /// | Federation | Infrastructure | Yes (retry/reconnect) | `PeerUnreachable` |
 /// | Internal | Our bug | No (file a bug) | `InvariantViolation` |
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FerraError {
     // ── Storage errors (retryable) ──────────────────────────────────
     /// WAL write failed.
@@ -241,6 +241,19 @@ impl fmt::Display for FerraError {
 /// INV-FERR-019: `FerraError` implements `std::error::Error` for
 /// interoperability with the standard error handling ecosystem.
 impl std::error::Error for FerraError {}
+
+/// Convert `ClockError` into `FerraError::InvariantViolation` for `?` propagation.
+///
+/// INV-FERR-021: Clock overflow is an invariant violation — the wall clock
+/// source failed to advance within bounded retry.
+impl From<ferratom_clock::ClockError> for FerraError {
+    fn from(e: ferratom_clock::ClockError) -> Self {
+        Self::InvariantViolation {
+            invariant: "INV-FERR-021".to_string(),
+            details: e.to_string(),
+        }
+    }
+}
 
 /// Convert `std::io::Error` into `FerraError::Io` for `?` propagation.
 ///

@@ -26,6 +26,43 @@ pub use frontier::Frontier;
 pub use txid::{AgentId, TxId};
 
 // ---------------------------------------------------------------------------
+// ClockError
+// ---------------------------------------------------------------------------
+
+/// Errors from clock operations.
+///
+/// INV-FERR-021: Bounded backpressure — clock operations that cannot
+/// complete within a bounded number of retries return an error instead
+/// of busy-waiting indefinitely.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ClockError {
+    /// Logical counter overflow after bounded retry exhaustion.
+    ///
+    /// The wall clock has not advanced after `MAX_BUSY_WAIT_RETRIES`
+    /// iterations. This indicates a frozen or mocked clock source.
+    LogicalOverflow,
+}
+
+impl core::fmt::Display for ClockError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::LogicalOverflow => write!(
+                f,
+                "HLC logical counter overflow: wall clock stuck after bounded retry (INV-FERR-021)"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ClockError {}
+
+/// Maximum busy-wait iterations before returning [`ClockError::LogicalOverflow`].
+///
+/// 1 million iterations of `yield_now()` is ~1-10ms on modern hardware,
+/// well beyond any realistic wall-clock stall.
+const MAX_BUSY_WAIT_RETRIES: u32 = 1_000_000;
+
+// ---------------------------------------------------------------------------
 // ClockSource trait
 // ---------------------------------------------------------------------------
 
@@ -117,7 +154,13 @@ impl<C: ClockSource> HybridClock<C> {
     ///
     /// The returned `TxId` is guaranteed to be strictly greater than any
     /// previously returned or received timestamp.
-    pub fn tick(&mut self) -> TxId {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ClockError::LogicalOverflow`] if the logical counter
+    /// overflows and the wall clock does not advance within
+    /// [`MAX_BUSY_WAIT_RETRIES`] iterations (INV-FERR-021).
+    pub fn tick(&mut self) -> Result<TxId, ClockError> {
         let now = self.clock.now();
 
         if now > self.physical {
@@ -127,7 +170,8 @@ impl<C: ClockSource> HybridClock<C> {
             self.logical = next_logical;
         } else {
             // INV-FERR-015 / INV-FERR-021: logical counter overflow.
-            // Backpressure: busy-wait until wall clock advances.
+            // Bounded backpressure: busy-wait until wall clock advances.
+            let mut retries = 0u32;
             loop {
                 std::thread::yield_now();
                 let updated = self.clock.now();
@@ -136,10 +180,14 @@ impl<C: ClockSource> HybridClock<C> {
                     self.logical = 0;
                     break;
                 }
+                retries += 1;
+                if retries >= MAX_BUSY_WAIT_RETRIES {
+                    return Err(ClockError::LogicalOverflow);
+                }
             }
         }
 
-        TxId::with_agent(self.physical, self.logical, self.agent)
+        Ok(TxId::with_agent(self.physical, self.logical, self.agent))
     }
 
     /// Merge a remote timestamp into the local clock state.
@@ -272,9 +320,9 @@ mod tests {
     fn inv_ferr_015_tick_monotonicity() {
         let agent = AgentId::from_bytes([1u8; 16]);
         let mut clock = HybridClock::with_system_clock(agent);
-        let t1 = clock.tick();
-        let t2 = clock.tick();
-        let t3 = clock.tick();
+        let t1 = clock.tick().unwrap();
+        let t2 = clock.tick().unwrap();
+        let t3 = clock.tick().unwrap();
         assert!(t2 > t1, "INV-FERR-015: second > first");
         assert!(t3 > t2, "INV-FERR-015: third > second");
     }
@@ -283,19 +331,19 @@ mod tests {
     fn inv_ferr_016_receive_advances_past_remote() {
         let mut sender = HybridClock::with_system_clock(AgentId::from_bytes([1u8; 16]));
         let mut recv_clock = HybridClock::with_system_clock(AgentId::from_bytes([2u8; 16]));
-        let sent = sender.tick();
+        let sent = sender.tick().unwrap();
         recv_clock.receive(&sent);
-        let after_recv = recv_clock.tick();
+        let after_recv = recv_clock.tick().unwrap();
         assert!(after_recv > sent, "INV-FERR-016: receiver > sender");
     }
 
     #[test]
     fn inv_ferr_016_receive_preserves_local_progress() {
         let mut clock = HybridClock::with_system_clock(AgentId::from_bytes([1u8; 16]));
-        let local = clock.tick();
+        let local = clock.tick().unwrap();
         let old_remote = TxId::new(0, 0, 5);
         clock.receive(&old_remote);
-        let after = clock.tick();
+        let after = clock.tick().unwrap();
         assert!(after > local, "INV-FERR-016: old remote must not regress");
     }
 

@@ -7,7 +7,9 @@
 //! Exit code 1: at least one Stage 0 invariant fails gate.
 
 use ferratomic_verify::{
-    confidence::{compute_beta_posterior, GateDecision, GATE_THRESHOLD},
+    confidence::{
+        check_case_count_sufficient, compute_beta_posterior, GateDecision, GATE_THRESHOLD,
+    },
     invariant_catalog::{Invariant, Stage, CATALOG},
 };
 
@@ -19,6 +21,9 @@ fn main() {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(DEFAULT_PROPTEST_CASES);
+
+    // ADR-FERR-012: warn if case count is below the confidence threshold.
+    let _ = check_case_count_sufficient(proptest_cases);
 
     println!("NEG-FERR-006 Confidence Report");
     println!("==============================");

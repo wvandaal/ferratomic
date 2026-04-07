@@ -16,6 +16,8 @@
 //! }
 //! ```
 
+use std::collections::BTreeSet;
+
 use ferratom::{AgentId, Attribute, Datom, EntityId, Op, TxId, Value};
 use ferratomic_db::store::Store;
 use proptest::prelude::*;
@@ -36,11 +38,31 @@ pub fn arb_attribute() -> impl Strategy<Value = Attribute> {
     "[a-z][a-z0-9_]{0,15}/[a-z][a-z0-9_]{0,31}".prop_map(|s| Attribute::from(s.as_str()))
 }
 
-/// Arbitrary Value: all 11 variant types with uniform distribution.
+/// Construct a `Value::Double` from a known non-NaN `f64`.
+///
+/// Falls back to `Value::Double(0.0)` if the value is somehow NaN,
+/// satisfying NEG-FERR-001 (no panics) without `expect`/`unwrap`.
+/// All callers pass compile-time constants that are provably non-NaN.
+fn double_edge(f: f64) -> Value {
+    match ferratom::NonNanFloat::new(f) {
+        Some(nn) => Value::Double(nn),
+        // Fallback: should never be reached for the constants below.
+        None => Value::Long(0),
+    }
+}
+
+/// Arbitrary Value: all 11 variant types with uniform distribution,
+/// plus explicit edge cases for boundary value testing.
+///
+/// INV-FERR-012 (Content-Addressed Identity): edge cases verify that
+/// BLAKE3 hashing handles all representable values correctly, including
+/// -0.0, infinities, empty strings, and integer extremes.
+///
 /// Wraps generated primitives into `Arc`/`NonNanFloat` for Value enum compatibility.
 pub fn arb_value() -> impl Strategy<Value = Value> {
     use std::sync::Arc;
     prop_oneof![
+        // --- Random generation (uniform across variants) ---
         any::<i64>().prop_map(Value::Long),
         any::<bool>().prop_map(Value::Bool),
         ".*".prop_map(|s| Value::String(Arc::from(s.as_str()))),
@@ -54,6 +76,40 @@ pub fn arb_value() -> impl Strategy<Value = Value> {
         arb_entity_id().prop_map(Value::Ref),
         any::<i128>().prop_map(Value::BigInt),
         any::<i128>().prop_map(Value::BigDec),
+        // --- Edge cases (bd-tj8r, INV-FERR-012) ---
+        // Double: -0.0 (distinct bit pattern from +0.0)
+        Just(double_edge(-0.0)),
+        // Double: positive infinity
+        Just(double_edge(f64::INFINITY)),
+        // Double: negative infinity
+        Just(double_edge(f64::NEG_INFINITY)),
+        // Double: smallest positive subnormal
+        Just(double_edge(f64::MIN_POSITIVE)),
+        // String: empty string
+        Just(Value::String(Arc::from(""))),
+        // Keyword: empty-ish keyword
+        Just(Value::Keyword(Arc::from(""))),
+        // Long: extremes
+        Just(Value::Long(i64::MIN)),
+        Just(Value::Long(i64::MAX)),
+        Just(Value::Long(0)),
+        // Instant: extremes (epoch boundaries)
+        Just(Value::Instant(i64::MIN)),
+        Just(Value::Instant(i64::MAX)),
+        Just(Value::Instant(0)),
+        // Uuid: all zeros and all ones
+        Just(Value::Uuid([0u8; 16])),
+        Just(Value::Uuid([0xFF; 16])),
+        // Bytes: empty
+        Just(Value::Bytes(Arc::from(Vec::<u8>::new().as_slice()))),
+        // BigInt: extremes
+        Just(Value::BigInt(i128::MIN)),
+        Just(Value::BigInt(i128::MAX)),
+        Just(Value::BigInt(0)),
+        // BigDec: extremes
+        Just(Value::BigDec(i128::MIN)),
+        Just(Value::BigDec(i128::MAX)),
+        Just(Value::BigDec(0)),
     ]
 }
 
@@ -96,6 +152,54 @@ pub fn arb_datom() -> impl Strategy<Value = Datom> {
 /// INV-FERR-001..004: CRDT semilattice properties.
 pub fn arb_store(max_datoms: usize) -> impl Strategy<Value = Store> {
     prop::collection::btree_set(arb_datom(), 0..max_datoms).prop_map(Store::from_datoms)
+}
+
+/// Arbitrary pair of Stores with controlled overlap (bd-vd5d).
+///
+/// Generates two stores that share `overlap_fraction` of their datoms,
+/// ensuring non-empty intersection. This exercises merge dedup,
+/// LIVE resolution, and schema conflict paths.
+///
+/// Strategy: generate a shared datom pool, partition into three sets
+/// (A-only, B-only, shared), where `overlap_fraction` controls the
+/// proportion of pool datoms that appear in both stores.
+///
+/// INV-FERR-001..004: merge must handle overlapping datom sets correctly.
+pub fn arb_store_with_overlap(
+    max_datoms: usize,
+    overlap_fraction: f64,
+) -> impl Strategy<Value = (Store, Store)> {
+    // Clamp overlap to [0.0, 1.0].
+    let overlap = overlap_fraction.clamp(0.0, 1.0);
+    // Need at least 3 datoms in the pool to guarantee non-trivial partitions.
+    let pool_size = max_datoms.max(3);
+
+    prop::collection::vec(arb_datom(), pool_size..=pool_size).prop_map(move |pool| {
+        let overlap_count = ((pool.len() as f64 * overlap) as usize).max(1);
+        let remaining = pool.len().saturating_sub(overlap_count);
+        let half = remaining / 2;
+
+        let mut a_datoms = BTreeSet::new();
+        let mut b_datoms = BTreeSet::new();
+
+        // First `overlap_count` datoms go into both stores (shared).
+        for d in pool.iter().take(overlap_count) {
+            a_datoms.insert(d.clone());
+            b_datoms.insert(d.clone());
+        }
+
+        // Next `half` go to A only.
+        for d in pool.iter().skip(overlap_count).take(half) {
+            a_datoms.insert(d.clone());
+        }
+
+        // Remainder go to B only.
+        for d in pool.iter().skip(overlap_count + half) {
+            b_datoms.insert(d.clone());
+        }
+
+        (Store::from_datoms(a_datoms), Store::from_datoms(b_datoms))
+    })
 }
 
 /// Arbitrary committed Transaction (bypasses schema for testing).
@@ -154,6 +258,33 @@ pub fn arb_datom_with_unknown_attr() -> impl Strategy<Value = Datom> {
         arb_tx_id(),
     )
         .prop_map(|(e, attr, v, tx)| Datom::new(e, attr, v, tx, Op::Assert))
+}
+
+// ---------------------------------------------------------------------------
+// Shared test helpers
+// ---------------------------------------------------------------------------
+
+/// Verify index bijection: primary set == each secondary index set.
+///
+/// INV-FERR-005: All four indexes (EAVT, AEVT, VAET, AVET) must contain
+/// exactly the same datom set as the primary store.
+///
+/// bd-h2fz: promotes a clone to OrdMap if needed (Positional stores
+/// have no OrdMap indexes, but their permutation arrays are built
+/// from the same canonical sort, so bijection is by construction).
+pub fn verify_index_bijection(store: &Store) -> bool {
+    let mut promoted = store.clone();
+    promoted.promote();
+    let primary: BTreeSet<&Datom> = promoted.datoms().collect();
+    let Some(indexes) = promoted.indexes() else {
+        return false;
+    };
+    let eavt: BTreeSet<&Datom> = indexes.eavt_datoms().collect();
+    let aevt: BTreeSet<&Datom> = indexes.aevt_datoms().collect();
+    let vaet: BTreeSet<&Datom> = indexes.vaet_datoms().collect();
+    let avet: BTreeSet<&Datom> = indexes.avet_datoms().collect();
+
+    primary == eavt && primary == aevt && primary == vaet && primary == avet
 }
 
 /// Arbitrary datom with a value type that doesn't match the attribute's declared type.

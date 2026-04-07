@@ -101,18 +101,19 @@ fn h3(eid: &EntityId) -> u64 {
 ///
 /// Computes in u64 to avoid truncation on 32-bit targets.
 /// Result < modulus <= `usize::MAX`, so `try_from` always succeeds.
-/// The `unwrap_or(0)` is dead code: the result is mathematically bounded
-/// by modulus (a usize), so the conversion cannot fail. The `debug_assert`
-/// verifies this in test builds. In the impossible event it fires in
-/// release, `entity_position`'s canonical verification rejects the lookup
-/// (wrong entity at position 0), so no silent corruption propagates.
+/// The `unwrap_or(usize::MAX)` is dead code: the result is mathematically
+/// bounded by modulus (a usize), so the conversion cannot fail. The
+/// `debug_assert` verifies this in test builds. In the impossible event it
+/// fires in release, `entity_position`'s canonical verification rejects
+/// the lookup (`usize::MAX` is always out of bounds), so no silent
+/// corruption propagates.
 fn reduce_hash(hash_val: u64, modulus: usize) -> usize {
     let result = hash_val % (modulus as u64);
     debug_assert!(
         usize::try_from(result).is_ok(),
         "reduce_hash: result {result} exceeds usize::MAX -- modulus invariant violated"
     );
-    usize::try_from(result).unwrap_or(0)
+    usize::try_from(result).unwrap_or(usize::MAX)
 }
 
 /// Assign keys to buckets by h1, sorted largest-first for greedy placement.

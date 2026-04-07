@@ -88,6 +88,33 @@ where
         };
     }
 
+    // Per-entity query verification (INV-FERR-059).
+    // Datom-set equality above proves global correctness; per-entity queries
+    // verify that entity-scoped lookups also produce identical results,
+    // catching index-level bugs that preserve the global set but mis-route
+    // individual entity lookups.
+    for eid in query_entities {
+        let baseline_entity: Vec<&Datom> =
+            baseline.datoms().filter(|d| d.entity() == *eid).collect();
+        let optimized_entity: Vec<&Datom> =
+            optimized.datoms().filter(|d| d.entity() == *eid).collect();
+        if baseline_entity != optimized_entity {
+            return IsomorphismProof {
+                optimization: optimization_name.to_string(),
+                datom_count: baseline.len(),
+                query_count: query_entities.len(),
+                verdict: IsomorphismVerdict::Divergent {
+                    first_divergence: format!(
+                        "entity {:?}: baseline returned {} datoms, optimized returned {}",
+                        eid,
+                        baseline_entity.len(),
+                        optimized_entity.len()
+                    ),
+                },
+            };
+        }
+    }
+
     IsomorphismProof {
         optimization: optimization_name.to_string(),
         datom_count: baseline.len(),

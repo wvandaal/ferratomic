@@ -7,7 +7,7 @@
 ## Current Phase
 
 Phases 0-3 COMPLETE. **Phase 4a (core implementation) — gate closure in progress.**
-bd-add has 35 dependencies, 4 closed, 33 remaining. Key categories:
+bd-add has 35 dependencies, 2 closed, 33 remaining. Key categories:
 - **bd-4i6u** (perf EPIC, CLOSED) — 20/20 beads, 72 audit defects fixed
 - **bd-cly9** (decomposition, CLOSED) — 11 crates
 - **bd-7fub** (Path to 10.0 EPIC, OPEN) — 11 tier EPICs + ~120 children

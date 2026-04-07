@@ -215,13 +215,17 @@ def promote (s : DatomStore) : DatomStore := s
 /-- Demote from OrdMap back to SortedVec (identity at the abstract level). -/
 def demote (s : DatomStore) : DatomStore := s
 
-/-- INV-FERR-072: Promotion preserves the abstract datom set.
+/-- V:LEAN-ABSTRACT: Proves identity on Finset. Does not verify concrete sorted-array implementation.
+
+    INV-FERR-072: Promotion preserves the abstract datom set.
     `promote(sorted_vec_of(S)) = S` — no algebraic content is introduced
     or lost by the representation change. -/
 theorem promote_preserves_content (s : DatomStore) :
     promote (sorted_vec_of s) = s := rfl
 
-/-- INV-FERR-072: Demotion round-trips through promotion.
+/-- V:LEAN-ABSTRACT: Proves identity on Finset. Does not verify concrete sorted-array implementation.
+
+    INV-FERR-072: Demotion round-trips through promotion.
     `demote(promote(S)) = S` — the promote/demote cycle is the identity. -/
 theorem demote_preserves_content (s : DatomStore) :
     demote (promote s) = s := rfl
@@ -234,14 +238,18 @@ theorem demote_preserves_content (s : DatomStore) :
   The O(log log N) complexity claim is a performance property verified
   empirically by proptest benchmarks. -/
 
-/-- INV-FERR-077: Interpolation search lookup equivalence.
+/-- V:LEAN-ABSTRACT: Proves identity on Finset. Does not verify concrete sorted-array implementation.
+
+    INV-FERR-077: Interpolation search lookup equivalence.
     Membership in the Finset is equivalent to membership in any sorted
     representation of that Finset. The search strategy (interpolation vs
     binary) is irrelevant at this abstraction level. -/
 theorem interpolation_search_equiv (S : DatomStore) (d : Datom) :
     d ∈ S ↔ d ∈ S := Iff.rfl
 
-/-- INV-FERR-077: Lookup in equal stores is deterministic.
+/-- V:LEAN-ABSTRACT: Proves identity on Finset. Does not verify concrete sorted-array implementation.
+
+    INV-FERR-077: Lookup in equal stores is deterministic.
     If two stores have the same datom set, any lookup query produces
     the same result. This holds regardless of how the search algorithm
     chooses its probe sequence. -/

@@ -37,12 +37,34 @@ pub struct ConfidenceReport {
 /// Gate threshold: minimum lower bound for a passing gate decision.
 pub const GATE_THRESHOLD: f64 = 0.999;
 
+/// Minimum proptest cases required for >99.97% Bayesian confidence (ADR-FERR-012).
+pub const MIN_CASES_FOR_CONFIDENCE: usize = 10_000;
+
+/// ADR-FERR-012: Emit a warning to stderr if `cases` is below the 10,000
+/// minimum required for >99.97% Bayesian confidence.
+///
+/// Call this at the start of any confidence report or gate calculation to
+/// alert operators that the result is statistically insufficient.
+/// Returns `true` if the case count is sufficient, `false` if a warning was emitted.
+#[must_use]
+pub fn check_case_count_sufficient(cases: usize) -> bool {
+    if cases < MIN_CASES_FOR_CONFIDENCE {
+        eprintln!(
+            "WARNING [ADR-FERR-012]: {cases} proptest cases is below the \
+             {MIN_CASES_FOR_CONFIDENCE} minimum for >99.97% Bayesian confidence"
+        );
+        false
+    } else {
+        true
+    }
+}
+
 /// Compute the 95% credible interval lower bound for Beta(alpha, beta).
 ///
 /// For k=0 failures, uses the closed-form: `1 - significance^(1/n)`
 /// where significance = 0.05 for a 95% interval.
 ///
-/// For k>0 failures, uses the Wilson-score normal approximation:
+/// For k>0 failures, uses the Wald interval normal approximation:
 /// `p_hat - z * sqrt(p_hat * (1 - p_hat) / n)` where z = 1.96.
 ///
 /// ADR-FERR-012: returns (lower_bound, upper_bound).
@@ -82,8 +104,22 @@ pub fn compute_beta_posterior(
 ///
 /// Each entry is `(invariant_id, n_pass, n_fail)`. Uses a uniform
 /// Beta(1,1) prior per ADR-FERR-012.
+///
+/// ADR-FERR-012: Emits a WARNING to stderr if the total case count for any
+/// invariant is below [`MIN_CASES_FOR_CONFIDENCE`] (10,000).
 #[must_use]
 pub fn generate_confidence_report(results: &[(String, usize, usize)]) -> Vec<ConfidenceReport> {
+    // ADR-FERR-012: warn once per report if any invariant has insufficient cases.
+    for (id, n_pass, n_fail) in results {
+        let total = n_pass + n_fail;
+        if total < MIN_CASES_FOR_CONFIDENCE {
+            eprintln!(
+                "WARNING [ADR-FERR-012]: invariant {id} has {total} cases, \
+                 below the {MIN_CASES_FOR_CONFIDENCE} minimum for >99.97% Bayesian confidence"
+            );
+        }
+    }
+
     results
         .iter()
         .map(|(id, n_pass, n_fail)| {
@@ -167,6 +203,30 @@ mod tests {
         assert!((r.beta - 1.0).abs() < f64::EPSILON);
         assert!(r.lower_bound_95 > 0.999);
         assert_eq!(r.gate_decision, GateDecision::Pass);
+    }
+
+    #[test]
+    fn test_adr_ferr_012_case_count_sufficient() {
+        assert!(
+            check_case_count_sufficient(10_000),
+            "ADR-FERR-012: 10,000 cases must be sufficient"
+        );
+        assert!(
+            check_case_count_sufficient(100_000),
+            "ADR-FERR-012: 100,000 cases must be sufficient"
+        );
+        assert!(
+            !check_case_count_sufficient(9_999),
+            "ADR-FERR-012: 9,999 cases must be insufficient"
+        );
+        assert!(
+            !check_case_count_sufficient(1_000),
+            "ADR-FERR-012: 1,000 cases must be insufficient"
+        );
+        assert!(
+            !check_case_count_sufficient(0),
+            "ADR-FERR-012: 0 cases must be insufficient"
+        );
     }
 
     #[test]

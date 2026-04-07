@@ -112,12 +112,34 @@ proptest! {
         let result = cold_start_with_backend(&backend);
         match result {
             Ok(cs) => {
+                // bd-mcvs: Verify recovered store is internally consistent.
+                // Faults during genesis may produce an empty store (no WAL
+                // committed). Both empty and populated states are valid — the
+                // key assertion is that schema and datom count are coherent.
                 let snap = cs.database.snapshot();
-                let _ = snap.datoms().count();
+                let datom_count = snap.datoms().count();
+                let schema = cs.database.schema();
+                if datom_count > 0 {
+                    prop_assert!(
+                        !schema.is_empty(),
+                        "INV-FERR-056: non-empty store must have schema"
+                    );
+                }
             }
-            Err(ferratom::FerraError::Io { .. }) => {}
+            Err(ferratom::FerraError::Io { .. })
+            | Err(ferratom::FerraError::WalRead(_))
+            | Err(ferratom::FerraError::WalWrite(_))
+            | Err(ferratom::FerraError::CheckpointCorrupted { .. })
+            | Err(ferratom::FerraError::CheckpointWrite(_)) => {}
+            Err(ferratom::FerraError::InvariantViolation { invariant, details }) => {
+                prop_assert!(
+                    false,
+                    "INV-FERR-056: power cut must not cause InvariantViolation \
+                     (got {invariant}: {details}) — this indicates a logic bug, not a fault"
+                );
+            }
             Err(e) => {
-                prop_assert!(false, "unexpected error: {e}");
+                prop_assert!(false, "INV-FERR-056: unexpected error category: {e}");
             }
         }
     }
@@ -136,9 +158,33 @@ proptest! {
         );
 
         let result = cold_start_with_backend(&backend);
-        if let Ok(cs) = result {
-            let snap = cs.database.snapshot();
-            let _ = snap.datoms().count();
+        match result {
+            Ok(cs) => {
+                let snap = cs.database.snapshot();
+                let datom_count = snap.datoms().count();
+                let schema = cs.database.schema();
+                if datom_count > 0 {
+                    prop_assert!(
+                        !schema.is_empty(),
+                        "INV-FERR-056: non-empty store must have schema"
+                    );
+                }
+            }
+            Err(ferratom::FerraError::Io { .. })
+            | Err(ferratom::FerraError::WalRead(_))
+            | Err(ferratom::FerraError::WalWrite(_))
+            | Err(ferratom::FerraError::CheckpointCorrupted { .. })
+            | Err(ferratom::FerraError::CheckpointWrite(_)) => {}
+            Err(ferratom::FerraError::InvariantViolation { invariant, details }) => {
+                prop_assert!(
+                    false,
+                    "INV-FERR-056: IO error must not cause InvariantViolation \
+                     (got {invariant}: {details}) — this indicates a logic bug, not a fault"
+                );
+            }
+            Err(e) => {
+                prop_assert!(false, "INV-FERR-056: unexpected error category: {e}");
+            }
         }
     }
 
@@ -155,9 +201,33 @@ proptest! {
         );
 
         let result = cold_start_with_backend(&backend);
-        if let Ok(cs) = result {
-            let snap = cs.database.snapshot();
-            let _ = snap.datoms().count();
+        match result {
+            Ok(cs) => {
+                let snap = cs.database.snapshot();
+                let datom_count = snap.datoms().count();
+                let schema = cs.database.schema();
+                if datom_count > 0 {
+                    prop_assert!(
+                        !schema.is_empty(),
+                        "INV-FERR-056: non-empty store must have schema"
+                    );
+                }
+            }
+            Err(ferratom::FerraError::Io { .. })
+            | Err(ferratom::FerraError::WalRead(_))
+            | Err(ferratom::FerraError::WalWrite(_))
+            | Err(ferratom::FerraError::CheckpointCorrupted { .. })
+            | Err(ferratom::FerraError::CheckpointWrite(_)) => {}
+            Err(ferratom::FerraError::InvariantViolation { invariant, details }) => {
+                prop_assert!(
+                    false,
+                    "INV-FERR-056: disk full must not cause InvariantViolation \
+                     (got {invariant}: {details}) — this indicates a logic bug, not a fault"
+                );
+            }
+            Err(e) => {
+                prop_assert!(false, "INV-FERR-056: unexpected error category: {e}");
+            }
         }
     }
 }

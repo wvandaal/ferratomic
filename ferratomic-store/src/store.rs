@@ -461,14 +461,21 @@ impl Store {
         let key = (datom.entity(), datom.attribute().clone());
         let value = datom.value().clone();
 
-        let entries = self.live_causal.entry(key.clone()).or_default();
-        let was_live = entries.get(&value).is_some_and(|&(_, op)| op == Op::Assert);
-        let should_update = entries
-            .get(&value)
-            .is_none_or(|&(existing_tx, _)| datom.tx() > existing_tx);
+        // Check existing state without entry() to avoid cloning key on no-op path.
+        let (was_live, should_update) = match self
+            .live_causal
+            .get(&key)
+            .and_then(|entries| entries.get(&value))
+        {
+            Some(&(existing_tx, op)) => (op == Op::Assert, datom.tx() > existing_tx),
+            None => (false, true),
+        };
 
         if should_update {
-            entries.insert(value.clone(), (datom.tx(), datom.op()));
+            self.live_causal
+                .entry(key.clone())
+                .or_default()
+                .insert(value.clone(), (datom.tx(), datom.op()));
             let is_live = datom.op() == Op::Assert;
 
             if is_live && !was_live {

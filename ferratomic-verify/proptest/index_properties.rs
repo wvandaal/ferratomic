@@ -18,24 +18,14 @@ use ferratomic_db::{
     merge::merge,
     store::Store,
 };
-use ferratomic_verify::generators::*;
+use ferratomic_verify::generators::{self, *};
 use im::OrdMap;
 use proptest::prelude::*;
 
-/// Verify index bijection: primary set == each secondary index set.
-/// bd-h2fz: promotes a clone to OrdMap if needed (Positional stores
-/// have no OrdMap indexes, so we promote first).
+/// Verify index bijection: delegates to shared helper in generators.
+/// INV-FERR-005: All four indexes must match the primary datom set.
 fn verify_index_bijection(store: &Store) -> bool {
-    let mut promoted = store.clone();
-    promoted.promote();
-    let primary: BTreeSet<&Datom> = promoted.datoms().collect();
-    let indexes = promoted.indexes().unwrap();
-    let eavt: BTreeSet<&Datom> = indexes.eavt_datoms().collect();
-    let aevt: BTreeSet<&Datom> = indexes.aevt_datoms().collect();
-    let vaet: BTreeSet<&Datom> = indexes.vaet_datoms().collect();
-    let avet: BTreeSet<&Datom> = indexes.avet_datoms().collect();
-
-    primary == eavt && primary == aevt && primary == vaet && primary == avet
+    generators::verify_index_bijection(store)
 }
 
 proptest! {

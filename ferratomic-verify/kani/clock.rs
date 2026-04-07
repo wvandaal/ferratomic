@@ -28,10 +28,10 @@ fn hlc_monotonicity() {
             kani::any(),
         ]),
     );
-    let mut prev = hlc.tick();
+    let mut prev = hlc.tick().unwrap();
 
     for _ in 0..kani::any::<u8>().min(4) {
-        let next = hlc.tick();
+        let next = hlc.tick().unwrap();
         assert!(next > prev, "INV-FERR-015: HLC did not advance");
         prev = next;
     }
@@ -52,10 +52,10 @@ fn hlc_causality() {
         KaniClock::new([kani::any(), kani::any()]),
     );
 
-    let send_hlc = sender.tick();
+    let send_hlc = sender.tick().unwrap();
 
     receiver.receive(&send_hlc);
-    let recv_hlc = receiver.tick();
+    let recv_hlc = receiver.tick().unwrap();
 
     assert!(recv_hlc > send_hlc, "INV-FERR-016: recv <= send");
 }

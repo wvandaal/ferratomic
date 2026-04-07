@@ -424,10 +424,10 @@ fn inv_ferr_015_hlc_tick_monotonic() {
 
     let agent = AgentId::from_bytes([15u8; 16]);
     let mut clock = HybridClock::new(agent);
-    let mut prev = clock.tick();
+    let mut prev = clock.tick().unwrap();
 
     for i in 1..100 {
-        let next = clock.tick();
+        let next = clock.tick().unwrap();
         assert!(
             next > prev,
             "INV-FERR-015: tick {} ({:?}) not greater than tick {} ({:?})",
@@ -452,9 +452,9 @@ fn inv_ferr_015_hlc_same_millisecond_monotonic() {
     let mut clock = HybridClock::new(agent);
 
     // Rapid-fire ticks in the same millisecond window.
-    let t1 = clock.tick();
-    let t2 = clock.tick();
-    let t3 = clock.tick();
+    let t1 = clock.tick().unwrap();
+    let t2 = clock.tick().unwrap();
+    let t3 = clock.tick().unwrap();
 
     assert!(t2 > t1, "INV-FERR-015: t2 must exceed t1");
     assert!(t3 > t2, "INV-FERR-015: t3 must exceed t2");
@@ -474,11 +474,11 @@ fn inv_ferr_016_hlc_causality_two_agents() {
     let mut clock_b = HybridClock::new(agent_b);
 
     // Agent A produces a timestamp.
-    let a_tx = clock_a.tick();
+    let a_tx = clock_a.tick().unwrap();
 
     // Agent B receives A's timestamp and ticks.
     clock_b.receive(&a_tx);
-    let b_tx = clock_b.tick();
+    let b_tx = clock_b.tick().unwrap();
 
     assert!(
         b_tx > a_tx,
@@ -504,11 +504,11 @@ fn inv_ferr_016_hlc_causality_chain() {
         })
         .collect();
 
-    let t0 = clocks[0].tick();
+    let t0 = clocks[0].tick().unwrap();
     clocks[1].receive(&t0);
-    let t1 = clocks[1].tick();
+    let t1 = clocks[1].tick().unwrap();
     clocks[2].receive(&t1);
-    let t2 = clocks[2].tick();
+    let t2 = clocks[2].tick().unwrap();
 
     assert!(
         t1 > t0,

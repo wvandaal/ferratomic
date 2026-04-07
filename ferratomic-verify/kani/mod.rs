@@ -8,6 +8,16 @@
 //! `cargo check --all-targets` / `cargo test`, they compile as
 //! `#[test] #[ignore]` functions — ensuring type-level API compatibility
 //! is continuously checked without requiring the Kani toolchain.
+//!
+//! ## Why every harness has `#[ignore]` (bd-1uhm)
+//!
+//! All `#[ignore]` attributes on Kani harnesses are **architectural**, not
+//! incidental. Kani harnesses compile-check under `cargo test` (verifying
+//! API compatibility with the production crates), but they can only
+//! **execute** under `cargo kani`, which requires the Kani toolchain.
+//! Without `#[ignore]`, `cargo test` would run the stub `kani::any()`
+//! and hit `unreachable!()`. The `#[ignore]` ensures CI stays green
+//! while the Kani nightly gate runs them for real.
 
 /// Stub implementations of Kani primitives for non-Kani compilation.
 ///

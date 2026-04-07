@@ -8,7 +8,7 @@ use std::{collections::BTreeSet, sync::Arc};
 use ferratom::{AgentId, Attribute, Datom, EntityId, Value};
 use ferratomic_db::{store::Store, writer::Transaction};
 
-use super::helpers::{concrete_datom, concrete_datom_set};
+use super::helpers::concrete_datom_set;
 #[cfg(not(kani))]
 use super::kani;
 
@@ -34,47 +34,101 @@ fn checkpoint_roundtrip() {
 }
 
 /// INV-FERR-014: recovery never loses committed datoms.
+///
+/// bd-z2jv: Rewritten to use the real Store type instead of raw BTreeSet.
+/// A store with committed transactions is serialized to checkpoint bytes
+/// and deserialized back. The recovered store must contain at least all
+/// datoms from the original (superset property).
 #[cfg_attr(kani, kani::proof)]
 #[cfg_attr(kani, kani::unwind(8))]
 #[cfg_attr(not(kani), test)]
 #[cfg_attr(not(kani), ignore = "requires Kani verifier")]
 fn recovery_superset() {
+    let mut store = Store::genesis();
+    let agent = AgentId::from_bytes([1u8; 16]);
+
     let count_committed: u8 = kani::any();
-    kani::assume(count_committed <= 4);
-    let committed: BTreeSet<Datom> = (0..count_committed).map(concrete_datom).collect();
+    kani::assume(count_committed > 0 && count_committed <= 3);
 
-    let count_uncommitted: u8 = kani::any();
-    kani::assume(count_uncommitted <= 2);
-    let uncommitted: BTreeSet<Datom> = (10..10 + count_uncommitted).map(concrete_datom).collect();
-    let survived: bool = kani::any();
-
-    let mut recovered = committed.clone();
-    if survived {
-        for d in &uncommitted {
-            recovered.insert(d.clone());
-        }
+    for i in 0..count_committed {
+        let tx = Transaction::new(agent)
+            .assert_datom(
+                EntityId::from_content(&[i]),
+                Attribute::from("db/doc"),
+                Value::String(format!("committed-{i}").into()),
+            )
+            .commit(store.schema())
+            .expect("INV-FERR-014: committed tx must validate");
+        let _ = store
+            .transact_test(tx)
+            .expect("INV-FERR-014: committed tx must apply");
     }
 
-    assert!(committed.is_subset(&recovered));
+    // Snapshot the committed datom set before serialization.
+    let committed: BTreeSet<Datom> = store.datoms().cloned().collect();
+
+    // Checkpoint round-trip simulates recovery from durable storage.
+    let bytes = store
+        .to_checkpoint_bytes()
+        .expect("INV-FERR-014: checkpoint serialization must succeed");
+    let recovered = Store::from_checkpoint_bytes(&bytes)
+        .expect("INV-FERR-014: checkpoint deserialization must succeed");
+
+    let recovered_datoms: BTreeSet<Datom> = recovered.datoms().cloned().collect();
+
+    // INV-FERR-014: every committed datom must survive recovery.
+    assert!(
+        committed.is_subset(&recovered_datoms),
+        "INV-FERR-014: recovery lost committed datoms"
+    );
+    assert_eq!(
+        committed.len(),
+        recovered_datoms.len(),
+        "INV-FERR-014: recovery should produce exact set, not just superset"
+    );
 }
 
 /// INV-FERR-018: the datom set is append-only.
+///
+/// bd-z2jv: Rewritten to use the real Store type instead of raw BTreeSet.
+/// After transacting new datoms, every previously-visible datom must still
+/// be present — the store never loses datoms.
 #[cfg_attr(kani, kani::proof)]
 #[cfg_attr(kani, kani::unwind(10))]
 #[cfg_attr(not(kani), test)]
 #[cfg_attr(not(kani), ignore = "requires Kani verifier")]
 fn append_only() {
-    let count: u8 = kani::any();
-    kani::assume(count <= 4);
-    let initial = concrete_datom_set(count);
+    let mut store = Store::genesis();
+    let agent = AgentId::from_bytes([1u8; 16]);
 
-    let new_datom = concrete_datom(kani::any::<u8>());
+    // Capture initial datom set (genesis schema datoms).
+    let initial: BTreeSet<Datom> = store.datoms().cloned().collect();
+    let initial_len = store.len();
 
-    let mut store = initial.clone();
-    store.insert(new_datom);
+    // Transact a new datom.
+    let tx = Transaction::new(agent)
+        .assert_datom(
+            EntityId::from_content(b"kani-append-only"),
+            Attribute::from("db/doc"),
+            Value::String("appended".into()),
+        )
+        .commit(store.schema())
+        .expect("INV-FERR-018: tx must validate");
+    let _ = store
+        .transact_test(tx)
+        .expect("INV-FERR-018: tx must apply");
 
-    assert!(initial.is_subset(&store));
-    assert!(store.len() >= initial.len());
+    let after: BTreeSet<Datom> = store.datoms().cloned().collect();
+
+    // INV-FERR-018: no datom from the initial set may disappear.
+    assert!(
+        initial.is_subset(&after),
+        "INV-FERR-018: transact removed pre-existing datoms"
+    );
+    assert!(
+        store.len() >= initial_len,
+        "INV-FERR-018: store.len() decreased after transact"
+    );
 }
 
 /// INV-FERR-020: a committed transaction assigns one epoch to all of its datoms.

@@ -11,24 +11,13 @@ use std::collections::BTreeSet;
 
 use ferratom::{Datom, EntityId};
 use ferratomic_db::{merge::merge, store::Store};
-use ferratomic_verify::generators::*;
+use ferratomic_verify::generators::{self, *};
 use proptest::prelude::*;
 
-/// Verify index bijection: primary set == each secondary index set.
-/// bd-h2fz: promotes a clone to OrdMap if needed (Positional stores
-/// have no OrdMap indexes, but their permutation arrays are built
-/// from the same canonical sort, so bijection is by construction).
+/// Verify index bijection: delegates to shared helper in generators.
+/// INV-FERR-005: All four indexes must match the primary datom set.
 fn verify_index_bijection(store: &Store) -> bool {
-    let mut promoted = store.clone();
-    promoted.promote();
-    let primary: BTreeSet<&Datom> = promoted.datoms().collect();
-    let indexes = promoted.indexes().unwrap();
-    let eavt: BTreeSet<&Datom> = indexes.eavt_datoms().collect();
-    let aevt: BTreeSet<&Datom> = indexes.aevt_datoms().collect();
-    let vaet: BTreeSet<&Datom> = indexes.vaet_datoms().collect();
-    let avet: BTreeSet<&Datom> = indexes.avet_datoms().collect();
-
-    primary == eavt && primary == aevt && primary == vaet && primary == avet
+    generators::verify_index_bijection(store)
 }
 
 proptest! {
@@ -588,5 +577,49 @@ proptest! {
             ba.datom_set(),
             "INV-FERR-001: datom sets must be identical regardless of merge order"
         );
+    }
+
+    // -----------------------------------------------------------------
+    // Overlap merge tests (bd-vd5d)
+    // -----------------------------------------------------------------
+
+    /// INV-FERR-001..004: merge of stores with controlled overlap must
+    /// satisfy all CRDT properties. The overlap guarantees non-empty
+    /// intersection, exercising merge dedup and LIVE resolution.
+    #[test]
+    fn inv_ferr_001_004_merge_with_overlap(
+        (a, b) in arb_store_with_overlap(50, 0.3),
+    ) {
+        // Commutativity (INV-FERR-001).
+        let ab = merge(&a, &b).expect("merge(A,B) must succeed");
+        let ba = merge(&b, &a).expect("merge(B,A) must succeed");
+        prop_assert_eq!(
+            ab.datom_set(),
+            ba.datom_set(),
+            "INV-FERR-001: merge commutativity with overlap"
+        );
+
+        // Idempotency (INV-FERR-003).
+        let ab_ab = merge(&ab, &ab).expect("self-merge must succeed");
+        prop_assert_eq!(
+            ab.datom_set(),
+            ab_ab.datom_set(),
+            "INV-FERR-003: merge idempotency with overlap"
+        );
+
+        // Monotonic growth (INV-FERR-004): merged set is superset of both inputs.
+        let merged_set = ab.datom_set();
+        for d in a.datoms() {
+            prop_assert!(
+                merged_set.contains(d),
+                "INV-FERR-004: merged store must contain all datoms from A"
+            );
+        }
+        for d in b.datoms() {
+            prop_assert!(
+                merged_set.contains(d),
+                "INV-FERR-004: merged store must contain all datoms from B"
+            );
+        }
     }
 }

@@ -54,7 +54,7 @@ fn bench_read_latency(c: &mut Criterion) {
         let store = build_store(datom_count);
         let key = lookup_key(datom_count / 2);
 
-        group.throughput(Throughput::Elements(datom_count as u64));
+        group.throughput(Throughput::Elements(1));
         group.bench_with_input(
             BenchmarkId::new("eavt_get", datom_count),
             &datom_count,

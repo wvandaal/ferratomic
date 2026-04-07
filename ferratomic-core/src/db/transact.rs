@@ -138,7 +138,7 @@ impl Database<Ready> {
                     details: "HLC mutex poisoned (previous panic)".to_string(),
                 })?;
             for tx in transactions {
-                let tx_id = clock.tick();
+                let tx_id = clock.tick()?;
                 // NOTE: tx.agent() is NOT preserved — all metadata uses the
                 // HLC's agent (the Database's agent). This is correct for
                 // single-node operation where the Database IS the agent.
@@ -207,7 +207,7 @@ impl Database<Ready> {
                     invariant: "INV-FERR-015".to_string(),
                     details: "HLC mutex poisoned (previous panic)".to_string(),
                 })?;
-            clock.tick()
+            clock.tick()?
         };
 
         Ok((guard, tx_id))

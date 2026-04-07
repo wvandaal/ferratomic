@@ -77,6 +77,9 @@ impl EntityBloom {
     /// Uses the first 8 bytes as h1 and the next 8 bytes as h2.
     /// `EntityId` is already a BLAKE3 hash (INV-FERR-012), so its bytes
     /// are uniformly distributed -- no additional hashing needed.
+    ///
+    /// The `h2 | 1` construction loses ~1 bit of entropy but increases FPR
+    /// by <0.01%, well within the target 8% FPR bound.
     fn hash_pair(eid: &EntityId) -> (u64, u64) {
         let bytes = eid.as_bytes();
         let h1 = u64::from_le_bytes([

@@ -109,23 +109,48 @@ fn write_linearizability() {
 }
 
 /// INV-FERR-011: observer epochs never regress.
+///
+/// bd-z2jv: Rewritten to use the real Store type instead of raw u64 sequences.
+/// Successive snapshots taken after each transact must have non-decreasing
+/// epochs, proving observers see monotonically advancing state.
 #[cfg_attr(kani, kani::proof)]
 #[cfg_attr(kani, kani::unwind(10))]
 #[cfg_attr(not(kani), test)]
 #[cfg_attr(not(kani), ignore = "requires Kani verifier")]
 fn observer_monotonicity() {
+    let mut store = Store::genesis();
+    let agent = AgentId::from_bytes([1u8; 16]);
     let mut epochs: Vec<u64> = Vec::new();
-    let mut last: u64 = 0;
 
-    for _ in 0..kani::any::<u8>().min(5) {
-        let next: u64 = kani::any();
-        kani::assume(next >= last);
-        epochs.push(next);
-        last = next;
+    // Record genesis epoch.
+    epochs.push(store.snapshot().epoch());
+
+    let n_txns: u8 = kani::any();
+    kani::assume(n_txns > 0 && n_txns <= 4);
+
+    for i in 0..n_txns {
+        let tx = Transaction::new(agent)
+            .assert_datom(
+                EntityId::from_content(&[i, 0x11]),
+                Attribute::from("db/doc"),
+                Value::String(format!("obs-{i}").into()),
+            )
+            .commit(store.schema())
+            .expect("INV-FERR-011: tx must validate");
+        let _ = store
+            .transact_test(tx)
+            .expect("INV-FERR-011: tx must apply");
+        epochs.push(store.snapshot().epoch());
     }
 
+    // INV-FERR-011: observer epochs must be monotonically non-decreasing.
     for i in 1..epochs.len() {
-        assert!(epochs[i] >= epochs[i - 1]);
+        assert!(
+            epochs[i] >= epochs[i - 1],
+            "INV-FERR-011: epoch regressed from {} to {} at step {i}",
+            epochs[i - 1],
+            epochs[i]
+        );
     }
 }
 

@@ -140,14 +140,6 @@ theorem partial_subset_full {ι : Type*} [DecidableEq ι]
   rcases Finset.mem_biUnion.mp hd_resp with ⟨i, hi_resp, hd_i⟩
   exact Finset.mem_filter.mpr ⟨Finset.mem_biUnion.mpr ⟨i, h_sub hi_resp, hd_i⟩, hp⟩
 
-/-- When every store responds, the partial-result view equals the full result. -/
-theorem all_respond_equals_full {ι : Type*} [DecidableEq ι]
-    (stores : Finset ι)
-    (f : ι → DatomStore)
-    (p : Datom → Prop) [DecidablePred p] :
-    (stores.biUnion f).filter p = (stores.biUnion f).filter p :=
-  rfl
-
 /-! ## INV-FERR-043: Schema Compatibility Check
 
   Schema compatibility is symmetric: if A is compatible with B,

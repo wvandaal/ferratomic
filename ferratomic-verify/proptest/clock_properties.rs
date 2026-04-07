@@ -14,10 +14,10 @@ proptest! {
     ) {
         let agent = AgentId::from_bytes([1u8; 16]);
         let mut clock = HybridClock::new(agent);
-        let mut prev = clock.tick();
+        let mut prev = clock.tick().unwrap();
 
         for i in 1..tick_count {
-            let next = clock.tick();
+            let next = clock.tick().unwrap();
             prop_assert!(
                 next > prev,
                 "INV-FERR-015: tick {} ({:?}) not greater than tick {} ({:?})",
@@ -38,9 +38,9 @@ proptest! {
         let mut clock = HybridClock::new(agent);
 
         // Advance local clock.
-        let mut last_local = clock.tick();
+        let mut last_local = clock.tick().unwrap();
         for _ in 1..local_ticks {
-            last_local = clock.tick();
+            last_local = clock.tick().unwrap();
         }
 
         // Receive a remote timestamp that may be in the past.
@@ -49,7 +49,7 @@ proptest! {
         clock.receive(&remote_tx);
 
         // Next tick must still be strictly greater.
-        let after_receive = clock.tick();
+        let after_receive = clock.tick().unwrap();
         prop_assert!(
             after_receive > last_local,
             "INV-FERR-015: tick after receive(past) not monotonic: {:?} <= {:?}",
@@ -71,7 +71,7 @@ proptest! {
         let remote_tx = TxId::with_agent(remote_physical, remote_logical, remote_agent);
         clock.receive(&remote_tx);
 
-        let local_tx = clock.tick();
+        let local_tx = clock.tick().unwrap();
         prop_assert!(
             local_tx > remote_tx,
             "INV-FERR-016: local tick {:?} not causally after remote {:?}",
@@ -93,11 +93,11 @@ proptest! {
             .collect();
 
         // Agent 0 ticks, sends to agent 1, who ticks and sends to agent 2, etc.
-        let mut prev_tx = agents[0].tick();
+        let mut prev_tx = agents[0].tick().unwrap();
 
         for (i, agent) in agents.iter_mut().enumerate().skip(1) {
             agent.receive(&prev_tx);
-            let current = agent.tick();
+            let current = agent.tick().unwrap();
             prop_assert!(
                 current > prev_tx,
                 "INV-FERR-016: agent {} tick {:?} not after agent {} tick {:?}",

@@ -36,9 +36,22 @@ use crate::{
 /// Must be converted to `EntityId` through a trust boundary before
 /// entering the Store. ADR-FERR-010.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
-pub struct WireEntityId(pub [u8; 32]);
+pub struct WireEntityId([u8; 32]);
 
 impl WireEntityId {
+    /// Construct from raw bytes. ADR-FERR-010: no validation here — the
+    /// trust boundary is at `into_trusted` / `into_verified`.
+    #[must_use]
+    pub fn new(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
+
+    /// Borrow the underlying bytes.
+    #[must_use]
+    pub fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+
     /// Convert to `EntityId` for data from integrity-verified local storage.
     ///
     /// CRC (WAL) or BLAKE3 (checkpoint) verification MUST have been
@@ -239,7 +252,7 @@ mod tests {
     fn test_wire_entity_id_roundtrip() {
         let original = EntityId::from_content(b"test content");
         // Serialize as WireEntityId (same bytes)
-        let wire = WireEntityId(*original.as_bytes());
+        let wire = WireEntityId::new(*original.as_bytes());
         let recovered = wire.into_trusted();
         assert_eq!(
             original, recovered,
@@ -251,7 +264,7 @@ mod tests {
     fn test_wire_value_ref_roundtrip() {
         let eid = EntityId::from_content(b"target");
         let original = Value::Ref(eid);
-        let wire = WireValue::Ref(WireEntityId(*eid.as_bytes()));
+        let wire = WireValue::Ref(WireEntityId::new(*eid.as_bytes()));
         let recovered = wire.into_trusted();
         assert_eq!(
             original, recovered,
@@ -268,7 +281,7 @@ mod tests {
         let original = Datom::new(entity, attr.clone(), value.clone(), tx, Op::Assert);
 
         let wire = WireDatom::new(
-            WireEntityId(*entity.as_bytes()),
+            WireEntityId::new(*entity.as_bytes()),
             attr,
             WireValue::String(Arc::from("hello")),
             tx,
