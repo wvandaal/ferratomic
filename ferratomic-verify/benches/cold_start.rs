@@ -2,7 +2,7 @@ use std::{path::Path, sync::Arc};
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use ferratom::{AgentId, Attribute, AttributeDef, EntityId, FerraError, Schema, Value};
-use ferratomic_core::{
+use ferratomic_db::{
     checkpoint::write_checkpoint,
     db::Database,
     storage::{self, checkpoint_path, wal_path, RecoveryLevel},

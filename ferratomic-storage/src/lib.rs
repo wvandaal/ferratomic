@@ -8,7 +8,7 @@
 //!
 //! This crate is a LEAF in the dependency graph: it depends only on
 //! `ferratom` for error types. Recovery orchestration lives in
-//! `ferratomic-core`.
+//! `ferratomic-db`.
 
 #![forbid(unsafe_code)]
 #![deny(clippy::all, missing_docs)]

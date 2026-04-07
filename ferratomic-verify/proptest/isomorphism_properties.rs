@@ -14,7 +14,7 @@
 use std::collections::BTreeSet;
 
 use ferratom::Datom;
-use ferratomic_core::{
+use ferratomic_db::{
     checkpoint::{load_checkpoint, write_checkpoint_to_writer},
     indexes::{AevtKey, AvetKey, EavtKey, SortedVecIndexes, VaetKey},
     positional::PositionalStore,
@@ -384,7 +384,7 @@ proptest! {
     fn inv_ferr_059_transact_demotion_preserves_datoms(
         datoms in prop::collection::btree_set(arb_datom(), 1..100),
     ) {
-        use ferratomic_core::writer::Transaction;
+        use ferratomic_db::writer::Transaction;
 
         let store = Store::from_datoms(datoms.clone());
         let pre_datoms: BTreeSet<Datom> = store.datoms().cloned().collect();

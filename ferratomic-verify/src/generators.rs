@@ -17,7 +17,7 @@
 //! ```
 
 use ferratom::{AgentId, Attribute, Datom, EntityId, Op, TxId, Value};
-use ferratomic_core::store::Store;
+use ferratomic_db::store::Store;
 use proptest::prelude::*;
 
 // ---------------------------------------------------------------------------
@@ -100,10 +100,9 @@ pub fn arb_store(max_datoms: usize) -> impl Strategy<Value = Store> {
 
 /// Arbitrary committed Transaction (bypasses schema for testing).
 pub fn arb_transaction(
-) -> impl Strategy<Value = ferratomic_core::writer::Transaction<ferratomic_core::writer::Committed>>
-{
+) -> impl Strategy<Value = ferratomic_db::writer::Transaction<ferratomic_db::writer::Committed>> {
     (arb_agent_id(), prop::collection::vec(arb_datom(), 1..20)).prop_map(|(agent, datoms)| {
-        let mut tx = ferratomic_core::writer::Transaction::new(agent);
+        let mut tx = ferratomic_db::writer::Transaction::new(agent);
         for d in datoms {
             tx = tx.assert_datom(d.entity(), d.attribute().clone(), d.value().clone());
         }
@@ -114,10 +113,9 @@ pub fn arb_transaction(
 /// Arbitrary multi-datom Transaction (at least 2 datoms).
 /// Used for testing transaction atomicity (INV-FERR-006).
 pub fn arb_multi_datom_transaction(
-) -> impl Strategy<Value = ferratomic_core::writer::Transaction<ferratomic_core::writer::Committed>>
-{
+) -> impl Strategy<Value = ferratomic_db::writer::Transaction<ferratomic_db::writer::Committed>> {
     (arb_agent_id(), prop::collection::vec(arb_datom(), 2..20)).prop_map(|(agent, datoms)| {
-        let mut tx = ferratomic_core::writer::Transaction::new(agent);
+        let mut tx = ferratomic_db::writer::Transaction::new(agent);
         for d in datoms {
             tx = tx.assert_datom(d.entity(), d.attribute().clone(), d.value().clone());
         }

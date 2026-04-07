@@ -6,7 +6,7 @@
 use std::{collections::BTreeSet, sync::Arc};
 
 use ferratom::{AgentId, Attribute, Datom, EntityId, Op, TxId, Value};
-use ferratomic_core::{store::Store, writer::Transaction};
+use ferratomic_db::{store::Store, writer::Transaction};
 use proptest::prelude::*;
 
 /// Generate a schema-valid datom triple.

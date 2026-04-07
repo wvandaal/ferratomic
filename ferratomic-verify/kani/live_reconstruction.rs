@@ -6,7 +6,7 @@
 //! over proof-friendly keys rather than over full datom field machinery.
 
 use ferratom::Op;
-use ferratomic_core::positional::live_positions_from_sorted_run_keys_for_test;
+use ferratomic_db::positional::live_positions_from_sorted_run_keys_for_test;
 
 #[cfg(not(kani))]
 use super::kani;

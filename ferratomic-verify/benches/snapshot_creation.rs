@@ -10,7 +10,7 @@ use std::{
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use ferratom::{Attribute, Datom, EntityId, Op, TxId, Value};
-use ferratomic_core::{db::Database, store::Store};
+use ferratomic_db::{db::Database, store::Store};
 
 const SCALE_INPUT_SIZES: [usize; 3] = [1_000, 10_000, 100_000];
 

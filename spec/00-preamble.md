@@ -46,7 +46,7 @@ Referenced as `C1`, `C2`, etc. throughout the spec:
 | C4 | CRDT merge = set union | Commutative, associative, idempotent. Merge is pure set union. |
 | C5 | Causal traceability | Every datom records its provenance: who, when, why, and what was known. |
 | C7 | Self-bootstrap | Genesis is deterministic and self-describing. The schema describes itself. |
-| C8 | Substrate independence | Ferratomic has no knowledge of application-layer concerns. |
+| C8 | Substrate independence | Ferratomic has no knowledge of application-layer concerns. **C8 Test**: "If someone used Ferratomic for a game engine, IoT sensors, or a financial ledger, would every engine-level name (type, attribute, function, genesis schema entry) make sense without knowing the intended use case? If any name assumes a specific domain (e.g., 'agent' assumes AI agents), it violates C8." Engine primitives use domain-neutral terms: NodeId (not AgentId), tx/origin (not tx/agent). Application-layer conventions (e.g., `:agent/*` namespace patterns) are permitted because they are optional patterns, not engine primitives. |
 | C9 | Balanced workload | Workload is balanced/bursty: write bursts, read bursts, interleaved. NOT read-heavy 99:1. Performance architecture must optimize for both read and write throughput. |
 
 ## 23.0 Preamble

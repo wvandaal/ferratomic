@@ -5,7 +5,7 @@
 //!
 //! ## Development Order
 //!
-//! Written before ferratomic-core (Phase 2 red-phase TDD).
+//! Written before ferratomic-db (Phase 2 red-phase TDD).
 //! Phase 4a: all tests now passing against the implementation.
 
 // INV-FERR-023: No unsafe code permitted. Compiler-enforced.

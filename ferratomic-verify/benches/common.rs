@@ -7,7 +7,7 @@ use std::{collections::BTreeSet, path::Path, sync::Arc};
 use ferratom::{
     AgentId, Attribute, AttributeDef, Datom, EntityId, FerraError, Op, Schema, TxId, Value,
 };
-use ferratomic_core::{
+use ferratomic_db::{
     checkpoint::write_checkpoint,
     db::Database,
     indexes::EavtKey,

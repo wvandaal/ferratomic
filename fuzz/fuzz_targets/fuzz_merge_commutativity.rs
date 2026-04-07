@@ -11,7 +11,7 @@ use arbitrary::Arbitrary;
 use std::collections::BTreeSet;
 
 use ferratom::{Attribute, Datom, EntityId, Op, TxId, Value};
-use ferratomic_core::{merge::merge, store::Store};
+use ferratomic_db::{merge::merge, store::Store};
 
 /// A small datom for structure-aware fuzzing.
 /// Generates valid datoms with constrained field space

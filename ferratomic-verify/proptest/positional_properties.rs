@@ -7,7 +7,7 @@
 use std::collections::{BTreeSet, HashSet};
 
 use ferratom::{Datom, EntityId};
-use ferratomic_core::{
+use ferratomic_db::{
     indexes::{AevtKey, AvetKey, EavtKey, VaetKey},
     merge::merge,
     positional::{merge_positional, PositionalStore},

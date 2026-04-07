@@ -13,7 +13,7 @@
 
 1. Read `AGENTS.md` (this project's guidelines and hard constraints)
 2. Read `spec/README.md` and relevant spec modules — the formal specification (55 INV, 9 ADR, 5 NEG)
-3. Read `docs/design/FERRATOMIC_ARCHITECTURE.md` — comprehensive architecture (17 sections)
+3. Read `docs/design/` — MIGRATION.md (braid-kernel path), ARCHITECTURAL_INFLUENCES.md (design genealogy), REFINEMENT_CHAINS.md (Morgan calculus chains)
 4. Read `ferratomic-verify/lean/Ferratomic/Store.lean` — existing Lean proofs (CRDT foundation)
 5. Run `ms load rust-formal-engineering -m --full`
 6. Run `ms load spec-first-design -m --full`

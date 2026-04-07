@@ -24,7 +24,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use ferratom::{Attribute, Datom, EntityId, Op, TxId, Value};
-use ferratomic_core::store::select_latest_live_value_for_test;
+use ferratomic_db::store::select_latest_live_value_for_test;
 
 use super::helpers::proof_entity_id;
 #[cfg(not(kani))]

@@ -2,10 +2,10 @@
 //!
 //! INV-FERR-009, INV-FERR-019 (error Display), INV-FERR-023 (no unsafe),
 //! INV-FERR-031.
-//! Phase 4a: all tests passing against ferratomic-core implementation.
+//! Phase 4a: all tests passing against ferratomic-db implementation.
 
 use ferratom::{AgentId, Attribute, EntityId, FerraError, Value};
-use ferratomic_core::{
+use ferratomic_db::{
     store::Store,
     writer::{Building, Transaction, TxValidationError},
 };
@@ -548,7 +548,7 @@ fn test_inv_ferr_023_forbid_unsafe_code() {
         let content = std::fs::read_to_string(path)
             .unwrap_or_else(|e| panic!("INV-FERR-023: cannot read {path}: {e}"));
 
-        // ADR-FERR-020: ferratomic-core uses #![deny(unsafe_code)] instead of
+        // ADR-FERR-020: ferratomic-db uses #![deny(unsafe_code)] instead of
         // #![forbid(unsafe_code)] to allow the localized mmap.rs unsafe boundary.
         // The mmap module has #![allow(unsafe_code)] as the sole exception.
         // All other crates retain #![forbid(unsafe_code)].
@@ -556,7 +556,7 @@ fn test_inv_ferr_023_forbid_unsafe_code() {
         if is_core {
             assert!(
                 content.contains("#![deny(unsafe_code)]"),
-                "INV-FERR-023 / ADR-FERR-020: ferratomic-core must have \
+                "INV-FERR-023 / ADR-FERR-020: ferratomic-db must have \
                  #![deny(unsafe_code)] (not forbid, per ADR-FERR-020 mmap exception).",
             );
         } else {

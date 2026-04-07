@@ -4,11 +4,11 @@
 //! Tests INV-FERR-008 (WAL durability), INV-FERR-020 (transaction atomicity),
 //! INV-FERR-021 (backpressure safety), INV-FERR-026 (write amplification).
 //!
-//! Phase 4a: all tests passing against ferratomic-core implementation.
+//! Phase 4a: all tests passing against ferratomic-db implementation.
 
 use std::io::Write;
 
-use ferratomic_core::{
+use ferratomic_db::{
     backpressure::{BackpressurePolicy, WriteLimiter},
     wal::Wal,
 };
@@ -122,7 +122,7 @@ proptest! {
     fn inv_ferr_020_transaction_single_epoch(
         txns in prop::collection::vec(arb_transaction(), 1..10),
     ) {
-        let mut store = ferratomic_core::store::Store::genesis();
+        let mut store = ferratomic_db::store::Store::genesis();
         for tx in txns {
             let pre_len = store.len();
             let receipt = store.transact_test(tx)

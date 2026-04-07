@@ -3,12 +3,12 @@
 //! INV-FERR-006 (snapshot isolation), INV-FERR-008 (WAL durability),
 //! INV-FERR-013 (checkpoint identity), INV-FERR-014 (recovery correctness),
 //! INV-FERR-024 (in-memory backend).
-//! Phase 4a: all tests passing against ferratomic-core implementation.
+//! Phase 4a: all tests passing against ferratomic-db implementation.
 
 use std::io::Write;
 
 use ferratom::{AgentId, Attribute, EntityId, Value};
-use ferratomic_core::{db::Database, wal::Wal, writer::Transaction};
+use ferratomic_db::{db::Database, wal::Wal, writer::Transaction};
 use tempfile::TempDir;
 
 /// Write a single test datom into a new WAL at the given path.
@@ -334,7 +334,7 @@ fn transact_dc_datoms(db: &Database, agent: AgentId, range: std::ops::Range<u64>
 /// database epoch — cold start recovery uses the checkpoint epoch to
 /// compute the WAL delta.
 fn write_checkpoint_from_db(db: &Database, checkpoint_path: &std::path::Path) {
-    use ferratomic_core::checkpoint::write_checkpoint;
+    use ferratomic_db::checkpoint::write_checkpoint;
     let store = db.store_for_checkpoint();
     write_checkpoint(&store, checkpoint_path).expect("INV-FERR-013: checkpoint write must succeed");
 }
@@ -357,7 +357,7 @@ fn assert_dc_entities_present(db: &Database, count: u64, context: &str) {
 /// crash 1 --> cold_start --> transact 1 --> crash 2 --> cold_start --> verify.
 #[test]
 fn test_inv_ferr_014_double_crash() {
-    use ferratomic_core::storage::{cold_start, RecoveryLevel};
+    use ferratomic_db::storage::{cold_start, RecoveryLevel};
 
     let dir = TempDir::new().expect("failed to create temp dir");
     let data_dir = dir.path().join("double_crash");
@@ -438,10 +438,10 @@ fn double_crash_phase3(db: &Database, agent: AgentId) {
 }
 
 /// Write a test checkpoint into an `InMemoryBackend`.
-fn write_test_checkpoint_to_backend(backend: &ferratomic_core::storage::InMemoryBackend) {
-    use ferratomic_core::storage::StorageBackend;
+fn write_test_checkpoint_to_backend(backend: &ferratomic_db::storage::InMemoryBackend) {
+    use ferratomic_db::storage::StorageBackend;
 
-    let mut store = ferratomic_core::store::Store::genesis();
+    let mut store = ferratomic_db::store::Store::genesis();
     let tx = Transaction::new(AgentId::from_bytes([24u8; 16]))
         .assert_datom(
             EntityId::from_content(b"in-mem-test-entity"),
@@ -456,7 +456,7 @@ fn write_test_checkpoint_to_backend(backend: &ferratomic_core::storage::InMemory
     let mut writer = backend
         .open_checkpoint_writer()
         .expect("INV-FERR-024: open checkpoint writer");
-    ferratomic_core::checkpoint::write_checkpoint_to_writer(&store, &mut writer)
+    ferratomic_db::checkpoint::write_checkpoint_to_writer(&store, &mut writer)
         .expect("INV-FERR-024: write checkpoint to in-memory backend");
 }
 
@@ -467,7 +467,7 @@ fn write_test_checkpoint_to_backend(backend: &ferratomic_core::storage::InMemory
 /// genesis; backend with a checkpoint restores state.
 #[test]
 fn test_inv_ferr_024_in_memory_backend() {
-    use ferratomic_core::storage::{
+    use ferratomic_db::storage::{
         cold_start_with_backend, InMemoryBackend, RecoveryLevel, StorageBackend,
     };
 
@@ -547,7 +547,7 @@ fn assert_tc_entities_present(db: &Database, count: u64, context: &str) {
 /// 6. Cold start recovery 3 -> identical state to recovery 2
 #[test]
 fn test_inv_ferr_014_triple_crash_wal_truncation() {
-    use ferratomic_core::storage::{cold_start, RecoveryLevel};
+    use ferratomic_db::storage::{cold_start, RecoveryLevel};
 
     let dir = TempDir::new().expect("failed to create temp dir");
     let data_dir = dir.path().join("triple_crash");
@@ -728,7 +728,7 @@ fn assert_pc_entities_present(db: &Database, count: u64, context: &str) {
 /// 6. Verify: recovered state matches pre-second-checkpoint state
 #[test]
 fn test_inv_ferr_014_power_cut_atomic_rename() {
-    use ferratomic_core::storage::cold_start;
+    use ferratomic_db::storage::cold_start;
 
     let dir = TempDir::new().expect("failed to create temp dir");
     let data_dir = dir.path().join("power_cut");
@@ -770,7 +770,7 @@ fn test_inv_ferr_014_power_cut_atomic_rename() {
             let temp_file = std::fs::File::create(&temp_checkpoint_path)
                 .expect("test setup: create temp checkpoint file");
             let mut buf_writer = std::io::BufWriter::new(temp_file);
-            ferratomic_core::checkpoint::write_checkpoint_to_writer(&temp_store, &mut buf_writer)
+            ferratomic_db::checkpoint::write_checkpoint_to_writer(&temp_store, &mut buf_writer)
                 .expect("test setup: write checkpoint to temp file");
         }
 
@@ -791,8 +791,8 @@ fn test_inv_ferr_014_power_cut_atomic_rename() {
 
         // Verify recovery actually loaded the checkpoint (not genesis or WAL-only).
         assert!(
-            result.level == ferratomic_core::storage::RecoveryLevel::CheckpointPlusWal
-                || result.level == ferratomic_core::storage::RecoveryLevel::CheckpointOnly,
+            result.level == ferratomic_db::storage::RecoveryLevel::CheckpointPlusWal
+                || result.level == ferratomic_db::storage::RecoveryLevel::CheckpointOnly,
             "INV-FERR-013: recovery must load the original checkpoint, got {:?}",
             result.level
         );

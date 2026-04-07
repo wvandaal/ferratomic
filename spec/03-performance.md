@@ -1089,3 +1089,32 @@ theorem live_retracted_absent (datoms : Finset Datom) (e a v : Nat)
   intro h
   exact absurd h_retracted (Finset.mem_sdiff.mp h).2
 ```
+
+---
+
+### Capacity Planning (Operational Reference)
+
+Resource estimates by scale tier. Memory figures are for the im::OrdMap representation
+(Phase 4a). PositionalStore (INV-FERR-076) reduces memory ~6x. Wavelet matrix
+(ADR-FERR-030, Phase 4c+) targets ~5 bytes/datom.
+
+| Scale | Datoms | RAM (OrdMap) | RAM (Positional, est.) | Disk (Checkpoint) |
+|-------|--------|-------------|----------------------|-------------------|
+| Small | 10K | ~3.5 MB | ~0.6 MB | ~2 MB |
+| Medium | 100K | ~35 MB | ~6 MB | ~20 MB |
+| Large | 1M | ~350 MB | ~60 MB | ~200 MB |
+| XL | 10M | ~3.5 GB | ~600 MB | ~2 GB |
+| XXL | 100M | ~35 GB | ~6 GB | ~20 GB |
+
+Per-datom memory breakdown (OrdMap representation):
+
+| Component | Bytes | Notes |
+|-----------|-------|-------|
+| EntityId | 32 | BLAKE3 hash |
+| Attribute | ~40 | Arc<str> with namespace/name |
+| Value | ~80 | Enum, average across types |
+| TxId | 24 | physical + logical + agent |
+| Op | 1 | Assert or Retract |
+| im::OrdMap overhead | ~170 | Node pointers, balance, Arc header, 4 index entries |
+| **Total (OrdMap)** | **~350** | |
+| **Total (Positional)** | **~130** | Contiguous arrays, no tree overhead |

@@ -17,7 +17,7 @@ use std::{collections::BTreeSet, sync::Arc};
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use ferratom::{Attribute, Datom, EntityId, Op, TxId, Value};
-use ferratomic_core::{
+use ferratomic_db::{
     indexes::{EavtKey, IndexBackend},
     store::Store,
 };

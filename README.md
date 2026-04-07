@@ -40,7 +40,7 @@ CARGO_TARGET_DIR=/data/cargo-target cargo test --workspace
 | **Append-only history** | Every state the system has ever been in is recoverable. Nothing is ever deleted or mutated. |
 | **Content-addressed identity** | `EntityId = BLAKE3(content)`. Same fact = same datom, regardless of who asserts it or when. |
 | **Causal traceability** | Every fact records who, when, and what was known at the time. Ed25519 signed transactions. |
-| **Formally verified** | 73 invariants proven in Lean 4 (0 `sorry`), model-checked with Stateright, bounded-verified with Kani, property-tested with proptest at 10,000 cases per property. |
+| **Formally verified** | 86 invariants proven in Lean 4 (0 `sorry`), model-checked with Stateright, bounded-verified with Kani, property-tested with proptest at 10,000 cases per property. |
 | **Safe callable surface** | `unsafe` permitted only when firewalled behind safe APIs, mission-critical for performance, and documented via ADR. Callers can never trigger UB. |
 
 ### What Ferratomic is NOT
@@ -81,7 +81,7 @@ Commutativity + associativity + idempotency = join-semilattice. Convergence foll
 
 ```rust
 use ferratom::{Attribute, Datom, EntityId, Value, Op, TxId, Schema};
-use ferratomic_core::{Store, Database};
+use ferratomic_db::{Store, Database};
 
 // 1. Create a database (deterministic 19-attribute genesis)
 let db = Database::genesis();
@@ -135,7 +135,7 @@ Every type admits exactly the valid states. Invalid states are unrepresentable a
 ### 2. Spec-First TDD with Formal Refinement
 
 ```
-Phase 0: Specification (73 invariants, 25 ADRs, 7 NEGs)     DONE
+Phase 0: Specification (86 invariants, 32 ADRs, 7 NEGs)     DONE
 Phase 1: Lean 4 proofs (0 sorry)                             DONE
 Phase 2: Test suite (all fail -- red phase)                   DONE
 Phase 3: Type definitions (types encode invariants)           DONE
@@ -214,7 +214,7 @@ The full defensive engineering standard (11 CI gates, MIRI, ASan, mutation testi
                         └──────────────┬──────────────┘
                                        │
                         ┌──────────────▼──────────────┐
-                        │   ferratomic-core            │  Storage + concurrency
+                        │   ferratomic-db            │  Storage + concurrency
                         │                              │
                         │  ┌────────┐  ┌────────────┐ │
                         │  │ArcSwap │  │  Database   │ │  Lock-free MVCC reads
@@ -255,11 +255,11 @@ The full defensive engineering standard (11 CI gates, MIRI, ASan, mutation testi
 |-------|------|-----|-------------|
 | `ferratom-clock` | Clock primitives: HybridClock, TxId, AgentId, Frontier | ~350 | serde (zero project deps) |
 | `ferratom` | Core types: Datom, EntityId, Value, Schema, Wire trust boundary | ~3,300 | ferratom-clock, blake3, ordered-float, serde |
-| `ferratomic-core` | Store engine: MVCC, WAL, checkpoint, indexes, merge, LIVE resolution | ~8,800 | ferratom, im, arc-swap, bitvec, bincode, memmap2 |
-| `ferratomic-datalog` | Query: Datalog parser, planner, evaluator, CALM classification | stubs | ferratom, ferratomic-core |
-| `ferratomic-verify` | Proofs: Lean 4 (0 sorry), Stateright, Kani, proptest (10K cases) | ~12K+ | ferratom, ferratomic-core |
+| `ferratomic-db` | Store engine: MVCC, WAL, checkpoint, indexes, merge, LIVE resolution | ~8,800 | ferratom, im, arc-swap, bitvec, bincode, memmap2 |
+| `ferratomic-datalog` | Query: Datalog parser, planner, evaluator, CALM classification | stubs | ferratom, ferratomic-db |
+| `ferratomic-verify` | Proofs: Lean 4 (0 sorry), Stateright, Kani, proptest (10K cases) | ~12K+ | ferratom, ferratomic-db |
 
-Dependency direction: `clock -> ferratom -> ferratomic-core -> ferratomic-datalog`. Acyclic. `ferratomic-verify` depends on both `ferratom` and `ferratomic-core`.
+Dependency direction: `clock -> ferratom -> ferratomic-db -> ferratomic-datalog`. Acyclic. `ferratomic-verify` depends on both `ferratom` and `ferratomic-db`.
 
 ---
 
@@ -326,7 +326,7 @@ bv --robot-next   # Top-priority pick
 
 ## Specification
 
-The canonical specification lives in `spec/`. **73 invariants. 25 ADRs. 7 negative cases. 2 coupling invariants.** Every invariant has six verification layers: algebraic law (Level 0), state invariant (Level 1), Rust contract (Level 2), falsification condition, proptest strategy, and Lean theorem.
+The canonical specification lives in `spec/`. **86 invariants. 32 ADRs. 7 negative cases. 2 coupling invariants.** Every invariant has six verification layers: algebraic law (Level 0), state invariant (Level 1), Rust contract (Level 2), falsification condition, proptest strategy, and Lean theorem.
 
 | Module | INV-FERR | Focus |
 |--------|----------|-------|

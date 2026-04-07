@@ -6,14 +6,14 @@
 //! (no unsafe code), INV-FERR-029 (LIVE view resolution), INV-FERR-030
 //! (replica filter), and INV-FERR-032 (LIVE resolution correctness).
 //!
-//! Phase 4a: all tests passing against ferratomic-core implementation.
+//! Phase 4a: all tests passing against ferratomic-db implementation.
 //! INV-FERR-029/032 tests cross-check the spec's resolution algebra against
 //! the native `Store` LIVE query APIs.
 
 use std::collections::BTreeSet;
 
 use ferratom::Datom;
-use ferratomic_core::{
+use ferratomic_db::{
     anti_entropy::{AntiEntropy, NullAntiEntropy},
     observer::Observer,
     store::Store,
@@ -143,7 +143,7 @@ proptest! {
         let store = Store::genesis();
 
         // Unknown attribute must produce UnknownAttribute.
-        let tx_unknown = ferratomic_core::writer::Transaction::new(
+        let tx_unknown = ferratomic_db::writer::Transaction::new(
             ferratom::AgentId::from_bytes([19u8; 16])
         ).assert_datom(
             unknown_datom.entity(),
@@ -158,7 +158,7 @@ proptest! {
         );
 
         // Wrong-type must produce SchemaViolation.
-        let tx_mistype = ferratomic_core::writer::Transaction::new(
+        let tx_mistype = ferratomic_db::writer::Transaction::new(
             ferratom::AgentId::from_bytes([19u8; 16])
         ).assert_datom(
             mistyped_datom.entity(),
@@ -599,21 +599,21 @@ fn inv_ferr_023_no_unsafe_code() {
         let content = std::fs::read_to_string(path)
             .unwrap_or_else(|e| panic!("INV-FERR-023: cannot read {path}: {e}"));
 
-        // ADR-FERR-020: ferratomic-core uses #![deny(unsafe_code)] instead of
+        // ADR-FERR-020: ferratomic-db uses #![deny(unsafe_code)] instead of
         // #![forbid(unsafe_code)] to allow the localized mmap.rs unsafe boundary.
         // All other crates retain #![forbid(unsafe_code)].
         let is_core = path.contains("ferratomic-core");
         if is_core {
             assert!(
                 content.contains("#![deny(unsafe_code)]"),
-                "INV-FERR-023 / ADR-FERR-020: ferratomic-core must have \
+                "INV-FERR-023 / ADR-FERR-020: ferratomic-db must have \
                  #![deny(unsafe_code)] (not forbid, per ADR-FERR-020 mmap exception).",
             );
         } else {
             assert!(
                 content.contains("#![forbid(unsafe_code)]"),
                 "INV-FERR-023 violated: {path} is missing #![forbid(unsafe_code)]. \
-                 Every crate except ferratomic-core must forbid unsafe code.",
+                 Every crate except ferratomic-db must forbid unsafe code.",
             );
         }
     }

@@ -1,4 +1,4 @@
-//! # ferratomic-core — Storage and concurrency engine
+//! # ferratomic-db — Database MVCC facade
 //!
 //! This is the **core crate**: business logic, state machines, concurrency control.
 //! It implements the algebras (operations) over the types defined in `ferratom`.
@@ -131,8 +131,8 @@
 //!
 //! ```rust
 //! use ferratom::{AgentId, Attribute, EntityId, Value};
-//! use ferratomic_core::db::Database;
-//! use ferratomic_core::writer::Transaction;
+//! use ferratomic_db::db::Database;
+//! use ferratomic_db::writer::Transaction;
 //!
 //! // Create a genesis database (deterministic, INV-FERR-031)
 //! let db = Database::genesis();
@@ -163,7 +163,7 @@
 //! Core crate. ALGEBRAS — operations over types from ferratom.
 //! Implements the G-Set CRDT semilattice (INV-FERR-001..003).
 
-// INV-FERR-023: No unsafe code in ferratomic-core except mmap.rs (ADR-FERR-020).
+// INV-FERR-023: No unsafe code in ferratomic-db except mmap.rs (ADR-FERR-020).
 // deny (not forbid) allows the single mmap module to #![allow(unsafe_code)].
 #![deny(unsafe_code)]
 #![deny(clippy::all, missing_docs)]

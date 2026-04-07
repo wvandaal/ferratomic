@@ -11,7 +11,7 @@
 use std::collections::BTreeSet;
 
 use ferratom::Datom;
-use ferratomic_core::store::Store;
+use ferratomic_db::store::Store;
 
 /// Result of an isomorphism verification.
 #[derive(Debug)]

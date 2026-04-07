@@ -13,7 +13,7 @@ use std::{
 };
 
 use ferratom::FerraError;
-use ferratomic_core::storage::{ReadSeek, StorageBackend, WriteSeek};
+use ferratomic_db::storage::{ReadSeek, StorageBackend, WriteSeek};
 
 // ---------------------------------------------------------------------------
 // Fault specification types
@@ -487,7 +487,7 @@ impl FaultSeekReader {
 
 #[cfg(test)]
 mod tests {
-    use ferratomic_core::storage::InMemoryBackend;
+    use ferratomic_db::storage::InMemoryBackend;
 
     use super::*;
 

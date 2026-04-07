@@ -7,7 +7,7 @@
 use std::collections::BTreeSet;
 
 use ferratom::Datom;
-use ferratomic_core::{merge::merge, store::Store};
+use ferratomic_db::{merge::merge, store::Store};
 use ferratomic_verify::generators::*;
 use proptest::{prelude::*, test_runner::TestCaseError};
 

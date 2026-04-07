@@ -8,7 +8,7 @@
 use std::{collections::BTreeSet, sync::Arc};
 
 use ferratom::{AgentId, Attribute, EntityId, Value};
-use ferratomic_core::{
+use ferratomic_db::{
     checkpoint::{load_checkpoint, write_checkpoint, write_checkpoint_to_writer},
     db::Database,
     storage::{cold_start_with_backend, InMemoryBackend, StorageBackend},
@@ -390,10 +390,10 @@ proptest! {
         let fraction = f64::from(retract_pct) / 100.0;
         let store = build_store_with_retractions(&assert_batches, fraction);
 
-        let bytes = ferratomic_core::checkpoint::serialize_live_first_bytes(&store)
+        let bytes = ferratomic_db::checkpoint::serialize_live_first_bytes(&store)
             .expect("INV-FERR-075: serialize_live_first must succeed");
 
-        let loaded = ferratomic_core::checkpoint::deserialize_checkpoint_bytes(&bytes)
+        let loaded = ferratomic_db::checkpoint::deserialize_checkpoint_bytes(&bytes)
             .expect("INV-FERR-075: deserialize via version dispatch must succeed");
 
         prop_assert_eq!(
@@ -428,10 +428,10 @@ proptest! {
         let fraction = f64::from(retract_pct) / 100.0;
         let store = build_store_with_retractions(&assert_batches, fraction);
 
-        let bytes = ferratomic_core::checkpoint::serialize_live_first_bytes(&store)
+        let bytes = ferratomic_db::checkpoint::serialize_live_first_bytes(&store)
             .expect("INV-FERR-075: serialize must succeed");
 
-        let partial = ferratomic_core::checkpoint::deserialize_live_first_partial(&bytes)
+        let partial = ferratomic_db::checkpoint::deserialize_live_first_partial(&bytes)
             .expect("INV-FERR-075: partial deserialize must succeed");
 
         let full = partial.load_historical()

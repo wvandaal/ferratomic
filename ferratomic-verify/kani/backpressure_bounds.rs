@@ -3,7 +3,7 @@
 //! Covers INV-FERR-021: WriteLimiter enforces capacity bounds.
 //! Acquiring up to max succeeds; the next attempt returns None.
 
-use ferratomic_core::backpressure::{BackpressurePolicy, WriteLimiter};
+use ferratomic_db::backpressure::{BackpressurePolicy, WriteLimiter};
 
 #[cfg(not(kani))]
 use super::kani;

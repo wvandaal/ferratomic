@@ -181,7 +181,7 @@ impl Schema {
     ///
     /// HI-015: Previously silently overwrote any existing definition.
     /// Last-write-wins on conflicting redefinitions. Merge-level conflict
-    /// detection and audit trail lives in `Store::from_merge` (ferratomic-core),
+    /// detection and audit trail lives in `Store::from_merge` (ferratomic-db),
     /// not in this leaf crate type. This method is intentionally silent on
     /// conflicts because `merge_schemas` calls it with the winning definition.
     pub fn define(&mut self, attr: Attribute, def: AttributeDef) {

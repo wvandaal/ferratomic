@@ -17,7 +17,7 @@ tempfile = "3"
 path = "../ferratom"
 features = ["test-utils"]
 
-[dependencies.ferratomic-core]
+[dependencies.ferratomic-db]
 path = "../ferratomic-core"
 features = ["test-utils"]
 

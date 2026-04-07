@@ -3,7 +3,7 @@
 > **These files are the CANONICAL specification.**
 
 Formal specification using DDIS methodology (INV/ADR/NEG).
-85 invariants (incl. 025b), 29 ADRs, 7 negative cases, 2 coupling invariants.
+86 invariants (incl. 025b, 086), 32 ADRs, 7 negative cases, 2 coupling invariants.
 
 **Implementation note**: Spec Level 2 contracts use `BTreeSet`/`BTreeMap` as conceptual
 illustrations. The actual implementation uses `im::OrdSet`/`im::OrdMap` per ADR-FERR-001.
@@ -26,7 +26,7 @@ Every invariant follows the Level 0/1/2 format:
 | [02-concurrency.md](02-concurrency.md) | §23.2 | 013-024 | Checkpoint, recovery, HLC, sharding, append-only, atomicity, backpressure, substrate |
 | [03-performance.md](03-performance.md) | §23.3 | 025-032 | Index backend, write amplification, tail latency, cold start, LIVE resolution, genesis |
 | [04-decisions-and-constraints.md](04-decisions-and-constraints.md) | §23.4-23.7 | 033-036 | ADR-FERR-001..007,010, NEG-FERR-001..005, cross-shard query, partition tolerance |
-| [05-federation.md](05-federation.md) | §23.8, §23.10 | 037-044, 051-055, 060-063, 025b | Federated query, selective merge, transport, VKN, **Phase 4a.5**: store identity, causal predecessors, merge receipts, provenance lattice, universal index algebra |
+| [05-federation.md](05-federation.md) | §23.8, §23.10 | 037-044, 051-055, 060-063, 025b, 086 | Federated query, selective merge, transport, VKN, **Phase 4a.5**: store identity, causal predecessors, merge receipts, provenance lattice, universal index algebra, canonical datom format (086), ADR-FERR-031 (Database-layer signing), ADR-FERR-032 (TxId-based entity), ADR-FERR-033 (store fingerprint in signing message) |
 | [06-prolly-tree.md](06-prolly-tree.md) | §23.9 | 045-050 | Chunk addressing, history independence, O(d) diff, block store, substrate independence |
 | [07-refinement.md](07-refinement.md) | §23.11 | CI-FERR-001..002 | Lean-Rust coupling invariant, refinement tower |
 | [08-verification-infrastructure.md](08-verification-infrastructure.md) | §23.12 | 056-059 | Fault injection, soak testing, metamorphic testing, optimization preservation, self-monitoring convergence (B17 → M(S) ≅ S) |

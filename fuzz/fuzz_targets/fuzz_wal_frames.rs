@@ -21,7 +21,7 @@ fuzz_target!(|data: &[u8]| {
     let path = dir.path().join("fuzz.wal");
     std::fs::write(&path, data).expect("write fuzz WAL file");
 
-    if let Ok(mut wal) = ferratomic_core::wal::Wal::open(&path) {
+    if let Ok(mut wal) = ferratomic_db::wal::Wal::open(&path) {
         let _ = wal.recover();
     }
 });

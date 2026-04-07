@@ -3,12 +3,12 @@
 //! INV-FERR-001..004, INV-FERR-009/C4, INV-FERR-010, INV-FERR-012,
 //! INV-FERR-017 (shard equivalence), INV-FERR-022 (anti-entropy),
 //! INV-FERR-030 (replica filter), INV-FERR-031 (genesis determinism).
-//! Phase 4a: all tests passing against ferratomic-core implementation.
+//! Phase 4a: all tests passing against ferratomic-db implementation.
 
 use std::collections::BTreeSet;
 
 use ferratom::{AgentId, Attribute, Datom, EntityId, Op, TxId, Value};
-use ferratomic_core::{merge::merge, store::Store};
+use ferratomic_db::{merge::merge, store::Store};
 
 /// INV-FERR-001: Concrete merge commutativity with known stores.
 #[test]
@@ -146,12 +146,11 @@ fn inv_ferr_004_transact_grows_store() {
 
     // Use genesis-schema attribute (db/doc accepts String) instead of
     // user/name which is not in genesis schema.
-    let tx = ferratomic_core::writer::Transaction::new(AgentId::from_bytes([0u8; 16]))
-        .assert_datom(
-            EntityId::from_content(b"new-entity"),
-            Attribute::from("db/doc"),
-            Value::String("Test".into()),
-        );
+    let tx = ferratomic_db::writer::Transaction::new(AgentId::from_bytes([0u8; 16])).assert_datom(
+        EntityId::from_content(b"new-entity"),
+        Attribute::from("db/doc"),
+        Value::String("Test".into()),
+    );
 
     let committed = tx
         .commit(store.schema())
@@ -375,7 +374,7 @@ fn inv_ferr_012_same_content_same_id() {
 /// full Database::genesis() -> db.transact() -> db.snapshot() path.
 #[test]
 fn test_inv_ferr_004_monotonic_growth_database() {
-    use ferratomic_core::{db::Database, writer::Transaction};
+    use ferratomic_db::{db::Database, writer::Transaction};
 
     let db = Database::genesis();
     let agent = AgentId::from_bytes([4u8; 16]);
@@ -417,10 +416,10 @@ fn test_inv_ferr_004_monotonic_growth_database() {
 /// single-node operation.
 #[test]
 fn test_inv_ferr_022_anti_entropy_trait() {
-    use ferratomic_core::anti_entropy::{AntiEntropy, NullAntiEntropy};
+    use ferratomic_db::anti_entropy::{AntiEntropy, NullAntiEntropy};
 
     let ae = NullAntiEntropy;
-    let mut store = ferratomic_core::store::Store::genesis();
+    let mut store = ferratomic_db::store::Store::genesis();
 
     // diff must return Ok with empty vec.
     let diff = ae
@@ -464,7 +463,7 @@ fn test_inv_ferr_022_anti_entropy_trait() {
 /// AcceptAll is the default full-replica behavior.
 #[test]
 fn test_inv_ferr_030_replica_filter() {
-    use ferratomic_core::topology::{AcceptAll, ReplicaFilter};
+    use ferratomic_db::topology::{AcceptAll, ReplicaFilter};
 
     let filter = AcceptAll;
 
@@ -766,7 +765,7 @@ fn test_inv_ferr_017_shard_union_via_merge() {
 /// and datom sets.
 #[test]
 fn test_inv_ferr_031_genesis_determinism() {
-    use ferratomic_core::db::Database;
+    use ferratomic_db::db::Database;
 
     let db1 = Database::genesis();
     let db2 = Database::genesis();

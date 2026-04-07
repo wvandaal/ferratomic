@@ -2364,13 +2364,21 @@ INV-FERR-063 (provenance lattice), ADR-FERR-021 (signature storage), ADR-FERR-02
 
 > **Phase 4a.5 staging note**: Phase 4a.5 implements Ed25519 signing WITHOUT
 > Merkle proof binding (INV-FERR-052 needs prolly tree from Phase 4b).
-> Signing message = `blake3(sorted_user_datoms ∥ tx_id ∥ sorted_predecessor_tx_ids
-> ∥ signer_public_key)`. Metadata datoms (`:tx/signature`, `:tx/signer`,
-> `:tx/predecessor`, `:tx/provenance`, `:tx/time`, `:tx/agent`) are EXCLUDED
-> from the signing message per ADR-FERR-021. Only user-asserted datoms are
-> signed. Predecessor TxIds are sorted canonically before inclusion in the
-> signing message (ADR-FERR-026). Causal predecessor binding replaces the
-> predecessor chain field specified in INV-FERR-051 Level 0.
+> Signing message = `blake3(sorted_canonical_user_datoms ∥ tx_id_canonical
+> ∥ sorted_predecessor_entity_ids ∥ store_fingerprint ∥ signer_public_key)`.
+> All byte representations use INV-FERR-086 canonical format.
+> Metadata datoms (`:tx/signature`, `:tx/signer`, `:tx/predecessor`,
+> `:tx/provenance`, `:tx/time`, `:tx/agent`, `:tx/derivation-source`) are
+> EXCLUDED from the signing message per ADR-FERR-021. Only user-asserted
+> datoms are signed.
+> **D19**: Predecessor ENTITY IDS (not TxIds) are used in the signing message.
+> EntityId = BLAKE3(tx_id_canonical_bytes) per ADR-FERR-032. Verification
+> reads tx/predecessor Ref values directly — zero TxId reconstruction needed.
+> **D17/ADR-FERR-033**: Store fingerprint (32 bytes, pre-transaction state)
+> included in the signing message as a cryptographic state commitment.
+> **ADR-FERR-031**: Signing happens at the Database layer via
+> `Database::transact_signed(tx, &SigningKey)`, NOT at the Transaction builder.
+> The TxId is assigned by HLC tick before signing.
 
 Every transaction is signed by the authoring agent's Ed25519 private key. All datoms
 in the transaction are covered by ONE signature (amortized — not per-datom). The
@@ -5330,6 +5338,156 @@ incremental sync ("only transfer datoms newer than my last merge with you").
 
 ---
 
+### ADR-FERR-031: Database-Layer Signing
+
+**Traces to**: INV-FERR-051, ADR-FERR-023 (refined by this ADR)
+**Stage**: 0
+
+**Problem**: ADR-FERR-023 places the signing step at the `Transaction<Building>`
+typestate: `tx.sign(TxSignature, TxSigner).commit(&schema)`. But INV-FERR-051's
+signing message includes `tx_id`, which is assigned by the HLC clock inside
+`Database::transact` under the write lock, AFTER `Transaction::commit()`. The
+caller cannot compute the signing message at build time because `tx_id` does not
+exist yet. This is a temporal impossibility — a Tier 1 correctness violation.
+
+**Options**:
+
+| Option | Description | Pros | Cons |
+|--------|-------------|------|------|
+| A: Sign at build time | `Transaction<Building>::sign(sig, signer)` per ADR-FERR-023 | Simple API. | **Impossible**: tx_id unknown at build time. Signature would bind to placeholder TxId, failing verification with real TxId. |
+| B: Transaction carries signing key | `Transaction<Building>::with_signing_key(key)`, signing deferred to transact | Key flows through typestate. | Private key stored in data structure (security risk). Key visible in Debug output. Extended lifetime. |
+| C: Signing closure | `Transaction<Building>::with_signer(closure)`, closure called at transact time | Decoupled. | Closure in Transaction complicates typestate. Captures key, same lifetime concern as B. |
+| D: Database::transact_signed | `Database::transact_signed(tx, &SigningKey)`. Signing inside the write lock after HLC tick provides tx_id. | Key is ephemeral &-borrow. tx_id known. Predecessors available from Frontier. All signing inputs coexist. | Two transact entry points (unsigned + signed). |
+
+**Decision**: **Option D: Database::transact_signed**
+
+The signing key is passed as an ephemeral `&SigningKey` borrow to
+`Database::transact_signed()`. Inside the write lock: (1) HLC ticks, producing
+`tx_id`. (2) Frontier is read, producing predecessor EntityIds. (3) Store
+fingerprint is read (pre-transaction state). (4) `sign_transaction()` computes
+the signing message from `(user_datoms, tx_id, predecessors, fingerprint,
+signer_pk)` and signs. (5) The `(TxSignature, TxSigner)` pair flows into
+`Store::transact` via `TransactContext.signing`.
+
+This is a REFINEMENT of ADR-FERR-023, not a contradiction. ADR-FERR-023's
+decision (Option B: per-transaction signing, explicit key, multi-agent support)
+is preserved. Only the mechanism layer changes: the signing key arrives at the
+Database callsite rather than at the Transaction builder.
+
+**Rejected**: Option A is impossible (tx_id unknown). Option B stores private
+keys in data structures. Option C adds closure complexity for no benefit over D.
+
+**Consequence**: `Transaction<Building>` does NOT gain any signing-related
+fields or methods. The `Database` gains `transact_signed(tx, &SigningKey)`.
+The unsigned `Database::transact(tx)` is unchanged. `Store::transact` receives
+pre-computed `(TxSignature, TxSigner)` via `TransactContext.signing`.
+
+**Source**: Session 015 analysis of the temporal impossibility in ADR-FERR-023's
+consequence. INV-FERR-051 Level 0 (signing message includes tx_id).
+
+---
+
+### ADR-FERR-032: TxId-Based Transaction Entity
+
+**Traces to**: INV-FERR-061 (predecessor Refs), INV-FERR-012 (content-addressed
+identity), C2 (content addressing)
+**Stage**: 0
+
+**Problem**: Transaction metadata datoms (tx/time, tx/agent, etc.) are grouped
+under a transaction entity. Currently:
+`EntityId::from_content(format!("tx-{epoch}-{agent_bytes}"))`. This is
+store-local: epoch is a per-store monotonic counter, not a universal identifier.
+Two stores at different epochs but with the same transaction cannot compute the
+same entity. Predecessor Refs from INV-FERR-061 need to point to the
+predecessor transaction's entity — but a store receiving a signed transaction
+from a peer cannot reconstruct the epoch-based entity without knowing the
+peer's epoch counter.
+
+**Options**:
+
+| Option | Description | Pros | Cons |
+|--------|-------------|------|------|
+| A: Epoch-based (current) | `EntityId::from_content("tx-{epoch}-{agent}")` | Simple. Unique within one store. | Store-local. Not recomputable by peers. Predecessor Refs don't work cross-store. |
+| B: TxId-based | `EntityId::from_content(canonical_bytes(tx_id))` | Universally deterministic. TxId IS the canonical identity. Peer-recomputable. | Requires canonical byte format for TxId. Changes existing entity computation. |
+
+**Decision**: **Option B: TxId-based**
+
+TxId is the transaction's canonical identity — a globally unique triple
+`(physical, logical, agent)` produced by the HLC (INV-FERR-015). Content-
+addressing from TxId (C2) produces EntityIds that are deterministic, peer-
+recomputable, and consistent across replicas. Predecessor Refs point to entities
+that ARE the predecessor transactions — navigating a Ref lands on ALL the
+predecessor's metadata datoms (tx/time, tx/agent, tx/signature, etc.).
+
+**Rejected**: Option A leaks a store-local counter (epoch) into the entity
+computation. Epoch is an implementation detail, not an identity. Two replicas
+with different epochs but the same TxId would compute different entities for
+the same transaction.
+
+**Consequence**: `create_tx_metadata` in `store/apply.rs` changes from
+`EntityId::from_content(format!("tx-{epoch}-{agent}"))` to
+`EntityId::from_content(&tx_id_canonical_bytes(tx_id))`. Predecessor Refs use
+the same computation. The `tx_entity_from_txid` function is shared by both
+metadata emission and predecessor construction.
+
+**Source**: Session 015 analysis of INV-FERR-061 predecessor Ref navigation.
+
+---
+
+### ADR-FERR-033: Store Fingerprint in Signing Message
+
+**Traces to**: INV-FERR-074 (homomorphic store fingerprint), INV-FERR-051
+(signing message), ADR-FERR-031 (Database-Layer Signing)
+**Stage**: 0
+
+**Problem**: The signing message binds datoms to their causal context (tx_id,
+predecessors, signer). But it does not bind to the EPISTEMIC STATE — the full
+store the signer was looking at. Without a state commitment, two replicas can
+have the same predecessors but different store contents (due to incomplete
+merge), and the divergence is undetectable until a query returns inconsistent
+results.
+
+**Options**:
+
+| Option | Description | Pros | Cons |
+|--------|-------------|------|------|
+| A: No state commitment | Signing message covers datoms + tx_id + predecessors + signer | Simpler. | Divergence undetectable. No convergence oracle. |
+| B: Include store fingerprint | Signing message adds 32-byte homomorphic fingerprint of pre-transaction store state | O(1) convergence verification. Fork detection. Checkpoint verification. Consensus-free state commitments. | 32 bytes larger signing message. Fingerprint must be maintained incrementally. |
+
+**Decision**: **Option B: Include store fingerprint**
+
+The homomorphic store fingerprint (INV-FERR-074, XOR of BLAKE3 of all datoms)
+is included in the signing message as the pre-transaction store state. This
+creates a CONSENSUS-FREE BLOCKCHAIN: CRDT algebraic convergence plus
+cryptographic state commitments, without consensus protocols.
+
+- O(1) convergence verification: compare 32-byte fingerprints
+- Fork detection: same predecessors + different fingerprints = divergence
+- Checkpoint verification: last transaction's fingerprint must match checkpoint
+- Federation health: track peer fingerprints over time for convergence monitoring
+
+The signing message format is FROZEN once Phase 4a.5 ships. Including the
+fingerprint now is the only opportunity; adding it later invalidates all
+existing signatures.
+
+Cost: one XOR per datom per transact (~1 cycle/datom), one 32-byte field in
+the signing message, one `[u8; 32]` field on Store.
+
+**Rejected**: Option A forecloses the consensus-free blockchain capability
+permanently after Phase 4a.5.
+
+**Consequence**: `Store` gains `fingerprint: [u8; 32]`. Maintained incrementally:
+`fingerprint ^= blake3::hash(&datom.canonical_bytes())` on each insert.
+`TransactContext` carries `store_fingerprint: [u8; 32]` (pre-transaction state).
+The signing message becomes:
+`blake3(sorted_user_datoms ∥ tx_id ∥ sorted_predecessor_entity_ids ∥ store_fingerprint ∥ signer_pk)`.
+
+**Source**: Session 015 analysis. No existing CRDT system combines algebraic
+convergence with cryptographic state commitments. INV-FERR-074 provides the
+hash; this ADR places it in the signing message.
+
+---
+
 ### INV-FERR-060: Store Identity Persistence
 
 **Traces to**: ADR-FERR-027, INV-FERR-051, INV-FERR-040 (provenance preservation),
@@ -6540,6 +6698,186 @@ pub struct SignedTransactionBundle {
 /// Provenance type: epistemic confidence lattice (INV-FERR-063).
 /// Total order: Hypothesized < Inferred < Derived < Observed.
 /// See INV-FERR-063 Level 2 for full definition.
+
+/// Context for Store::transact. Bundles all metadata produced by the
+/// Database layer (ADR-FERR-031). Pairs signature+signer as single Option
+/// to prevent the invalid state (signature without signer).
+pub struct TransactContext<'a> {
+    /// HLC-derived transaction ID (assigned by Database::transact).
+    pub tx_id: TxId,
+    /// Causal frontier at commit time (INV-FERR-061).
+    pub frontier: Option<&'a Frontier>,
+    /// Pre-computed Ed25519 signature + signer (INV-FERR-051).
+    /// None = unsigned transaction.
+    pub signing: Option<(TxSignature, TxSigner)>,
+    /// Epistemic confidence (INV-FERR-063). Default: Observed.
+    pub provenance: ProvenanceType,
+    /// Store fingerprint BEFORE this transaction (INV-FERR-074/ADR-FERR-033).
+    pub store_fingerprint: [u8; 32],
+}
+```
+
+---
+
+### INV-FERR-086: Canonical Datom Format Determinism
+
+**Traces to**: C2 (Content-Addressed Identity), INV-FERR-012 (EntityId = BLAKE3),
+INV-FERR-051 (signing message), INV-FERR-074 (store fingerprint), ADR-FERR-032
+(TxId-based entity), ADR-FERR-033 (fingerprint in signing message)
+**Referenced by**: INV-FERR-051 (signing_message uses canonical_bytes),
+INV-FERR-074 (fingerprint = XOR of BLAKE3(canonical_bytes))
+**Verification**: `V:PROP`, `V:KANI`, `V:TYPE`
+**Stage**: 0
+
+> The canonical datom format is the SYNTAX of `(P(D), ∪)`. It is the
+> deterministic, language-independent byte representation that makes the
+> algebra concrete, signing verifiable, fingerprints interoperable, and
+> independent implementations possible. Without it, C2 (content-addressed
+> identity) is underspecified — "BLAKE3 of content" requires defining what
+> "content" means in bytes.
+
+#### Level 0 (Algebraic Law)
+```
+Let canonical_bytes : Datom → Bytes be the canonical serialization function.
+
+∀ d₁, d₂ ∈ Datom:
+  d₁ = d₂  ⟺  canonical_bytes(d₁) = canonical_bytes(d₂)
+  (determinism and injectivity)
+
+∀ implementations I₁, I₂ conforming to this spec:
+  canonical_bytes_I₁(d) = canonical_bytes_I₂(d)
+  (cross-implementation agreement)
+
+Proof: The format is a fixed-layout, tag-length-value encoding with no
+  alignment padding, no endianness ambiguity (all integers little-endian),
+  and no implementation-defined choices. Given identical field values,
+  identical bytes are produced by construction. Injectivity follows from
+  the tagged format: different field values produce different tag-length-
+  value sequences; same field values produce identical sequences.
+```
+
+#### Level 1 (State Invariant)
+The canonical byte representation of a datom is the foundation on which
+ALL content-addressing, signing, and fingerprinting computations rest.
+Every computation that hashes a datom — EntityId, signing message, store
+fingerprint — MUST use canonical_bytes to ensure determinism.
+
+Without a canonical format, each computation could use a different
+serialization (bincode, JSON, protobuf), producing different hashes for
+the same datom. Signatures computed with one serialization would not verify
+with another. Fingerprints would diverge across implementations. The
+consensus-free blockchain (ADR-FERR-033) would break.
+
+The canonical format also enables independent implementations. Any language
+that can compute BLAKE3 + Ed25519 + canonical_bytes can verify ferratomic
+proofs, check store fingerprints, and participate in federation. This
+transforms ferratomic from a Rust project into a universal proof certificate
+standard.
+
+#### Level 2 (Implementation Contract)
+```rust
+/// Canonical datom byte format v1 (INV-FERR-086).
+///
+/// Layout (no padding, no alignment, deterministic):
+///   entity:    [u8; 32]                    — EntityId bytes (BLAKE3 hash)
+///   attribute: u16-le length ++ UTF-8      — Attribute name
+///   value:     u8 tag ++ payload           — Tagged value (see below)
+///   tx:        u64-le ++ u32-le ++ [u8;16] — TxId (physical, logical, agent)
+///   op:        u8                          — 0x00 = Assert, 0x01 = Retract
+///
+/// Value tags:
+///   0x01 Keyword:  u16-le length ++ UTF-8
+///   0x02 String:   u32-le length ++ UTF-8
+///   0x03 Long:     i64-le
+///   0x04 Double:   f64-le (IEEE 754, NaN rejected by NonNanFloat)
+///   0x05 Bool:     u8 (0x00 = false, 0x01 = true)
+///   0x06 Instant:  i64-le (millis since epoch)
+///   0x07 Uuid:     [u8; 16]
+///   0x08 Bytes:    u32-le length ++ raw bytes
+///   0x09 Ref:      [u8; 32] (EntityId bytes)
+///   0x0A BigInt:   i128-le
+///   0x0B BigDec:   i128-le
+impl Datom {
+    pub fn canonical_bytes(&self) -> Vec<u8> {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(self.entity().as_bytes());     // 32 bytes
+        let attr = self.attribute().as_str().as_bytes();
+        buf.extend_from_slice(&(attr.len() as u16).to_le_bytes());
+        buf.extend_from_slice(attr);
+        buf.extend_from_slice(&value_canonical_bytes(self.value()));
+        buf.extend_from_slice(&tx_id_canonical_bytes(self.tx()));
+        buf.push(match self.op() {
+            Op::Assert => 0x00,
+            Op::Retract => 0x01,
+        });
+        buf
+    }
+}
+
+/// TxId canonical bytes: u64-le ++ u32-le ++ [u8; 16] = 28 bytes fixed.
+pub fn tx_id_canonical_bytes(tx_id: TxId) -> [u8; 28] {
+    let mut buf = [0u8; 28];
+    buf[0..8].copy_from_slice(&tx_id.physical().to_le_bytes());
+    buf[8..12].copy_from_slice(&tx_id.logical().to_le_bytes());
+    buf[12..28].copy_from_slice(tx_id.agent().as_bytes());
+    buf
+}
+
+#[kani::proof]
+#[kani::unwind(5)]
+fn canonical_deterministic() {
+    let d: Datom = kani::any();
+    let b1 = d.canonical_bytes();
+    let b2 = d.canonical_bytes();
+    assert_eq!(b1, b2);
+}
+```
+
+**Falsification**: Any datom `d` where `canonical_bytes(d)` produces different
+byte sequences across two invocations, or any pair `(d₁, d₂)` where `d₁ ≠ d₂`
+but `canonical_bytes(d₁) = canonical_bytes(d₂)` (collision). Also: any two
+conforming implementations producing different bytes for the same datom field
+values.
+
+**proptest strategy**:
+```rust
+proptest! {
+    #[test]
+    fn canonical_deterministic(datom in arb_datom()) {
+        let b1 = datom.canonical_bytes();
+        let b2 = datom.canonical_bytes();
+        prop_assert_eq!(b1, b2, "INV-FERR-086: canonical bytes must be deterministic");
+    }
+
+    #[test]
+    fn canonical_injective(
+        d1 in arb_datom(),
+        d2 in arb_datom(),
+    ) {
+        if d1 != d2 {
+            prop_assert_ne!(d1.canonical_bytes(), d2.canonical_bytes(),
+                "INV-FERR-086: different datoms must have different canonical bytes");
+        }
+    }
+}
+```
+
+**Lean theorem**:
+```lean
+/-- Canonical bytes are deterministic: same datom always produces same bytes.
+    In the Lean model, canonical_bytes is a pure function, so this is tautological. -/
+theorem canonical_deterministic (d : Datom) :
+    canonical_bytes d = canonical_bytes d := rfl
+
+/-- Canonical bytes are injective: different datoms produce different bytes.
+    Modeled as: if canonical bytes are equal, datoms are equal. -/
+theorem canonical_injective (d1 d2 : Datom)
+    (h : canonical_bytes d1 = canonical_bytes d2) :
+    d1 = d2 := by
+  -- Follows from the tagged format encoding each field uniquely.
+  -- The concrete proof requires modeling the byte layout; here we
+  -- axiomatize the injectivity property and verify it via proptest.
+  sorry -- Tracked: bead for Lean proof of INV-FERR-086 injectivity
 ```
 
 ---

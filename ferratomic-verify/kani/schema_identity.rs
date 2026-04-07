@@ -3,7 +3,7 @@
 //! Covers INV-FERR-009 and INV-FERR-012.
 
 use ferratom::{AgentId, Attribute, EntityId, Value};
-use ferratomic_core::{
+use ferratomic_db::{
     store::Store,
     writer::{Transaction, TxValidationError},
 };

@@ -2,7 +2,7 @@ use std::{collections::BTreeSet, sync::Arc};
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use ferratom::{Attribute, Datom, EntityId, Op, TxId, Value};
-use ferratomic_core::{merge::merge, store::Store};
+use ferratomic_db::{merge::merge, store::Store};
 
 const SCALE_INPUT_SIZES: [usize; 3] = [1_000, 10_000, 100_000];
 
@@ -48,7 +48,7 @@ fn build_shifted_store_ordmap(start: usize, count: usize) -> Store {
     let mut store = Store::genesis();
     for index in start..start + count {
         let tx =
-            ferratomic_core::writer::Transaction::new(ferratom::AgentId::from_bytes([0xBBu8; 16]))
+            ferratomic_db::writer::Transaction::new(ferratom::AgentId::from_bytes([0xBBu8; 16]))
                 .assert_datom(
                     doc_entity(index),
                     Attribute::from(DOC_ATTRIBUTE),

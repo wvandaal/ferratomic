@@ -5,7 +5,7 @@
 use std::collections::BTreeSet;
 
 use ferratom::Datom;
-use ferratomic_core::{merge::merge, store::Store};
+use ferratomic_db::{merge::merge, store::Store};
 
 use super::helpers::concrete_datom_set;
 #[cfg(not(kani))]

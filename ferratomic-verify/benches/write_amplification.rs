@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use ferratom::{AgentId, Attribute, Datom, EntityId, FerraError, Op, Schema, TxId, Value};
-use ferratomic_core::{
+use ferratomic_db::{
     db::Database,
     storage::wal_path,
     writer::{Committed, Transaction},

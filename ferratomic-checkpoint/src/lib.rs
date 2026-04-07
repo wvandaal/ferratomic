@@ -9,9 +9,9 @@
 //!
 //! Serialize functions accept raw components (datoms, schema, epoch, etc.)
 //! and return bytes. Deserialize functions return [`CheckpointData`] —
-//! a plain struct of raw components. The Store module (in ferratomic-core)
+//! a plain struct of raw components. The Store module (in ferratomic-db)
 //! reconstructs `Store` from `CheckpointData`. This avoids a circular
-//! dependency between ferratomic-checkpoint and ferratomic-core.
+//! dependency between ferratomic-checkpoint and ferratomic-db.
 //!
 //! ## Format dispatch
 //!
@@ -99,7 +99,7 @@ const MIN_FILE_SIZE: usize = HEADER_SIZE + HASH_SIZE;
 /// Raw checkpoint data — the contract between checkpoint and store crates.
 ///
 /// Used as both input (serialization) and output (deserialization).
-/// The Store module in ferratomic-core reconstructs a Store from this struct.
+/// The Store module in ferratomic-db reconstructs a Store from this struct.
 /// This design avoids a circular dependency between checkpoint and store crates.
 ///
 /// INV-FERR-013: All fields are preserved exactly through round-trip.

@@ -5,12 +5,12 @@
 //! INV-FERR-025 (index backend interchangeability), INV-FERR-027 (read latency),
 //! INV-FERR-071 (sorted-array index backend).
 //!
-//! Phase 4a: all tests passing against ferratomic-core implementation.
+//! Phase 4a: all tests passing against ferratomic-db implementation.
 
 use std::collections::BTreeSet;
 
 use ferratom::Datom;
-use ferratomic_core::{
+use ferratomic_db::{
     indexes::{
         AevtKey, AvetKey, EavtKey, IndexBackend, Indexes, SortedVecBackend, SortedVecIndexes,
         VaetKey,

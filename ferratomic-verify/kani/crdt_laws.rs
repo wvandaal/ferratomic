@@ -6,7 +6,7 @@
 use std::collections::BTreeSet;
 
 use ferratom::{AgentId, Attribute, Datom, EntityId, Value};
-use ferratomic_core::{merge::merge, store::Store, writer::Transaction};
+use ferratomic_db::{merge::merge, store::Store, writer::Transaction};
 
 use super::helpers::{concrete_datom, concrete_datom_set};
 #[cfg(not(kani))]

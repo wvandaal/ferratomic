@@ -6,7 +6,7 @@
 use std::{collections::BTreeSet, sync::Arc};
 
 use ferratom::{AgentId, Attribute, Datom, EntityId, Op, TxId, Value};
-use ferratomic_core::{
+use ferratomic_db::{
     indexes::{EavtKey, IndexBackend},
     store::Store,
     writer::Transaction,

@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use ferratom::{Attribute, Datom, EntityId, Op, TxId, Value};
-use ferratomic_core::topology::{AcceptAll, ReplicaFilter};
+use ferratomic_db::topology::{AcceptAll, ReplicaFilter};
 
 #[cfg(not(kani))]
 use super::kani;

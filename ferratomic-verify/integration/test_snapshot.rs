@@ -7,12 +7,12 @@
 //! INV-FERR-020 (transaction atomicity), INV-FERR-021 (backpressure),
 //! INV-FERR-025 (index backend trait), INV-FERR-029 (live resolution),
 //! INV-FERR-032 (live correctness).
-//! Phase 4a: all tests passing against ferratomic-core implementation.
+//! Phase 4a: all tests passing against ferratomic-db implementation.
 
 use std::sync::{Arc, Mutex};
 
 use ferratom::{AgentId, Attribute, EntityId, Value};
-use ferratomic_core::{
+use ferratomic_db::{
     db::Database,
     observer::{DatomObserver, Observer},
     store::Store,
@@ -663,7 +663,7 @@ fn inv_ferr_020_transaction_epoch_atomicity() {
 
 /// Assert that a `WriteLimiter` has exactly `expected` active guards.
 fn assert_limiter_count(
-    limiter: &ferratomic_core::backpressure::WriteLimiter,
+    limiter: &ferratomic_db::backpressure::WriteLimiter,
     expected: usize,
     context: &str,
 ) {
@@ -676,7 +676,7 @@ fn assert_limiter_count(
 /// release and re-acquire.
 #[test]
 fn inv_ferr_021_backpressure_integration() {
-    use ferratomic_core::backpressure::{BackpressurePolicy, WriteLimiter};
+    use ferratomic_db::backpressure::{BackpressurePolicy, WriteLimiter};
 
     let policy = BackpressurePolicy {
         max_concurrent_writes: 3,
@@ -737,7 +737,7 @@ fn corrupt_checkpoint_payload(path: &std::path::Path) {
 /// bd-n1i: error-path test for checkpoint corruption.
 #[test]
 fn test_inv_ferr_013_checkpoint_corruption() {
-    use ferratomic_core::checkpoint::{load_checkpoint, write_checkpoint};
+    use ferratomic_db::checkpoint::{load_checkpoint, write_checkpoint};
 
     let mut store = Store::genesis();
     let agent = AgentId::from_bytes([13u8; 16]);
@@ -798,7 +798,7 @@ fn build_index_test_datoms() -> Vec<ferratom::Datom> {
 
 /// Insert datoms into all four OrdMap index backends and verify cardinality.
 fn verify_ordmap_index_cardinality(datoms: &[ferratom::Datom]) {
-    use ferratomic_core::indexes::{AevtKey, AvetKey, EavtKey, IndexBackend, VaetKey};
+    use ferratomic_db::indexes::{AevtKey, AvetKey, EavtKey, IndexBackend, VaetKey};
     use im::OrdMap;
 
     let mut eavt: OrdMap<EavtKey, ferratom::Datom> = OrdMap::new();
@@ -1011,7 +1011,7 @@ fn compute_live_view(store: &Store) -> std::collections::BTreeSet<(EntityId, Att
 
 /// Compute the LIVE view from a Snapshot.
 fn compute_live_view_from_snapshot(
-    snap: &ferratomic_core::store::Snapshot,
+    snap: &ferratomic_db::store::Snapshot,
 ) -> std::collections::BTreeSet<(EntityId, Attribute, Value)> {
     let mut live = std::collections::BTreeSet::new();
     for datom in snap.datoms() {

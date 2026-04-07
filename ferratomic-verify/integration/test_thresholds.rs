@@ -10,7 +10,7 @@
 use std::{collections::BTreeSet, time::Instant};
 
 use ferratom::{AgentId, Attribute, Datom, EntityId, Op, TxId, Value};
-use ferratomic_core::{
+use ferratomic_db::{
     checkpoint::write_checkpoint,
     db::Database,
     indexes::{EavtKey, IndexBackend},

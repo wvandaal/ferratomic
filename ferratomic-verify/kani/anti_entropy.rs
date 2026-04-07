@@ -3,7 +3,7 @@
 //! Covers INV-FERR-022: NullAntiEntropy diff returns empty,
 //! apply_diff is a no-op.
 
-use ferratomic_core::{
+use ferratomic_db::{
     anti_entropy::{AntiEntropy, NullAntiEntropy},
     store::Store,
 };

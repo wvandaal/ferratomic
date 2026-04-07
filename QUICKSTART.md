@@ -1,53 +1,43 @@
 # Ferratomic — Quick Orientation
 
 **What**: Formally verified, distributed embedded datom database engine.
-**Why**: General-purpose storage foundation for any system built on the datom model.
-**Core property**: Store = (P(D), ∪) — G-Set CRDT semilattice. Writes never conflict.
-
-**Canonical spec**: `spec/` is the canonical specification.
-
-**Current state**: The workspace does NOT compile. Phase 3 (type definitions) will create
-type stubs that make Phase 2 tests compilable. Phase 4 implementation makes them pass.
+**Core property**: `Store = (P(D), U)` — G-Set CRDT semilattice. Writes never conflict.
+**Spec**: `spec/` — see `spec/README.md` for current invariant/ADR/NEG counts.
 
 ## Current Phase
 
-Phase 1 (Lean proofs) is COMPLETE. Phase 2 (tests) is COMPLETE for MVP scope (INV-FERR-001..024).
-Next: **Phase 3 (type definitions)**.
+Phases 0-3 COMPLETE. **Phase 4a (core implementation) approaching gate closure.**
+Gate chain: bd-7fub.22.10 (re-review) → bd-y1w5 (tag v0.4.0-gate) → bd-add (gate → unblocks 17 Phase 4b beads).
+Planned: 11-crate decomposition (bd-cly9) — ferratomic-core splits into 8 focused crates.
+
+| Phase | Status |
+|-------|--------|
+| 0: Specification | DONE |
+| 1: Lean proofs (0 sorry) | DONE |
+| 2: Tests (red phase) | DONE |
+| 3: Type definitions | DONE |
+| **4: Implementation** | **IN PROGRESS** |
+| 5: Integration | — |
 
 ## Where to Start
 
-1. Read `AGENTS.md` — guidelines, constraints, quality standards
-2. Read `docs/prompts/session-001-bootstrap.md` — your execution guide
+1. Read `AGENTS.md` — build commands, hard constraints, quality gates, crate map
+2. Read `GOALS.md` — value hierarchy, success criteria, defensive engineering standards (§6)
 3. Read `spec/README.md` — spec module index (load only what you need)
-
-Check project state: `br ready` (actionable tasks), `br list --status in_progress` (claimed work),
-`bv --robot-next` (top pick).
-
-## Crate Map
-
-```
-ferratom/           → Core types (Datom, EntityId, Value, Schema). ZERO deps.
-ferratomic-core/    → Engine (Store, Database, WAL, snapshots). Depends on ferratom.
-ferratomic-datalog/ → Query engine (Datalog). Depends on core.
-ferratomic-verify/  → Proofs + tests (Lean 4, Stateright, Kani, proptest).
-```
-
-## Build
-
-**CRITICAL**: Set `export CARGO_TARGET_DIR=/data/cargo-target` at session start.
-This is NOT auto-configured. Omitting it uses /tmp (RAM-backed, will fill up).
+4. Check project state:
 
 ```bash
-export CARGO_TARGET_DIR=/data/cargo-target
-cargo check --workspace
-cargo test --workspace
-cd ferratomic-verify/lean && lake build   # Lean proofs
+export CARGO_TARGET_DIR=/data/cargo-target  # CRITICAL — omitting fills /tmp
+br ready          # Actionable tasks (no blockers)
+bv --robot-next   # Top-priority pick with claim command
 ```
 
-## Phase Order (non-negotiable)
+## Key Documents
 
-```
-spec (DONE) → Lean proofs → tests (red) → types → implementation
-```
-
-No phase N+1 until phase N passes. No implementation until proofs + tests exist.
+| Document | What It Contains |
+|----------|-----------------|
+| `AGENTS.md` | Build commands, hard constraints, CI gates, code discipline, agentic rules |
+| `GOALS.md` | Purpose, value hierarchy, success criteria, defensive engineering standards (§6) |
+| `spec/README.md` | Spec module index (canonical invariant/ADR/NEG counts) |
+| `docs/prompts/lifecycle/` | One prompt per cognitive phase (17 prompts) |
+| `docs/design/` | Migration path, architectural influences, refinement chains |

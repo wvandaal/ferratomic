@@ -137,8 +137,8 @@ referenced.
 **Phase 4a Amendment: Write Serialization via Mutex**
 
 Phase 4a uses `std::sync::Mutex<()>` for write serialization instead of the
-WriterActor/mpsc/group-commit pattern described in the architecture document
-(FERRATOMIC_ARCHITECTURE.md §4). Both patterns satisfy INV-FERR-007 (write
+WriterActor/mpsc/group-commit pattern planned for Phase 4b
+(ADR-FERR-003). Both patterns satisfy INV-FERR-007 (write
 linearizability) and INV-FERR-008 (WAL fsync ordering):
 
 | Aspect | Mutex (Phase 4a) | WriterActor (Phase 4b+) |

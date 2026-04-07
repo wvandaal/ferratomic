@@ -17,7 +17,7 @@ fuzz_target!(|data: &[u8]| {
     // Crash oracle: deserializing arbitrary bytes must not panic.
     // Valid checkpoints return Ok; corrupted ones return Err.
     // Either outcome is acceptable. A panic is a bug.
-    let result = ferratomic_core::store::Store::from_checkpoint_bytes(data);
+    let result = ferratomic_db::store::Store::from_checkpoint_bytes(data);
 
     // If deserialization succeeds, the store is valid — no further
     // round-trip test here since serialize_checkpoint_bytes is pub(crate).

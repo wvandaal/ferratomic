@@ -11,6 +11,12 @@
 > See spec/07-refinement.md for the coupling invariant that connects
 > the Lean model to the Rust implementation.
 
+> **Staleness notice**: Code module references are current as of 2026-04-06.
+> Line numbers are intentionally omitted -- use module paths and function
+> names for navigation. The algebraic structure (refinement laws,
+> mid-predicates, proof obligations) is stable; the concrete data types
+> implementing the abstract operations evolve across phases.
+
 ---
 
 ## 1. Transaction Pipeline (`Database::transact`)
@@ -46,21 +52,24 @@ w: [valid(tx) /\ epoch = e /\ datoms = D /\ schema = S,
 ```
 w: [pre, post]
   sqsubseteq  {INV-FERR-021, INV-FERR-007}
-if try_lock(write_lock) ->
-    w: [pre /\ lock_held, post]
-[] ~try_lock(write_lock) ->
+if write_limiter.try_acquire() /\ try_lock(write_lock) ->
+    w: [pre /\ lock_held /\ tx_id = clock.tick(), post]
+[] ~write_limiter.try_acquire() \/ ~try_lock(write_lock) ->
     Err(Backpressure)
 fi
 
 Proof obligation:
-  pre => try_lock(write_lock) \/ ~try_lock(write_lock)
-  -- Trivially true: try_lock always returns one or the other.
-  -- INV-FERR-021: Backpressure is a typed error, not a block.
+  pre => (try_acquire /\ try_lock) \/ (~try_acquire \/ ~try_lock)
+  -- Trivially true: both arms are exhaustive.
+  -- INV-FERR-021: WriteLimiter pre-check prevents thundering herd on
+  --   the write Mutex. Backpressure is a typed error, not a block.
   -- INV-FERR-007: Lock ensures at most one writer, so epoch
   --   ordering is strict (no concurrent epoch assignment).
+  -- INV-FERR-015: HLC tick under the write lock produces a causally
+  --   ordered TxId passed to Store::transact.
 ```
 
-**Code**: `db.rs:277-280` — `self.write_lock.try_lock().map_err(|_| FerraError::Backpressure)`
+**Code**: `db/transact.rs` -- `WriteLimiter::try_acquire` + `acquire_write_lock_and_tick`
 
 ---
 
@@ -84,7 +93,7 @@ Proof obligation:
     maintained by the separation of mutation from publication.
 ```
 
-**Code**: `db.rs:284-286` — `Store::clone(&current)` + `new_store.transact(transaction)`
+**Code**: `db/transact.rs` -- `Store::clone(&current)` + `new_store.transact(transaction, tx_id)`
 
 ---
 
@@ -100,13 +109,14 @@ epoch: [epoch = e, epoch' = e + 1]
   -- Proof obligation: e < u64::MAX (epoch never overflows in practice;
   --   InvariantViolation error if it does).
 
--- Step 2b: Stamp datoms with real TxId
-stamped: [epoch' = e + 1 /\ tx.datoms = [d1..dn],
-          stamped = [d1[tx:=TxId(e+1, 0, agent)]..dn[tx:=TxId(e+1, 0, agent)]]]
-  -- INV-FERR-015: replaces placeholder TxId(0,0,0) with monotonically
-  --   increasing real TxId. The epoch component guarantees ordering.
-  -- Proof obligation: TxId::with_agent(e+1, 0, agent) > all previous TxIds
-  --   because e+1 > e and epoch is the dominant sort key in TxId::Ord.
+-- Step 2b: Stamp datoms with HLC-derived TxId
+stamped: [tx_id = clock.tick() /\ tx.datoms = [d1..dn],
+          stamped = [d1[tx:=tx_id]..dn[tx:=tx_id]]]
+  -- INV-FERR-015/016: replaces placeholder TxId(0,0,0) with the HLC-derived
+  --   tx_id passed from Database::transact (ticked under the write lock).
+  --   HLC monotonicity guarantees causal ordering across transactions.
+  -- Proof obligation: tx_id > all previous TxIds because HLC.tick() is
+  --   monotonic (INV-FERR-015) and causally consistent (INV-FERR-016).
 
 -- Step 2c: Create tx metadata datoms
 all_datoms: [stamped, all_datoms = stamped ++ [tx/time, tx/agent]]
@@ -121,18 +131,22 @@ schema: [all_datoms, schema' = evolve(schema, all_datoms)]
   --   (E, db/cardinality, _) triples and installs new attributes.
   -- Proof obligation: evolve is monotone (never removes attributes).
 
--- Step 2e: Insert into primary + indexes
+-- Step 2e: Promote, insert into primary + indexes, demote
 datoms, indexes: [all_datoms /\ schema',
                   datoms' = datoms union all_datoms
                   /\ indexes' = project(datoms')]
+  -- promote(): Positional -> OrdMap (OrdSet + SortedVecIndexes) on first write.
   -- INV-FERR-005: bijection maintained by inserting each datom into
-  --   both the primary OrdSet and all four index OrdSets.
+  --   both the primary OrdSet and all four SortedVecIndexes (sorted Vec backends).
   -- INV-FERR-003: duplicate insertion is a no-op (OrdSet semantics).
+  -- INV-FERR-029: live_apply maintains the causal LIVE lattice incrementally.
+  -- demote(): OrdMap -> Positional after transact for ns-level read performance
+  --   (INV-FERR-072). Rebuilds PositionalStore from OrdSet in O(n).
   -- Proof obligation: for each d in all_datoms:
   --   d in datoms' /\ d in eavt' /\ d in aevt' /\ d in vaet' /\ d in avet'
 ```
 
-**Code**: `store.rs:362-441` — the `Store::transact` method body.
+**Code**: `store/apply.rs` -- `Store::transact` (promote, stamp, insert, live_apply, demote).
 
 ---
 
@@ -162,7 +176,7 @@ Proof obligation:
   "fail-safe" property: failure modes preserve existing state.
 ```
 
-**Code**: `db.rs:296-303` (WAL), `db.rs:308` (ArcSwap store)
+**Code**: `db/transact.rs` -- `write_wal` (WAL append + fsync), `publish_and_check` (ArcSwap store)
 
 ---
 
@@ -184,7 +198,7 @@ Proof obligation (Morgan Law 1.3 / assignment):
   - NEG-FERR-004: no reader obtains a stale snapshot after publication.
 ```
 
-**Code**: `db.rs:308` — `self.current.store(Arc::new(new_store))`
+**Code**: `db/transact.rs` -- `publish_and_check` calls `self.current.store(Arc::new(new_store))`
 
 ---
 
@@ -254,7 +268,7 @@ Proof obligation:
   -- checkpoint epoch as the mid-predicate boundary.
 ```
 
-**Code**: `db.rs:142-167` — `Database::recover`
+**Code**: `db/recover.rs` -- `Database::recover`
 
 ---
 
@@ -262,11 +276,14 @@ Proof obligation:
 
 ```
 base: [valid(checkpoint), base_store = load(checkpoint)]
-  sqsubseteq  {INV-FERR-013}
+  sqsubseteq  {INV-FERR-013, ADR-FERR-010}
 -- Verify BLAKE3 hash (tamper detection)
--- Parse header (magic, version, epoch)
--- Deserialize JSON payload to (schema, genesis_agent, datoms)
--- Reconstruct Store via from_checkpoint (rebuilds indexes)
+-- Parse header: dispatch on magic bytes (V2 "CHKP" or V3 "CHK3")
+-- Deserialize bincode payload to (schema, genesis_agent, datoms)
+-- ADR-FERR-010: wire types (WireCheckpointPayload / V3PayloadRead)
+--   cross the trust boundary via into_trusted()
+-- Reconstruct Store via from_checkpoint / from_checkpoint_v3
+--   (V3 preserves pre-sorted datoms + LIVE bitvector)
 base_store := load_checkpoint(checkpoint_path)?
 
 Proof obligation (INV-FERR-013 — round-trip identity):
@@ -277,7 +294,7 @@ Proof obligation (INV-FERR-013 — round-trip identity):
     index bijection after reconstruction (INV-FERR-005).
 ```
 
-**Code**: `checkpoint.rs:157-183` — `load_checkpoint`
+**Code**: `checkpoint.rs` -- `load_checkpoint` (V2/V3 format dispatch)
 
 ---
 
@@ -285,14 +302,16 @@ Proof obligation (INV-FERR-013 — round-trip identity):
 
 ```
 replay: [base_store, store' = base_store |> entries_after(checkpoint_epoch)]
-  sqsubseteq  {INV-FERR-014, INV-FERR-008}
+  sqsubseteq  {INV-FERR-014, INV-FERR-008, ADR-FERR-010}
 var store := base_store;
 for entry in wal.recover()? {
     if entry.epoch > checkpoint_epoch {
-        let datoms = deserialize(entry.payload)?;
-        for datom in datoms {
-            store.insert(datom);  -- INV-FERR-004: monotonic growth
-        }
+        -- ADR-FERR-010: deserialize as WireDatom, convert via into_trusted()
+        let wire_datoms = bincode::deserialize(entry.payload)?;
+        let datoms = wire_datoms.map(WireDatom::into_trusted);
+        store.replay_entry(entry.epoch, &datoms)?;
+        -- replay_entry: inserts datoms, advances epoch, evolves schema
+        -- (INV-FERR-009: schema-defining datoms in WAL are re-installed)
     }
 }
 
@@ -304,13 +323,17 @@ Proof obligation:
       WAL frame (fsynced before epoch advance).
   (b) INV-FERR-014: wal.recover() truncates incomplete frames, so only
       fully-written entries are replayed. Incomplete = uncommitted.
-  (c) Recovered datoms carry real TxIds (stamped before WAL write),
-      so direct insertion produces identical state to original transact.
-  (d) INV-FERR-003: duplicate insertion is idempotent. If a datom from
+  (c) ADR-FERR-010: WireDatom -> into_trusted() crosses the trust boundary.
+      CRC was already verified by Wal::recover().
+  (d) Recovered datoms carry real TxIds (stamped before WAL write),
+      so replay_entry produces identical state to original transact.
+  (e) INV-FERR-003: duplicate insertion is idempotent. If a datom from
       the WAL is already in the checkpoint, re-insertion is a no-op.
+  (f) INV-FERR-009: replay_entry calls evolve_schema per entry, preventing
+      schema loss across crash recovery.
 ```
 
-**Code**: `db.rs:148-159` — WAL replay loop in `Database::recover`
+**Code**: `db/recover.rs` -- WAL replay loop in `Database::recover`
 
 ---
 
@@ -361,19 +384,28 @@ w: [true,
 
 ### Refinement Chain
 
-#### Step 0 -> 1: Set union via im::OrdSet (Law 1.3 with data refinement)
+#### Step 0 -> 1: Set union via 4-way repr match (Law 1.3 with data refinement)
 
 ```
 w: [true, result.datoms = A union B]
-  sqsubseteq  {INV-FERR-001, INV-FERR-002, INV-FERR-003, ADR-FERR-001}
-result.datoms := A.datoms.clone().union(B.datoms.clone())
+  sqsubseteq  {INV-FERR-001, INV-FERR-002, INV-FERR-003, INV-FERR-029, ADR-FERR-001}
+result := merge_repr(A.repr, B.repr)
+  -- 4-way match on (A.repr, B.repr):
+  --   (Positional, Positional) -> merge_positional(A, B)  [O(n+m) merge-sort]
+  --   (Positional, OrdMap) | (OrdMap, Positional) -> merge_sort_dedup [O(n+m)]
+  --   (OrdMap, OrdMap) -> merge_sort_dedup [O(n+m)]
+  -- Result is always Positional (cache-optimal read representation).
+result.live_causal := merge_causal(A.live_causal, B.live_causal)
+  -- INV-FERR-029: causal LIVE merge via per-key max(TxId). Lattice homomorphism:
+  --   merge_causal(LIVE(A), LIVE(B)) = LIVE(A union B)
 
 Proof obligation (data refinement — coupling invariant CI):
-  CI(Finset, OrdSet) => Finset.union(A, B) = to_finset(OrdSet.union(A, B))
-  -- im::OrdSet.union implements set union correctly.
-  -- INV-FERR-001: OrdSet.union is commutative (same elements either way).
-  -- INV-FERR-002: OrdSet.union is associative (structural sharing is order-independent).
-  -- INV-FERR-003: OrdSet.union is idempotent (inserting existing = no-op).
+  CI(Finset, PositionalStore) => Finset.union(A, B) = to_finset(merge_positional(A, B))
+  -- merge_positional and merge_sort_dedup both produce a sorted, deduplicated
+  --   Vec<Datom> that is semantically equivalent to set union.
+  -- INV-FERR-001: merge_sort_dedup is commutative (sorted merge, same elements).
+  -- INV-FERR-002: merge_sort_dedup is associative (order-independent).
+  -- INV-FERR-003: dedup ensures idempotency (duplicates removed).
 
 Algebraic properties inherited from set union:
   -- Commutativity: A union B = B union A [INV-FERR-001]
@@ -382,42 +414,52 @@ Algebraic properties inherited from set union:
   -- Monotonicity: A subset (A union B) [INV-FERR-004]
 ```
 
-**Code**: `store.rs:307-338` — `Store::from_merge`
+**Code**: `store/merge.rs` -- `Store::from_merge`, `merge_repr` (4-way match), `merge_causal`
 
-#### Step 1 -> 2: Rebuild indexes from merged primary (Law 3.3)
+#### Step 1 -> 2: Indexes intrinsic to PositionalStore (Law 3.3)
 
 ```
 result.indexes: [result.datoms, indexes' = project(result.datoms)]
-  sqsubseteq  {INV-FERR-005}
-result.indexes := Indexes::from_primary(&result.datoms)
+  sqsubseteq  {INV-FERR-005, INV-FERR-076}
+-- Indexes are intrinsic to PositionalStore: permutation arrays for each
+-- sort order (EAVT, AEVT, VAET, AVET) are lazily constructed on first access
+-- via OnceLock. No explicit Indexes::from_primary call.
+-- INV-FERR-076: positional representation preserves bijection by construction.
 
 Proof obligation:
-  Every datom in result.datoms appears in all four indexes.
-  No datom in any index is absent from result.datoms.
-  -- INV-FERR-005: bijection by construction (from_primary iterates
-  --   the primary set and inserts each datom into all indexes).
+  Every datom in result.datoms appears in all four permutation indexes.
+  No index entry references a position absent from result.datoms.
+  -- INV-FERR-005: bijection by construction (PositionalStore builds
+  --   permutation arrays from the canonical sorted datom slice).
 ```
 
-**Code**: `store.rs:329` — `Indexes::from_primary(&merged_datoms)`
+**Code**: `store/merge.rs` -- `merge_repr` returns `PositionalStore` (indexes are lazy permutation arrays)
 
-#### Step 2 -> 3: Schema merge + epoch max (Law 1.3)
+#### Step 2 -> 3: Schema merge + epoch max + genesis agent (Law 1.3)
 
 ```
 result.schema: [A.schema, B.schema,
                 result.schema = A.schema union B.schema]
 result.epoch:  [A.epoch, B.epoch,
                 result.epoch = max(A.epoch, B.epoch)]
+result.genesis_agent: [A.genesis_agent, B.genesis_agent,
+                       result.genesis_agent = min(A.genesis_agent, B.genesis_agent)]
   sqsubseteq  {INV-FERR-043, INV-FERR-007}
 
 Proof obligation:
-  -- INV-FERR-043: shared attributes must have identical definitions.
-  --   debug_assert! checks this at merge time.
+  -- INV-FERR-043: conflicting schema definitions (same attribute, different
+  --   type/cardinality) are resolved deterministically by keeping the
+  --   Ord-minimal definition: min(a,b) == min(b,a) preserves commutativity.
+  --   Every conflict is recorded as a SchemaConflict audit trail entry.
   -- INV-FERR-007: max epoch preserves the "most advanced" timeline.
   --   After merge, the epoch is at least as large as both inputs,
   --   so subsequent transact produces a strictly larger epoch.
+  -- HI-014: genesis_agent is min(a, b) -- deterministic, commutative.
+  -- INV-FERR-029: live_set is derived from the merged live_causal lattice.
 ```
 
-**Code**: `store.rs:317-326` — schema union + `max(a.epoch, b.epoch)`
+**Code**: `store/merge.rs` -- `merge_schemas` (Ord-minimal conflict resolution + SchemaConflict audit trail),
+`from_merge` (max epoch, min genesis_agent, derive_live_set)
 
 ---
 
@@ -437,17 +479,17 @@ Proof obligation:
 
 | Refinement Step | Invariants Used | Chain |
 |----------------|-----------------|-------|
-| Write serialization | INV-FERR-021, INV-FERR-007 | Transaction |
+| Write serialization (two-phase gate) | INV-FERR-021, INV-FERR-007, INV-FERR-015 | Transaction |
 | Mutation/publication separation | INV-FERR-006 | Transaction |
 | Epoch advance | INV-FERR-007 | Transaction |
-| TxId stamping | INV-FERR-015 | Transaction |
+| TxId stamping (HLC-derived) | INV-FERR-015, INV-FERR-016 | Transaction |
 | Tx metadata creation | INV-FERR-004 | Transaction |
 | Schema evolution | INV-FERR-009 | Transaction |
-| Index insertion | INV-FERR-005, INV-FERR-003 | Transaction |
+| Promote/insert/demote cycle | INV-FERR-005, INV-FERR-003, INV-FERR-029, INV-FERR-072 | Transaction |
 | WAL append + fsync | INV-FERR-008 | Transaction, Recovery |
 | Atomic swap | INV-FERR-006, NEG-FERR-004 | Transaction |
-| Checkpoint load | INV-FERR-013 | Recovery |
-| WAL replay iteration | INV-FERR-014, INV-FERR-008 | Recovery |
-| Datom set union | INV-FERR-001/002/003/004, ADR-FERR-001 | Merge |
-| Index rebuild | INV-FERR-005 | Merge |
-| Schema union + epoch max | INV-FERR-043, INV-FERR-007 | Merge |
+| Checkpoint load (V2/V3 dispatch) | INV-FERR-013, ADR-FERR-010 | Recovery |
+| WAL replay (replay_entry) | INV-FERR-014, INV-FERR-008, INV-FERR-009, ADR-FERR-010 | Recovery |
+| Datom set union (4-way repr match) | INV-FERR-001/002/003/004, INV-FERR-029, ADR-FERR-001 | Merge |
+| Indexes (PositionalStore intrinsic) | INV-FERR-005, INV-FERR-076 | Merge |
+| Schema union + epoch max + genesis_agent | INV-FERR-043, INV-FERR-007 | Merge |

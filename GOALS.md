@@ -379,6 +379,17 @@ Gate 10: cargo +nightly miri test (pure-logic subset)
 Gate 11: Coverage >= thresholds (no regression)
 ```
 
+**CI automation blueprint** (when pipeline is configured):
+
+1. Run Gates 1-3 in parallel (fmt, clippy permissive, clippy strict) as a fast-feedback stage (~15s).
+2. Run Gate 4 (tests) after Gates 1-3 pass.
+3. Run Gate 5 (cargo-deny) in parallel with Gate 4.
+4. Run Gate 9 (Lean proofs) in a separate job with `elan` and `lake` installed.
+5. Run Gate 10 (MIRI) as a nightly scheduled job (too slow for every commit).
+6. Run Gate 11 (coverage) after Gate 4 passes.
+7. Gates 6-8 are verified by grep-based checks that `#![forbid(unsafe_code)]` and `#![deny(missing_docs)]` attributes remain present in each `lib.rs` — defensive-in-depth beyond compiler enforcement.
+8. All gates block merge to `main`. No exceptions, no manual overrides.
+
 ### 6.9 Regression Discipline
 
 - **Every bug gets a regression test.** The test must fail before the fix and

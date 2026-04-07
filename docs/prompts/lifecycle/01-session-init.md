@@ -13,9 +13,10 @@
 Read these files in order. Stop when you can answer the checkpoint questions below.
 
 ```bash
-cat QUICKSTART.md          # 40 lines — project identity + phase order
-cat AGENTS.md              # Guidelines, constraints, quality standards
-cat spec/README.md         # Spec module index (7 files, 55 INV-FERR)
+cat QUICKSTART.md          # Project identity, current phase, key document pointers
+cat AGENTS.md              # Build commands, hard constraints, quality gates, crate map
+cat GOALS.md               # Value hierarchy, success criteria, defensive standards (§6)
+cat spec/README.md         # Spec module index (canonical INV/ADR/NEG counts)
 ```
 
 **Checkpoint** (answer all before proceeding):
@@ -25,6 +26,26 @@ cat spec/README.md         # Spec module index (7 files, 55 INV-FERR)
 4. Name 3 hard constraints (C1, C2, C4) from memory.
 
 If you cannot answer all four, re-read AGENTS.md sections "True North" and "Hard Constraints."
+
+---
+
+## Step 1.5: Staleness Check
+
+Verify that the documents you just read are consistent with the current project state.
+Stale docs are actively parasitic — they waste your context on wrong information.
+
+```bash
+# Compare QUICKSTART.md phase status against actual beads state
+bv --robot-next    # What does the project ACTUALLY say is next?
+
+# Check spec counts match spec/README.md (the single source of truth)
+head -6 spec/README.md   # Canonical INV/ADR/NEG counts
+```
+
+If QUICKSTART.md, AGENTS.md, or README.md contain stale phase status, wrong
+invariant counts, or outdated crate maps: **fix them NOW before proceeding.**
+This is not optional cleanup — stale agent-facing docs corrupt every subsequent
+agent's context. See Step 2 of 09-continuation.md for the canonical update protocol.
 
 ---
 

@@ -2,7 +2,7 @@
 //!
 //! These tests verify checkpoint serialization/deserialization using raw
 //! `CheckpointData` without depending on Store. Store-level roundtrip tests
-//! remain in ferratomic-core.
+//! remain in ferratomic-db.
 
 use std::sync::Arc;
 

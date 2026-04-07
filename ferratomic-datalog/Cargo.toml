@@ -9,7 +9,7 @@ description = "Datalog query engine for Ferratomic: parser, planner, evaluator, 
 # Algebraic role: HOMOMORPHISMS (structure-preserving maps from Store to QueryResult)
 [dependencies]
 ferratom = { path = "../ferratom" }
-ferratomic-core = { path = "../ferratomic-core" }
+ferratomic-db = { path = "../ferratomic-core" }
 serde = { workspace = true }
 
 [dev-dependencies]

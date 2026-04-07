@@ -364,7 +364,7 @@ pub const CATALOG: &[Invariant] = &[
         stateright_model: None,
         integration_test: Some("test_inv_ferr_023_forbid_unsafe_code"),
         type_level: Some(
-            "#![forbid(unsafe_code)] in ferratom, ferratom-clock, ferratomic-datalog, ferratomic-verify; ferratomic-core uses #![deny(unsafe_code)] with mmap.rs sole exception (ADR-FERR-020)",
+            "#![forbid(unsafe_code)] in ferratom, ferratom-clock, ferratomic-datalog, ferratomic-verify; ferratomic-db uses #![deny(unsafe_code)] with mmap.rs sole exception (ADR-FERR-020)",
         ),
     },
     Invariant {

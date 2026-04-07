@@ -77,7 +77,41 @@ CARGO_TARGET_DIR=/data/cargo-target cargo +nightly miri test
 
 All eleven must pass. If any fails, fix before continuing.
 
-### Step 4: Commit and Push
+### Step 4: Update Canonical Documents
+
+**Stale agent-facing docs are actively parasitic** — they waste every future
+agent's context on wrong information. Before committing, verify and update:
+
+```bash
+# 1. Check spec/README.md counts (the single source of truth)
+head -6 spec/README.md
+
+# 2. If you added/removed INV-FERR, ADR-FERR, or NEG-FERR:
+#    - Update the count in spec/README.md line 6
+#    - Update the module table in spec/README.md if new entries affect it
+#    - Do NOT update counts in QUICKSTART.md, AGENTS.md, or README.md —
+#      they should reference spec/README.md, not hardcode numbers
+
+# 3. If phase status changed (gate closed, new phase started):
+#    - Update QUICKSTART.md "Current Phase" section
+#    - Update AGENTS.md Phase Ordering table status column
+#    - Update README.md phase list
+
+# 4. If crate structure changed (new crates, renames):
+#    - Update AGENTS.md Crate Map
+#    - Update README.md Crate Map table
+#    - Update Cargo.toml [workspace] members
+
+# 5. If you added new design docs or lifecycle prompts:
+#    - Update docs/prompts/lifecycle/README.md
+#    - Update AGENTS.md Specification pointers
+```
+
+The rule: `spec/README.md` is the single source of truth for counts.
+`QUICKSTART.md` references it, never duplicates it. `AGENTS.md` and `README.md`
+may contain counts in their public-facing text but must be updated when they drift.
+
+### Step 5: Commit and Push
 
 ```bash
 git add -A
@@ -193,12 +227,16 @@ CARGO_TARGET_DIR=/data/cargo-target cargo clippy --workspace -- -D warnings && \
 CARGO_TARGET_DIR=/data/cargo-target cargo fmt --check && \
 CARGO_TARGET_DIR=/data/cargo-target cargo test --workspace
 
-# Step 4: Commit and push
+# Step 4: Update canonical docs (if counts/phase/crates changed)
+# e.g., head -6 spec/README.md  # verify counts
+# e.g., update QUICKSTART.md phase status if gate closed
+
+# Step 5: Commit and push
 git add -A
 git commit -m "feat: snapshot isolation + writer serialization (br-28, br-29)"
 git push origin main && git push origin main:master
 
-# Step 5: Output the continuation prompt (to stdout)
+# Step 6: Output the continuation prompt (to stdout)
 ```
 
 The successor agent receives the continuation prompt + `QUICKSTART.md` and is
@@ -209,6 +247,9 @@ The continuation prompt IS the handoff.
 
 ## Common Mistakes
 
+- **Forgetting to update canonical docs**: The #1 cause of stale QUICKSTART.md,
+  AGENTS.md, and README.md. If you changed invariant counts, phase status, or
+  crate structure, Step 4 is MANDATORY.
 - **Forgetting `br sync --flush-only`**: Beads state exists only in memory until flushed.
 - **Pushing code that doesn't compile**: Always run quality gates BEFORE commit.
 - **Vague stopping points**: "I was working on store.rs" is useless. "I finished

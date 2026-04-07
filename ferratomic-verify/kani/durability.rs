@@ -6,7 +6,7 @@
 use std::{collections::BTreeSet, sync::Arc};
 
 use ferratom::{AgentId, Attribute, Datom, EntityId, Value};
-use ferratomic_core::{store::Store, writer::Transaction};
+use ferratomic_db::{store::Store, writer::Transaction};
 
 use super::helpers::{concrete_datom, concrete_datom_set};
 #[cfg(not(kani))]
@@ -288,7 +288,7 @@ fn kani_inv_ferr_008_wal_fsync_ordering() {
 fn substrate_agnosticism_in_memory() {
     use std::io::Write;
 
-    use ferratomic_core::storage::{InMemoryBackend, StorageBackend};
+    use ferratomic_db::storage::{InMemoryBackend, StorageBackend};
 
     let mut store = Store::genesis();
     let tx = Transaction::new(AgentId::from_bytes([1u8; 16]))
@@ -343,12 +343,12 @@ fn substrate_agnosticism_in_memory() {
 // ---------------------------------------------------------------------------
 
 /// WAL frame overhead: magic(4) + version(2) + epoch(8) + length(4) + CRC(4) = 22 bytes.
-/// Cross-reference: `ferratomic-core::wal::HEADER_SIZE` (18) + `CRC_SIZE` (4) = 22.
+/// Cross-reference: `ferratomic-db::wal::HEADER_SIZE` (18) + `CRC_SIZE` (4) = 22.
 /// If the WAL frame format changes, this constant must be updated to match.
 ///
 /// bd-pu4t: This value also appears in the proptest doc comment at
 /// `ferratomic-verify/proptest/wal_properties.rs` (INV-FERR-026 test).
-/// Both must stay in sync with `ferratomic-core::wal::{HEADER_SIZE, CRC_SIZE}`.
+/// Both must stay in sync with `ferratomic-db::wal::{HEADER_SIZE, CRC_SIZE}`.
 const WAL_FRAME_OVERHEAD: usize = 22;
 
 /// INV-FERR-026: WAL write amplification <= 10x.

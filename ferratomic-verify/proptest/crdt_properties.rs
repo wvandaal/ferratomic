@@ -5,12 +5,12 @@
 //! INV-FERR-010 (convergence), INV-FERR-012 (content-addressed identity),
 //! INV-FERR-031 (genesis determinism).
 //!
-//! Phase 4a: all tests passing against ferratomic-core implementation.
+//! Phase 4a: all tests passing against ferratomic-db implementation.
 
 use std::collections::BTreeSet;
 
 use ferratom::{Datom, EntityId};
-use ferratomic_core::{merge::merge, store::Store};
+use ferratomic_db::{merge::merge, store::Store};
 use ferratomic_verify::generators::*;
 use proptest::prelude::*;
 
@@ -508,7 +508,7 @@ proptest! {
         let mut b = Store::genesis();
 
         // Store A: define "user/email" as String
-        let tx_a = ferratomic_core::writer::Transaction::new(AgentId::from_bytes([1u8; 16]))
+        let tx_a = ferratomic_db::writer::Transaction::new(AgentId::from_bytes([1u8; 16]))
             .assert_datom(
                 EntityId::from_content(format!("attr-email-{seed}").as_bytes()),
                 Attribute::from("db/ident"),
@@ -529,7 +529,7 @@ proptest! {
         a.transact_test(tx_a).expect("transact a ok");
 
         // Store B: define "user/email" as Keyword (conflicting type!)
-        let tx_b = ferratomic_core::writer::Transaction::new(AgentId::from_bytes([2u8; 16]))
+        let tx_b = ferratomic_db::writer::Transaction::new(AgentId::from_bytes([2u8; 16]))
             .assert_datom(
                 EntityId::from_content(format!("attr-email-b-{seed}").as_bytes()),
                 Attribute::from("db/ident"),

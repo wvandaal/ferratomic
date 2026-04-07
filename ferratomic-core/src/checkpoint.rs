@@ -7,7 +7,7 @@
 //!
 //! This module is a thin facade over `ferratomic_checkpoint`. It adapts
 //! the raw-data API (which accepts/returns `CheckpointData`) to the
-//! Store-aware API needed by ferratomic-core.
+//! Store-aware API needed by ferratomic-db.
 //!
 //! ## Format dispatch
 //!
