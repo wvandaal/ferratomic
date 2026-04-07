@@ -1,13 +1,14 @@
 //! WAL dedup Bloom filter for eliminating redundant writes (INV-FERR-084).
 //!
 //! Fixed 64 KB. Eliminates redundant WAL writes from bursty event sources.
-//! False positive rate ~0.1% at 100K entries (k=7 hash functions over
-//! 524,288 bits). Cleared on checkpoint to bound FP accumulation.
+//! False positive rate ~8% at 100K entries (k=4 hash functions over
+//! 524,288 bits, optimal k = m/n * ln2 ≈ 3.6). Cleared on checkpoint
+//! to bound FP accumulation.
 //!
-//! The Bloom is ADVISORY — the store's set semantics (INV-FERR-003) are
-//! the correctness guarantee. A false positive causes ONE datom to skip
-//! ONE WAL write; the datom will be durable after the next submission or
-//! checkpoint.
+//! The Bloom is ADVISORY — the caller (Database layer) must verify store
+//! membership before skipping a WAL write (INV-FERR-084 two-phase check).
+//! A false positive triggers a store membership check, not an unconditional
+//! skip.
 
 /// Bloom filter bits: 64 KB = 524,288 bits = 8,192 u64 words.
 const BLOOM_BITS: usize = 524_288;
@@ -15,16 +16,15 @@ const BLOOM_BITS: usize = 524_288;
 /// Number of u64 words in the bit array.
 const BLOOM_WORDS: usize = BLOOM_BITS / 64;
 
-/// Number of hash functions. k=7 gives ~0.1% FP rate at ~100K entries
-/// for m=524,288 bits (optimal k = (m/n) * ln2 ≈ 3.6 for 100K;
-/// k=7 is conservative, giving lower FP rate at the cost of slightly
-/// more hash probes per operation).
-const K: usize = 7;
+/// Number of hash functions. k=4 is near-optimal for m=524,288, n=100K
+/// (optimal k = (m/n) * ln2 ≈ 3.63). Theoretical FP rate:
+/// (1 - e^(-kn/m))^k ≈ 8.1% at 100K entries.
+const K: usize = 4;
 
 /// WAL dedup Bloom filter (INV-FERR-084).
 ///
 /// Fixed 64 KB. Detects duplicate datom content hashes in O(1) with
-/// ~0.1% false positive rate at 100K entries. Zero false negatives.
+/// ~8% false positive rate at 100K entries. Zero false negatives.
 ///
 /// Cleared on checkpoint (prevents unbounded FP accumulation).
 pub struct WalDedupBloom {
@@ -46,9 +46,10 @@ impl WalDedupBloom {
 
     /// Check if a content hash is probably already in the WAL.
     ///
-    /// False positive rate ~0.1% at 100K entries. Zero false negatives.
-    /// INV-FERR-084: safe to skip WAL write on `true` because the store's
-    /// set semantics (INV-FERR-003) guarantee idempotent re-insertion.
+    /// False positive rate ~8% at 100K entries. Zero false negatives.
+    /// INV-FERR-084: a `true` result triggers Phase 2 (store membership
+    /// check). Only skip the WAL write if BOTH phases confirm the datom
+    /// is already durable.
     #[inline]
     #[must_use]
     pub fn probably_contains(&self, hash: &[u8; 32]) -> bool {
@@ -142,6 +143,23 @@ fn hash_indices(hash: &[u8; 32]) -> [usize; K] {
 mod tests {
     use super::*;
 
+    /// Generate a test hash with uniform entropy via `SplitMix64` PRNG.
+    /// Produces 4 independent u64 values covering all 32 bytes, ensuring
+    /// h1 (bytes 0-7) and h2 (bytes 8-15) are well-distributed.
+    fn spread_hash(seed: u32) -> [u8; 32] {
+        let mut state = u64::from(seed);
+        let mut h = [0u8; 32];
+        for chunk in h.chunks_exact_mut(8) {
+            state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = state;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            z ^= z >> 31;
+            chunk.copy_from_slice(&z.to_le_bytes());
+        }
+        h
+    }
+
     #[test]
     fn test_inv_ferr_084_empty_bloom_contains_nothing() {
         let bloom = WalDedupBloom::new();
@@ -197,17 +215,13 @@ mod tests {
     #[test]
     fn test_inv_ferr_084_zero_false_negatives() {
         let mut bloom = WalDedupBloom::new();
-        // Insert 1000 distinct hashes, verify all are found.
+        // Insert 1000 distinct hashes with entropy in both h1 and h2 regions.
         for i in 0u16..1000 {
-            let mut hash = [0u8; 32];
-            hash[0] = (i >> 8) as u8;
-            hash[1] = (i & 0xFF) as u8;
+            let hash = spread_hash(u32::from(i));
             bloom.insert(&hash);
         }
         for i in 0u16..1000 {
-            let mut hash = [0u8; 32];
-            hash[0] = (i >> 8) as u8;
-            hash[1] = (i & 0xFF) as u8;
+            let hash = spread_hash(u32::from(i));
             assert!(
                 bloom.probably_contains(&hash),
                 "INV-FERR-084: hash {i} must be found (zero false negatives)"
@@ -228,26 +242,26 @@ mod tests {
     #[test]
     fn test_inv_ferr_084_false_positive_rate() {
         let mut bloom = WalDedupBloom::new();
-        // Insert 100K entries.
+        // Insert 100K entries with entropy spread across h1 AND h2 byte regions.
         for i in 0u32..100_000 {
-            let mut hash = [0u8; 32];
-            hash[0..4].copy_from_slice(&i.to_le_bytes());
+            let hash = spread_hash(i);
             bloom.insert(&hash);
         }
         // Check 100K ABSENT entries for false positives.
         let mut false_positives = 0u32;
         for i in 100_000u32..200_000 {
-            let mut hash = [0u8; 32];
-            hash[0..4].copy_from_slice(&i.to_le_bytes());
+            let hash = spread_hash(i);
             if bloom.probably_contains(&hash) {
                 false_positives += 1;
             }
         }
         let fp_rate = f64::from(false_positives) / 100_000.0;
+        // Theoretical FP rate for m=524288, k=4, n=100K: ~8.1%.
+        // Allow up to 15% to account for variance.
         assert!(
-            fp_rate < 0.01,
-            "INV-FERR-084: FP rate {fp_rate:.4} exceeds 1% threshold at 100K entries \
-             (expected ~0.1%, got {false_positives} FPs out of 100K probes)"
+            fp_rate < 0.15,
+            "INV-FERR-084: FP rate {fp_rate:.4} exceeds 15% threshold at 100K entries \
+             (expected ~8%, got {false_positives} FPs out of 100K probes)"
         );
     }
 }

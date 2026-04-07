@@ -44,9 +44,17 @@ impl ChunkFingerprints {
     ///
     /// Uses `Datom::content_hash()` (INV-FERR-012) for consistency with
     /// the store-level fingerprint (INV-FERR-074).
+    ///
+    /// # Panics
+    ///
+    /// Panics if `chunk_size` is zero or not a power of two (INV-FERR-079
+    /// Level 0: "C be the chunk size, a fixed power of 2").
     #[must_use]
     pub fn from_canonical(canonical: &[Datom], chunk_size: usize) -> Self {
-        debug_assert!(chunk_size > 0, "INV-FERR-079: chunk_size must be positive");
+        assert!(
+            chunk_size > 0 && chunk_size.is_power_of_two(),
+            "INV-FERR-079: chunk_size must be a positive power of 2, got {chunk_size}"
+        );
 
         let num_chunks = if canonical.is_empty() {
             0

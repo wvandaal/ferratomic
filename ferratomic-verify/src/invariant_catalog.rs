@@ -842,7 +842,7 @@ pub const CATALOG: &[Invariant] = &[
         id: "INV-FERR-074",
         name: "Homomorphic Store Fingerprint",
         stage: Stage::Stage1,
-        lean_theorem: Some("fingerprint_merge"),
+        lean_theorem: None, // fingerprint_merge not yet authored in Lean
         proptest_fn: Some("inv_ferr_074_fingerprint_deterministic, inv_ferr_074_fingerprint_commutative, inv_ferr_074_fingerprint_homomorphic_disjoint, inv_ferr_074_fingerprint_nondisjoint"),
         kani_harness: None,
         stateright_model: None,

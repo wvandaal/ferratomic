@@ -219,9 +219,11 @@ impl Store {
     /// 4. Update `live_causal`/`live_set` for new datoms only: O(K log M)
     fn splice_transact(&mut self, new_datoms: &[Datom]) {
         if let StoreRepr::Positional(ps) = &self.repr {
-            // 1. Sort new datoms into canonical EAVT order.
+            // 1. Sort + dedup new datoms into canonical EAVT order.
+            // dedup() required: merge_sort_dedup precondition is strictly sorted input.
             let mut sorted_new: Vec<Datom> = new_datoms.to_vec();
             sorted_new.sort_unstable();
+            sorted_new.dedup();
 
             // 2. Merge into existing canonical: O(N + K), cache-sequential.
             let merged = merge_sort_dedup(ps.datoms(), &sorted_new);
