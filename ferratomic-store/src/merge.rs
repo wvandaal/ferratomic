@@ -1,16 +1,23 @@
-//! Merge helpers for [`Store`] reconstruction.
+//! CRDT merge: set union of two datom stores.
 //!
-//! INV-FERR-001..003: merged stores are the set union of both inputs.
+//! INV-FERR-001 (commutativity), INV-FERR-002 (associativity),
+//! INV-FERR-003 (idempotency), INV-FERR-004 (monotonic growth).
 //! INV-FERR-007: merged stores preserve the maximum epoch.
 //! INV-FERR-009: merged stores preserve the union of both schemas.
-//! INV-FERR-010: merge convergence — SEC follows from 001+002+003.
+//! INV-FERR-010: merge convergence -- strong eventual consistency (SEC)
+//! follows from commutativity + associativity + idempotency. Any two
+//! replicas that have received the same set of updates will converge
+//! to identical state, regardless of delivery order.
+//!
+//! Merge is pure set union. No schema validation (C4).
+//! No datoms are added or removed beyond the union.
 
 use std::sync::Arc;
 
 use ferratom::{Attribute, AttributeDef, Datom, Schema};
+use ferratomic_positional::{merge_positional, merge_sort_dedup, PositionalStore};
 
-use super::{Store, StoreRepr};
-use crate::positional::{merge_positional, merge_sort_dedup, PositionalStore};
+use crate::{repr::StoreRepr, store::Store};
 
 /// INV-FERR-043: A deterministic schema conflict discovered during merge.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -28,6 +35,46 @@ struct SchemaMergeResult {
     schema: Schema,
     conflicts: Vec<SchemaConflict>,
 }
+
+// ---------------------------------------------------------------------------
+// Public merge facade
+// ---------------------------------------------------------------------------
+
+/// Merge two stores by set union (INV-FERR-001, INV-FERR-002, INV-FERR-003).
+///
+/// The result contains exactly the union of both datom sets.
+/// Commutative (INV-FERR-001), associative (INV-FERR-002), and
+/// idempotent (INV-FERR-003). Both input stores are preserved
+/// (INV-FERR-004: monotonic growth).
+///
+/// INV-FERR-010: this function is the mechanism by which strong eventual
+/// consistency is achieved. Because merge is commutative, associative,
+/// and idempotent, any two replicas that have received the same updates
+/// converge to identical state regardless of delivery order.
+///
+/// INV-FERR-009: schemas are unioned (all attributes from both stores).
+/// INV-FERR-007: epoch is `max(a.epoch, b.epoch)`.
+/// HI-014: genesis agent is `min(a.genesis_agent, b.genesis_agent)`.
+///
+/// INV-FERR-043: conflicting schema definitions (same attribute, different
+/// type/cardinality) are resolved deterministically by keeping the
+/// definition that sorts first. This preserves commutativity. A debug
+/// assertion fires to flag the conflict for diagnosis.
+///
+/// Currently infallible; returns `Result` for forward compatibility
+/// with stricter schema conflict policies.
+///
+/// # Errors
+///
+/// Currently always returns `Ok`. Future versions may return
+/// `FerraError::SchemaIncompatible` under stricter conflict policies.
+pub fn merge(a: &Store, b: &Store) -> Result<Store, ferratom::FerraError> {
+    Ok(Store::from_merge(a, b))
+}
+
+// ---------------------------------------------------------------------------
+// Store::from_merge
+// ---------------------------------------------------------------------------
 
 impl Store {
     /// Construct a store from merging two stores: union datoms, union schemas,
@@ -49,10 +96,10 @@ impl Store {
         let epoch = a.epoch.max(b.epoch);
         let genesis_agent = std::cmp::min(a.genesis_agent, b.genesis_agent);
         // INV-FERR-029: merge causal LIVE lattices via per-key max(TxId).
-        // O(min(|L_A|, |L_B|)) via im::OrdMap union — replaces the O(N) full
+        // O(min(|L_A|, |L_B|)) via im::OrdMap union -- replaces the O(N) full
         // rebuild through build_live_causal(datoms.iter()).
         let live_causal = merge_causal(&a.live_causal, &b.live_causal);
-        let live_set = super::query::derive_live_set(&live_causal);
+        let live_set = crate::query::derive_live_set(&live_causal);
 
         Self {
             repr: StoreRepr::Positional(Arc::new(positional)),
@@ -68,8 +115,8 @@ impl Store {
 
 /// bd-h2fz: 4-way match on repr variants for merge.
 ///
-/// Both `Positional` → `merge_positional` (optimal: merge-sort on contiguous arrays).
-/// Mixed or both `OrdMap` → O(n+m) merge-sort on sorted inputs.
+/// Both `Positional` -> `merge_positional` (optimal: merge-sort on contiguous arrays).
+/// Mixed or both `OrdMap` -> O(n+m) merge-sort on sorted inputs.
 /// The result is always `Positional`.
 ///
 /// bd-9ecq: mixed-variant merge now uses `merge_sort_dedup` for O(n+m)
@@ -77,7 +124,7 @@ impl Store {
 ///
 /// **Coupling (DEFECT-017)**: Both `PositionalStore::datoms()` and
 /// `OrdSet::iter()` yield datoms in `Datom::Ord` order, which is EAVT
-/// (entity → attribute → value → tx → op) because `Ord` is derived from
+/// (entity -> attribute -> value -> tx -> op) because `Ord` is derived from
 /// the struct field declaration order. `merge_sort_dedup` relies on this.
 /// See `Datom` doc comment for the field-order invariant.
 fn merge_repr(a: &StoreRepr, b: &StoreRepr) -> PositionalStore {
@@ -109,14 +156,14 @@ fn merge_repr(a: &StoreRepr, b: &StoreRepr) -> PositionalStore {
 /// operation (commutative, associative, idempotent) and a lattice
 /// homomorphism over datom set union:
 ///
-///   `merge_causal(LIVE(A), LIVE(B)) = LIVE(A ∪ B)`
+///   `merge_causal(LIVE(A), LIVE(B)) = LIVE(A union B)`
 ///
 /// Complexity: `O(m log n)` where `m = min(|L_A|, |L_B|)`, `n = max(|L_A|, |L_B|)`,
 /// via `im::OrdMap::union_with` (iterates smaller map, inserts into larger).
 fn merge_causal(
-    a: &super::query::LiveCausal,
-    b: &super::query::LiveCausal,
-) -> super::query::LiveCausal {
+    a: &crate::query::LiveCausal,
+    b: &crate::query::LiveCausal,
+) -> crate::query::LiveCausal {
     a.clone().union_with(b.clone(), |entries_a, entries_b| {
         entries_a.union_with(entries_b, std::cmp::max)
     })

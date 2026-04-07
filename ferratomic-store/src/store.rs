@@ -1,4 +1,4 @@
-//! `store` -- the G-Set CRDT semilattice: `Store = (P(D), union)`.
+//! `Store` -- the G-Set CRDT semilattice: `Store = (P(D), union)`.
 //!
 //! The `Store` is the core data structure of Ferratomic. It holds an
 //! append-only, content-addressed set of datoms with four secondary
@@ -20,61 +20,21 @@
 //! The primary store uses `im::OrdSet<Datom>` (ADR-FERR-001). Snapshots
 //! are O(1) via structural sharing -- `clone()` shares the tree spine.
 //! Four secondary indexes (EAVT, AEVT, VAET, AVET) are maintained in
-//! bijection with the primary set via [`SortedVecIndexes`](crate::indexes::SortedVecIndexes).
+//! bijection with the primary set via [`SortedVecIndexes`](ferratomic_index::SortedVecIndexes).
 //! INV-FERR-005 is satisfied by updating all indexes on every insert.
-//!
-//! ## Module layout
-//!
-//! - [`apply`] -- transaction application, WAL replay, merge construction.
-//! - [`checkpoint`] -- byte serialization convenience methods.
-//! - [`merge`] -- merge-specific reconstruction helpers.
-//! - [`query`] -- snapshot and LIVE-set query helpers.
-
-mod apply;
-mod checkpoint;
-pub(crate) mod iter;
-mod merge;
-mod query;
-
-#[cfg(test)]
-mod tests;
 
 use std::{collections::BTreeSet, sync::Arc};
 
 use ferratom::{AgentId, Attribute, AttributeDef, Datom, EntityId, Op, Schema, TxId, Value};
+use ferratomic_index::SortedVecIndexes;
+use ferratomic_positional::PositionalStore;
 use im::{OrdMap, OrdSet};
 
-pub use self::{
+use crate::{
     iter::{DatomIter, DatomSetView, SnapshotDatoms},
     merge::SchemaConflict,
+    repr::StoreRepr,
 };
-use crate::{indexes::SortedVecIndexes, positional::PositionalStore};
-
-// ---------------------------------------------------------------------------
-// StoreRepr — dual representation (bd-h2fz)
-// ---------------------------------------------------------------------------
-
-/// Internal representation of the datom set and indexes.
-///
-/// Cold-start-loaded stores begin as `Positional` (contiguous arrays,
-/// cache-optimal, ~6x less memory). On first write, `Store::promote()`
-/// converts to `OrdMap` (persistent tree, O(log n) insert).
-///
-/// INV-FERR-076: positional representation preserves all algebraic
-/// properties. Promotion is semantics-preserving.
-#[derive(Debug, Clone)]
-pub(crate) enum StoreRepr {
-    /// Cold-start representation: contiguous arrays with permutation indexes.
-    /// Wrapped in `Arc` for O(1) clone (snapshot creation, merge input).
-    Positional(Arc<PositionalStore>),
-    /// Write-active representation: persistent balanced tree with `SortedVec` indexes.
-    OrdMap {
-        /// Primary datom set (ADR-FERR-001).
-        datoms: OrdSet<Datom>,
-        /// Secondary indexes maintained in bijection with primary set.
-        indexes: SortedVecIndexes,
-    },
-}
 
 // ---------------------------------------------------------------------------
 // TxReceipt
@@ -126,9 +86,9 @@ impl TxReceipt {
 #[derive(Debug, Clone)]
 pub struct Snapshot {
     /// Datom set at snapshot time, dispatched by representation.
-    datoms: SnapshotDatoms,
+    pub(crate) datoms: SnapshotDatoms,
     /// Epoch at the time the snapshot was taken.
-    epoch: u64,
+    pub(crate) epoch: u64,
 }
 
 // ---------------------------------------------------------------------------
@@ -198,8 +158,8 @@ impl Store {
     #[must_use]
     pub fn from_datoms(datoms: BTreeSet<Datom>) -> Self {
         let positional = PositionalStore::from_datoms(datoms.into_iter());
-        let live_causal = query::build_live_causal(positional.datoms().iter());
-        let live_set = query::derive_live_set(&live_causal);
+        let live_causal = crate::query::build_live_causal(positional.datoms().iter());
+        let live_set = crate::query::derive_live_set(&live_causal);
         Self {
             repr: StoreRepr::Positional(Arc::new(positional)),
             schema: Schema::empty(),
@@ -230,8 +190,8 @@ impl Store {
             schema.define(Attribute::from(name.as_str()), def);
         }
         let positional = PositionalStore::from_datoms(datoms.into_iter());
-        let live_causal = query::build_live_causal(positional.datoms().iter());
-        let live_set = query::derive_live_set(&live_causal);
+        let live_causal = crate::query::build_live_causal(positional.datoms().iter());
+        let live_set = crate::query::derive_live_set(&live_causal);
         Self {
             repr: StoreRepr::Positional(Arc::new(positional)),
             schema,
@@ -270,8 +230,8 @@ impl Store {
             schema.define(Attribute::from(name.as_str()), def);
         }
         let positional = PositionalStore::from_sorted_with_live(sorted_datoms, live_bits)?;
-        let live_causal = query::build_live_causal(positional.datoms().iter());
-        let live_set = query::derive_live_set(&live_causal);
+        let live_causal = crate::query::build_live_causal(positional.datoms().iter());
+        let live_set = crate::query::derive_live_set(&live_causal);
         Ok(Self {
             repr: StoreRepr::Positional(Arc::new(positional)),
             schema,
@@ -361,7 +321,7 @@ impl Store {
     /// encoded as permutation arrays, not `SortedVecIndexes`). Returns
     /// `Some` for `OrdMap` stores.
     ///
-    /// bd-5zc4: Yoneda index fusion — returns `SortedVecIndexes` instead
+    /// bd-5zc4: Yoneda index fusion -- returns `SortedVecIndexes` instead
     /// of `Indexes` (`OrdMap` backend).
     #[must_use]
     pub fn indexes(&self) -> Option<&SortedVecIndexes> {
@@ -391,7 +351,7 @@ impl Store {
     /// `Some`). No-op if already `OrdMap`.
     ///
     /// O(n log n) for `OrdSet` construction + O(n log n) for `SortedVecIndexes`.
-    /// bd-5zc4: Yoneda index fusion — uses `SortedVecIndexes` instead of
+    /// bd-5zc4: Yoneda index fusion -- uses `SortedVecIndexes` instead of
     /// `Indexes` (`OrdMap` backend). `sort_all()` is called here to ensure
     /// the indexes are query-ready immediately after promotion.
     pub fn promote(&mut self) {
@@ -430,7 +390,7 @@ impl Store {
     /// this method to ensure all four backends are in sorted order for
     /// binary-search lookups. No-op for `Positional` stores.
     ///
-    /// Note: `transact()` does not need this — it calls `promote()` (which
+    /// Note: `transact()` does not need this -- it calls `promote()` (which
     /// sorts) then `demote()`. This is only needed for direct `insert()` callers.
     pub fn ensure_indexes_sorted(&mut self) {
         if let StoreRepr::OrdMap { indexes, .. } = &mut self.repr {
@@ -442,7 +402,7 @@ impl Store {
     ///
     /// Returns `Some` for `Positional` stores (fingerprint computed in
     /// `from_datoms`). Returns `None` for `OrdMap` stores (fingerprint
-    /// is not maintained incrementally during transact — demotion
+    /// is not maintained incrementally during transact -- demotion
     /// recomputes it).
     #[must_use]
     pub fn fingerprint(&self) -> Option<&[u8; 32]> {
@@ -525,29 +485,5 @@ impl Store {
     }
 }
 
-/// Proof-friendly card-one LIVE selection hook.
-///
-/// Exposes the exact selection kernel used by `Store::live_resolve` without
-/// requiring proof harnesses to construct a full store. This is a verification
-/// boundary only; production callers use `Store::live_resolve`.
-#[cfg(any(test, feature = "test-utils"))]
-#[must_use]
-pub fn select_latest_live_value_for_test(entries: &[(Value, (TxId, Op))]) -> Option<&Value> {
-    query::select_latest_live_value_for_test(entries)
-}
-
-// ---------------------------------------------------------------------------
-// Trait implementations
-// ---------------------------------------------------------------------------
-
-/// INV-FERR-001..003: Store is a join-semilattice under set union.
-/// The merge operation is commutative, associative, and idempotent.
-impl ferratom::traits::Semilattice for Store {
-    fn merge(&self, other: &Self) -> Result<Self, ferratom::FerraError> {
-        Ok(Store::from_merge(self, other))
-    }
-}
-
-// Note: ContentAddressed for Datom must be impl'd in ferratom crate
-// (orphan rule). See ferratom/src/datom.rs -- Datom::content_hash()
-// already provides the INV-FERR-012 contract.
+// Trait implementations and test-utils live in lib.rs (re-exports)
+// to keep this file under the 500 LOC Gate 8 limit.

@@ -7,7 +7,11 @@
 use ferratom::{Attribute, Datom, EntityId, Op, TxId, Value};
 use im::{OrdMap, OrdSet};
 
-use super::{iter::DatomIter, Snapshot, SnapshotDatoms, Store, StoreRepr};
+use crate::{
+    iter::{DatomIter, SnapshotDatoms},
+    repr::StoreRepr,
+    store::{Snapshot, Store},
+};
 
 /// Type alias for the causal OR-Set LIVE lattice.
 ///
@@ -89,7 +93,7 @@ impl Store {
 /// INV-FERR-029: Used during cold start, checkpoint load, and merge.
 /// For each (entity, attribute, value) triple, retains the event with the
 /// highest `TxId`. Dead values (`Op::Retract`) are tracked for merge correctness.
-pub(super) fn build_live_causal<'a>(datoms: impl Iterator<Item = &'a Datom>) -> LiveCausal {
+pub(crate) fn build_live_causal<'a>(datoms: impl Iterator<Item = &'a Datom>) -> LiveCausal {
     let mut causal: LiveCausal = OrdMap::new();
     for datom in datoms {
         let key = (datom.entity(), datom.attribute().clone());
@@ -109,7 +113,7 @@ pub(super) fn build_live_causal<'a>(datoms: impl Iterator<Item = &'a Datom>) -> 
 ///
 /// INV-FERR-029: Projects the causal map to only values with `Op::Assert`,
 /// producing the set of non-retracted values per (entity, attribute).
-pub(super) fn derive_live_set(causal: &LiveCausal) -> OrdMap<(EntityId, Attribute), OrdSet<Value>> {
+pub(crate) fn derive_live_set(causal: &LiveCausal) -> OrdMap<(EntityId, Attribute), OrdSet<Value>> {
     let mut live: OrdMap<(EntityId, Attribute), OrdSet<Value>> = OrdMap::new();
     for (key, entries) in causal {
         let mut values = OrdSet::new();
@@ -161,9 +165,9 @@ mod tests {
     use std::collections::BTreeSet;
 
     use ferratom::{AgentId, Attribute, Datom, EntityId, Op, TxId, Value};
+    use ferratomic_tx::Transaction;
 
-    use super::Store;
-    use crate::writer::Transaction;
+    use crate::store::Store;
 
     #[test]
     fn test_inv_ferr_032_lww_by_tx_id_not_value_ord() {

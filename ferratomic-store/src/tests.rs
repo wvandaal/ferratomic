@@ -2,8 +2,10 @@ use std::{collections::BTreeSet, sync::Arc};
 
 use ferratom::{Attribute, Cardinality, Datom, EntityId, Op, TxId, Value, ValueType};
 
-use super::*;
-use crate::schema_evolution::{parse_cardinality, parse_value_type};
+use crate::{
+    schema_evolution::{parse_cardinality, parse_value_type},
+    store::Store,
+};
 
 /// Helper: build a sample datom for testing.
 fn sample_datom(seed: &str) -> Datom {
@@ -185,8 +187,7 @@ fn test_parse_cardinality_variants() {
 #[test]
 fn test_inv_ferr_072_demote_after_transact() {
     use ferratom::AgentId;
-
-    use crate::writer::Transaction;
+    use ferratomic_tx::Transaction;
 
     let mut store = Store::genesis();
     let agent = AgentId::from_bytes([1u8; 16]);
@@ -430,7 +431,7 @@ fn test_inv_ferr_074_fingerprint_nonempty() {
     );
 }
 
-/// bd-83j4: `Store::fingerprint()` dispatch — `Some` for Positional, `None` for `OrdMap`.
+/// bd-83j4: `Store::fingerprint()` dispatch -- `Some` for Positional, `None` for `OrdMap`.
 #[test]
 fn test_inv_ferr_074_fingerprint_dispatch() {
     let mut datoms = BTreeSet::new();

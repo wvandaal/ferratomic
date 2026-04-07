@@ -4,23 +4,26 @@
 //! INV-FERR-005: Secondary indexes updated in lockstep with primary set.
 //! INV-FERR-007: Epoch strictly monotonically increasing on each transact.
 //! INV-FERR-009: Schema evolution via schema-defining datoms.
-//! INV-FERR-010: Merge convergence — `from_merge` constructs SEC-convergent state.
+//! INV-FERR-010: Merge convergence -- `from_merge` constructs SEC-convergent state.
 //! INV-FERR-014: WAL replay restores last committed state.
 //!
 //! This module contains all mutating operations on the [`Store`]:
-//! - [`Store::insert`] — single-datom insertion (used by convergence tests).
-//! - [`Store::replay_entry`] — WAL replay during crash recovery.
-//! - [`Store::from_merge`] — construct a merged store from two inputs.
-//! - [`Store::transact`] — apply a committed transaction (epoch advance,
+//! - [`Store::insert`] -- single-datom insertion (used by convergence tests).
+//! - [`Store::replay_entry`] -- WAL replay during crash recovery.
+//! - [`Store::from_merge`] -- construct a merged store from two inputs.
+//! - [`Store::transact`] -- apply a committed transaction (epoch advance,
 //!   `TxId` stamping, schema evolution, index maintenance).
 //!
 //! Private helpers [`stamp_datoms`] and [`create_tx_metadata`] live here
 //! because they are only called by [`Store::transact`].
 
 use ferratom::{AgentId, Attribute, Datom, FerraError};
+use ferratomic_tx::{Committed, Transaction};
 
-use super::{Store, TxReceipt};
-use crate::writer::{Committed, Transaction};
+use crate::{
+    repr::StoreRepr,
+    store::{Store, TxReceipt},
+};
 
 // ---------------------------------------------------------------------------
 // Mutating methods on Store
@@ -38,13 +41,13 @@ impl Store {
     ///
     /// Used by convergence tests that build stores by individual insertion.
     pub fn insert(&mut self, datom: &Datom) {
-        // bd-h2fz: lazy promotion — Positional → OrdMap on first write.
+        // bd-h2fz: lazy promotion -- Positional -> OrdMap on first write.
         self.promote();
         // INV-FERR-005: primary first, then indexes. If a panic occurs
         // between the two operations, the datom is in primary but missing
         // from indexes (recoverable by rebuild) rather than a phantom
         // index entry (no primary counterpart).
-        if let super::StoreRepr::OrdMap { datoms, indexes } = &mut self.repr {
+        if let StoreRepr::OrdMap { datoms, indexes } = &mut self.repr {
             datoms.insert(datom.clone());
             indexes.insert(datom);
         }
@@ -92,7 +95,7 @@ impl Store {
     /// transactions, but defended against per NEG-FERR-001).
     /// HI-011: `tx_id` is provided by the caller (`Database::transact` ticks
     /// the `HybridClock` under the write lock). This replaces the previous
-    /// `TxId::with_agent(epoch, 0, agent)` which used epoch-as-physical —
+    /// `TxId::with_agent(epoch, 0, agent)` which used epoch-as-physical --
     /// breaking INV-FERR-015 (HLC monotonicity) and INV-FERR-016 (causality).
     pub fn transact(
         &mut self,
@@ -125,13 +128,13 @@ impl Store {
         // INV-FERR-009: evolve schema from schema-defining datoms.
         crate::schema_evolution::evolve_schema(&mut self.schema, &all_datoms)?;
 
-        // bd-h2fz: lazy promotion — Positional → OrdMap on first write.
+        // bd-h2fz: lazy promotion -- Positional -> OrdMap on first write.
         self.promote();
         // INV-FERR-004/005: insert into primary then indexes (bd-4pg).
         // MI-007: Insert from references, then move vec into receipt
         // (eliminates receipt_datoms.clone() double-clone).
         for datom in &all_datoms {
-            if let super::StoreRepr::OrdMap { datoms, indexes } = &mut self.repr {
+            if let StoreRepr::OrdMap { datoms, indexes } = &mut self.repr {
                 datoms.insert(datom.clone());
                 indexes.insert(datom);
             }
@@ -167,7 +170,7 @@ impl Store {
         self.promote();
         for (epoch, datoms) in entries {
             for datom in datoms {
-                if let super::StoreRepr::OrdMap {
+                if let StoreRepr::OrdMap {
                     datoms: d,
                     indexes: idx,
                 } = &mut self.repr
@@ -236,7 +239,7 @@ fn create_tx_metadata(epoch: u64, agent: AgentId, tx_id: ferratom::TxId) -> Vec<
     tx_content.extend_from_slice(agent.as_bytes());
     let tx_entity = ferratom::EntityId::from_content(&tx_content);
     // Derive tx wall-clock from HLC physical component (deterministic,
-    // no SystemTime dependency).  Overflow from u64→i64 is safe: the
+    // no SystemTime dependency).  Overflow from u64->i64 is safe: the
     // fallback i64::MAX is ~292 billion years after epoch.
     let now_ms = i64::try_from(tx_id.physical()).unwrap_or(i64::MAX);
 
@@ -267,6 +270,7 @@ mod tests {
     use std::{collections::BTreeSet, sync::Arc};
 
     use ferratom::{AgentId, Attribute, EntityId, Op, TxId, Value};
+    use ferratomic_tx::Transaction;
 
     use super::*;
 
@@ -334,7 +338,7 @@ mod tests {
     /// Regression: bd-10p -- `merge()` must take max epoch.
     #[test]
     fn test_bug_bd_10p_merge_preserves_epoch() {
-        use crate::{merge::merge, writer::Transaction};
+        use crate::merge::merge;
 
         let mut a = Store::genesis();
         // Transact to advance epoch to 1
@@ -362,8 +366,6 @@ mod tests {
     /// Regression: bd-1n6 -- `transact()` must stamp real `TxId`, not placeholder.
     #[test]
     fn test_bug_bd_1n6_transact_stamps_real_tx_id() {
-        use crate::writer::Transaction;
-
         let mut store = Store::genesis();
         let agent = AgentId::from_bytes([42u8; 16]);
         let tx = Transaction::new(agent)
@@ -413,7 +415,7 @@ mod tests {
         value_type: &str,
         agent_byte: u8,
     ) {
-        let tx = crate::writer::Transaction::new(AgentId::from_bytes([agent_byte; 16]))
+        let tx = Transaction::new(AgentId::from_bytes([agent_byte; 16]))
             .assert_datom(
                 EntityId::from_content(content_seed),
                 Attribute::from("db/ident"),

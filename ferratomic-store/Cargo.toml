@@ -1,0 +1,25 @@
+[package]
+name = "ferratomic-store"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "CRDT algebra core for Ferratomic: Store = (P(D), union)"
+
+[dependencies]
+ferratom = { path = "../ferratom" }
+ferratomic-tx = { path = "../ferratomic-tx" }
+ferratomic-index = { path = "../ferratomic-index" }
+ferratomic-positional = { path = "../ferratomic-positional" }
+ferratomic-checkpoint = { path = "../ferratomic-checkpoint" }
+im = { workspace = true }
+bitvec = { workspace = true }
+
+[features]
+test-utils = ["ferratomic-tx/test-utils", "ferratomic-positional/test-utils"]
+
+[dev-dependencies]
+ferratom = { path = "../ferratom", features = ["test-utils"] }
+ferratomic-tx = { path = "../ferratomic-tx", features = ["test-utils"] }
+ordered-float = { workspace = true }
+tempfile = "3"

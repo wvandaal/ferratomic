@@ -8,6 +8,7 @@ members = [
     "ferratomic-index",
     "ferratomic-positional",
     "ferratomic-checkpoint",
+    "ferratomic-store",
     "ferratomic-core",
     "ferratomic-datalog",
     "ferratomic-verify",

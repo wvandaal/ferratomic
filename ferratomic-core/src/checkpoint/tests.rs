@@ -7,7 +7,7 @@ use crate::{
         deserialize_checkpoint_bytes, load_checkpoint, serialize_checkpoint_bytes,
         serialize_live_first_bytes, write_checkpoint,
     },
-    store::{Store, StoreRepr},
+    store::Store,
     writer::Transaction,
 };
 
@@ -227,7 +227,7 @@ fn test_inv_ferr_013_v3_store_roundtrip() {
 
     // Verify Positional variant (zero-construction cold start).
     assert!(
-        matches!(loaded.repr, StoreRepr::Positional(_)),
+        loaded.positional().is_some(),
         "INV-FERR-076: V3 deserialization must produce Positional repr"
     );
 

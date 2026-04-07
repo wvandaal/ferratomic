@@ -18,7 +18,7 @@
 //! Serialization always produces V3. V2 read support is retained for
 //! backward compatibility with existing checkpoint files.
 
-use std::{collections::BTreeMap, path::Path};
+use std::path::Path;
 
 use ferratom::FerraError;
 
@@ -43,8 +43,8 @@ mod v3;
 /// # Errors
 ///
 /// Returns `FerraError::CheckpointWrite` if serialization fails.
-pub(crate) fn serialize_checkpoint_bytes(store: &Store) -> Result<Vec<u8>, FerraError> {
-    let data = extract_checkpoint_data(store);
+pub fn serialize_checkpoint_bytes(store: &Store) -> Result<Vec<u8>, FerraError> {
+    let data = ferratomic_store::extract_checkpoint_data(store);
     ferratomic_checkpoint::serialize_checkpoint_bytes(&data)
 }
 
@@ -59,7 +59,7 @@ pub(crate) fn serialize_checkpoint_bytes(store: &Store) -> Result<Vec<u8>, Ferra
 ///
 /// Returns `FerraError::CheckpointWrite` if serialization fails.
 pub fn serialize_live_first_bytes(store: &Store) -> Result<Vec<u8>, FerraError> {
-    let data = extract_checkpoint_data(store);
+    let data = ferratomic_store::extract_checkpoint_data(store);
     ferratomic_checkpoint::serialize_live_first_bytes(&data)
 }
 
@@ -156,7 +156,7 @@ impl PartialStore {
 /// mismatch, format errors, or deserialization failure.
 pub fn deserialize_checkpoint_bytes(data: &[u8]) -> Result<Store, FerraError> {
     let checkpoint_data = ferratomic_checkpoint::deserialize_checkpoint_bytes(data)?;
-    store_from_checkpoint_data(checkpoint_data)
+    ferratomic_store::store_from_checkpoint_data(checkpoint_data)
 }
 
 /// Serialize a store to a checkpoint file.
@@ -176,7 +176,7 @@ pub fn deserialize_checkpoint_bytes(data: &[u8]) -> Result<Store, FerraError> {
 /// Returns `FerraError::CheckpointWrite` if file creation, serialization,
 /// or fsync fails.
 pub fn write_checkpoint(store: &Store, path: &Path) -> Result<(), FerraError> {
-    let data = extract_checkpoint_data(store);
+    let data = ferratomic_store::extract_checkpoint_data(store);
     ferratomic_checkpoint::write_checkpoint(&data, path)
 }
 
@@ -190,7 +190,7 @@ pub fn write_checkpoint(store: &Store, path: &Path) -> Result<(), FerraError> {
 /// Returns `FerraError::CheckpointWrite` if serialization, write, or
 /// fsync fails.
 pub fn write_checkpoint_live_first(store: &Store, path: &Path) -> Result<(), FerraError> {
-    let data = extract_checkpoint_data(store);
+    let data = ferratomic_store::extract_checkpoint_data(store);
     ferratomic_checkpoint::write_checkpoint_live_first(&data, path)
 }
 
@@ -208,7 +208,7 @@ pub fn write_checkpoint_live_first(store: &Store, path: &Path) -> Result<(), Fer
 /// on deserialization failure.
 pub fn load_checkpoint(path: &Path) -> Result<Store, FerraError> {
     let checkpoint_data = ferratomic_checkpoint::load_checkpoint(path)?;
-    store_from_checkpoint_data(checkpoint_data)
+    ferratomic_store::store_from_checkpoint_data(checkpoint_data)
 }
 
 /// Load a checkpoint from an arbitrary reader (INV-FERR-013, INV-FERR-024).
@@ -223,7 +223,7 @@ pub(crate) fn load_checkpoint_from_reader<R: std::io::Read>(
     reader: &mut R,
 ) -> Result<Store, FerraError> {
     let checkpoint_data = ferratomic_checkpoint::load_checkpoint_from_reader(reader)?;
-    store_from_checkpoint_data(checkpoint_data)
+    ferratomic_store::store_from_checkpoint_data(checkpoint_data)
 }
 
 /// Write a checkpoint to an arbitrary writer (INV-FERR-013, INV-FERR-024).
@@ -244,65 +244,10 @@ pub fn write_checkpoint_to_writer<W: std::io::Write>(
     store: &Store,
     writer: &mut W,
 ) -> Result<(), FerraError> {
-    let data = extract_checkpoint_data(store);
+    let data = ferratomic_store::extract_checkpoint_data(store);
     ferratomic_checkpoint::write_checkpoint_to_writer(&data, writer)
 }
 
-// ---------------------------------------------------------------------------
-// Internal helpers
-// ---------------------------------------------------------------------------
-
-/// Extract raw data from a Store into `CheckpointData` for serialization.
-///
-/// Collects datoms, schema, epoch, genesis agent, and LIVE bitvector
-/// into a `CheckpointData` for the ferratomic-checkpoint crate.
-fn extract_checkpoint_data(store: &Store) -> ferratomic_checkpoint::CheckpointData {
-    use crate::store::StoreRepr;
-
-    let datoms: Vec<ferratom::Datom> = store.datoms().cloned().collect();
-
-    let live_bits = match &store.repr {
-        StoreRepr::Positional(ps) => ps.live_bits_clone(),
-        StoreRepr::OrdMap { .. } => ferratomic_positional::build_live_bitvector_pub(&datoms),
-    };
-
-    let schema_pairs: Vec<(String, ferratom::AttributeDef)> = {
-        let mut sorted: BTreeMap<String, ferratom::AttributeDef> = BTreeMap::new();
-        for (attr, def) in store.schema().iter() {
-            sorted.insert(attr.as_str().to_owned(), def.clone());
-        }
-        sorted.into_iter().collect()
-    };
-
-    ferratomic_checkpoint::CheckpointData {
-        epoch: store.epoch(),
-        genesis_agent: store.genesis_agent(),
-        schema_pairs,
-        datoms,
-        live_bits: Some(live_bits),
-    }
-}
-
-/// Reconstruct a Store from raw `CheckpointData`.
-///
-/// Dispatches to `from_checkpoint` (V2, no `live_bits`) or
-/// `from_checkpoint_v3` (V3, with `live_bits`).
-fn store_from_checkpoint_data(
-    data: ferratomic_checkpoint::CheckpointData,
-) -> Result<Store, FerraError> {
-    match data.live_bits {
-        Some(live_bits) => Store::from_checkpoint_v3(
-            data.epoch,
-            data.genesis_agent,
-            data.schema_pairs,
-            data.datoms,
-            live_bits,
-        ),
-        None => Ok(Store::from_checkpoint(
-            data.epoch,
-            data.genesis_agent,
-            data.schema_pairs,
-            data.datoms,
-        )),
-    }
-}
+// Internal helpers `extract_checkpoint_data` and `store_from_checkpoint_data`
+// have been moved to `ferratomic_store` (the canonical owner of Store).
+// This module delegates to `ferratomic_store::{extract_checkpoint_data, store_from_checkpoint_data}`.

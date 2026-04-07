@@ -15,6 +15,7 @@ ferratomic-wal = { path = "../ferratomic-wal" }
 ferratomic-index = { path = "../ferratomic-index" }
 ferratomic-positional = { path = "../ferratomic-positional" }
 ferratomic-checkpoint = { path = "../ferratomic-checkpoint" }
+ferratomic-store = { path = "../ferratomic-store" }
 im = { workspace = true }
 arc-swap = { workspace = true }
 blake3 = { workspace = true }
@@ -35,7 +36,7 @@ rkyv = { version = "0.8", optional = true, features = ["bytecheck"] }
 release_bijection_check = []
 ## HI-005: Expose commit_unchecked and other testing-only APIs.
 ## Production builds must NOT enable this feature.
-test-utils = ["ferratomic-tx/test-utils", "ferratomic-positional/test-utils"]
+test-utils = ["ferratomic-tx/test-utils", "ferratomic-positional/test-utils", "ferratomic-store/test-utils"]
 ## ALIEN-S1: mmap zero-copy cold start (INV-FERR-070, bd-ta8c).
 ## Enables MappedStore, mmap_cold_start, promote_to_positional.
 mmap = ["dep:memmap2", "dep:rkyv", "ferratomic-checkpoint/mmap"]
@@ -43,6 +44,7 @@ mmap = ["dep:memmap2", "dep:rkyv", "ferratomic-checkpoint/mmap"]
 [dev-dependencies]
 ferratom = { path = "../ferratom", features = ["test-utils"] }
 ferratomic-tx = { path = "../ferratomic-tx", features = ["test-utils"] }
+ferratomic-store = { path = "../ferratomic-store", features = ["test-utils"] }
 proptest = { workspace = true }
 tempfile = "3"
 ordered-float = { workspace = true }

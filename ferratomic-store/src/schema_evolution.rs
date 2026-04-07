@@ -1,7 +1,7 @@
 //! Schema creation and evolution helpers.
 //!
 //! INV-FERR-009: Schema validation at transact boundary.
-//! INV-FERR-031: Genesis determinism — 19 axiomatic meta-schema attributes.
+//! INV-FERR-031: Genesis determinism -- 19 axiomatic meta-schema attributes.
 //!
 //! This module contains:
 //! - The genesis meta-schema (19 axiomatic attributes)

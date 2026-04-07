@@ -10,9 +10,8 @@
 use std::fmt;
 
 use ferratom::Datom;
+use ferratomic_positional::PositionalStore;
 use im::OrdSet;
-
-use crate::positional::PositionalStore;
 
 // ---------------------------------------------------------------------------
 // DatomIter -- unified iterator over both representations
@@ -21,7 +20,7 @@ use crate::positional::PositionalStore;
 /// Iterator over datoms in a `Store`, dispatching to the active representation.
 ///
 /// INV-FERR-004: yields every datom ever inserted, regardless of repr.
-/// Variants are internal — callers should use the `Iterator` impl, not match.
+/// Variants are internal -- callers should use the `Iterator` impl, not match.
 #[non_exhaustive]
 pub enum DatomIter<'a> {
     /// Iterating over a `PositionalStore`'s contiguous canonical slice.
@@ -65,7 +64,7 @@ impl ExactSizeIterator for DatomIter<'_> {
 ///
 /// Provides `contains`, `len`, `is_empty`, `iter`, and equality comparison
 /// so callers do not need to know which representation is active.
-/// Variants are internal — callers should use the method API, not match.
+/// Variants are internal -- callers should use the method API, not match.
 #[non_exhaustive]
 pub enum DatomSetView<'a> {
     /// View into a `PositionalStore`'s canonical slice.
@@ -157,7 +156,7 @@ impl fmt::Debug for DatomSetView<'_> {
 ///
 /// INV-FERR-006: snapshots are frozen at creation time. `PositionalStore` is
 /// wrapped in `Arc` for O(1) clone; `OrdSet` uses structural sharing.
-/// Variants are internal — callers should use the method API, not match.
+/// Variants are internal -- callers should use the method API, not match.
 #[non_exhaustive]
 #[derive(Clone, Debug)]
 pub enum SnapshotDatoms {

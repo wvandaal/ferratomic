@@ -1,21 +1,23 @@
 //! Checkpoint byte serialization convenience methods for [`Store`].
 //!
-//! These are thin wrappers over [`crate::checkpoint::serialize_checkpoint_bytes`]
-//! and [`crate::checkpoint::deserialize_checkpoint_bytes`], providing the
+//! These are thin wrappers over [`ferratomic_checkpoint::serialize_checkpoint_bytes`]
+//! and [`ferratomic_checkpoint::deserialize_checkpoint_bytes`], providing the
 //! ergonomic `store.to_checkpoint_bytes()` / `Store::from_checkpoint_bytes()`
 //! API for in-memory round-trip.
 //!
 //! INV-FERR-013: `Store::from_checkpoint_bytes(&store.to_checkpoint_bytes()?) == store`.
 
+use std::collections::BTreeMap;
+
 use ferratom::FerraError;
 
-use super::Store;
+use crate::{repr::StoreRepr, store::Store};
 
 impl Store {
     /// Serialize the store to checkpoint bytes.
     ///
     /// INV-FERR-013: `Store::from_checkpoint_bytes(&store.to_checkpoint_bytes()?) == store`.
-    /// The byte format is identical to what [`write_checkpoint`](crate::checkpoint::write_checkpoint)
+    /// The byte format is identical to what [`ferratomic_checkpoint::write_checkpoint`]
     /// produces: magic, version, epoch, bincode payload, BLAKE3 hash.
     ///
     /// # Errors
@@ -23,7 +25,8 @@ impl Store {
     /// Returns `FerraError::CheckpointWrite` if serialization fails
     /// (e.g., payload exceeds `u32::MAX` bytes).
     pub fn to_checkpoint_bytes(&self) -> Result<Vec<u8>, FerraError> {
-        crate::checkpoint::serialize_checkpoint_bytes(self)
+        let data = extract_checkpoint_data(self);
+        ferratomic_checkpoint::serialize_checkpoint_bytes(&data)
     }
 
     /// Reconstruct a store from checkpoint bytes.
@@ -31,14 +34,78 @@ impl Store {
     /// INV-FERR-013: round-trip identity with [`to_checkpoint_bytes`](Self::to_checkpoint_bytes).
     /// INV-FERR-005: indexes are rebuilt from the deserialized datom set.
     /// The byte format must match what `to_checkpoint_bytes` or
-    /// [`write_checkpoint`](crate::checkpoint::write_checkpoint) produces.
+    /// [`ferratomic_checkpoint::write_checkpoint`] produces.
     ///
     /// # Errors
     ///
     /// Returns `FerraError::CheckpointCorrupted` on checksum mismatch,
     /// truncation, wrong magic, or deserialization failure.
     pub fn from_checkpoint_bytes(data: &[u8]) -> Result<Self, FerraError> {
-        crate::checkpoint::deserialize_checkpoint_bytes(data)
+        let checkpoint_data = ferratomic_checkpoint::deserialize_checkpoint_bytes(data)?;
+        store_from_checkpoint_data(checkpoint_data)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Internal helpers
+// ---------------------------------------------------------------------------
+
+/// Extract raw data from a Store into `CheckpointData` for serialization.
+///
+/// Collects datoms, schema, epoch, genesis agent, and LIVE bitvector
+/// into a `CheckpointData` for the ferratomic-checkpoint crate.
+#[must_use]
+pub fn extract_checkpoint_data(store: &Store) -> ferratomic_checkpoint::CheckpointData {
+    let datoms: Vec<ferratom::Datom> = store.datoms().cloned().collect();
+
+    let live_bits = match &store.repr {
+        StoreRepr::Positional(ps) => ps.live_bits_clone(),
+        StoreRepr::OrdMap { .. } => ferratomic_positional::build_live_bitvector_pub(&datoms),
+    };
+
+    let schema_pairs: Vec<(String, ferratom::AttributeDef)> = {
+        let mut sorted: BTreeMap<String, ferratom::AttributeDef> = BTreeMap::new();
+        for (attr, def) in store.schema().iter() {
+            sorted.insert(attr.as_str().to_owned(), def.clone());
+        }
+        sorted.into_iter().collect()
+    };
+
+    ferratomic_checkpoint::CheckpointData {
+        epoch: store.epoch(),
+        genesis_agent: store.genesis_agent(),
+        schema_pairs,
+        datoms,
+        live_bits: Some(live_bits),
+    }
+}
+
+/// Reconstruct a Store from raw `CheckpointData`.
+///
+/// Dispatches to `from_checkpoint` (V2, no `live_bits`) or
+/// `from_checkpoint_v3` (V3, with `live_bits`).
+///
+/// # Errors
+///
+/// Returns `FerraError::InvariantViolation` if checkpoint data violates
+/// INV-FERR-076 preconditions (e.g., unsorted datoms, `live_bits` length mismatch).
+pub fn store_from_checkpoint_data(
+    data: ferratomic_checkpoint::CheckpointData,
+) -> Result<Store, FerraError> {
+    match data.live_bits {
+        Some(live_bits) => Store::from_checkpoint_v3(
+            data.epoch,
+            data.genesis_agent,
+            data.schema_pairs,
+            data.datoms,
+            live_bits,
+        ),
+        None => Ok(Store::from_checkpoint(
+            data.epoch,
+            data.genesis_agent,
+            data.schema_pairs,
+            data.datoms,
+        )),
     }
 }
 
@@ -51,6 +118,7 @@ mod tests {
     use std::sync::Arc;
 
     use ferratom::{Attribute, EntityId, Value};
+    use ferratomic_tx::Transaction;
 
     use super::*;
 
@@ -91,8 +159,6 @@ mod tests {
     /// indexes, and matches file-based checkpoint output.
     #[test]
     fn test_inv_ferr_013_store_bytes_roundtrip() {
-        use crate::writer::Transaction;
-
         let mut store = Store::genesis();
         let tx = Transaction::new(store.genesis_agent())
             .assert_datom(
@@ -122,7 +188,8 @@ mod tests {
         // Bytes match what write_checkpoint would produce
         let dir = tempfile::TempDir::new().expect("tmpdir");
         let path = dir.path().join("compare.chkp");
-        crate::checkpoint::write_checkpoint(&store, &path).expect("write ok");
+        let chkp_data = extract_checkpoint_data(&store);
+        ferratomic_checkpoint::write_checkpoint(&chkp_data, &path).expect("write ok");
         let file_bytes = std::fs::read(&path).expect("read ok");
         assert_eq!(
             bytes, file_bytes,
