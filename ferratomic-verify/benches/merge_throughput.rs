@@ -1,42 +1,12 @@
-use std::{collections::BTreeSet, sync::Arc};
-
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use ferratom::{Attribute, Datom, EntityId, Op, TxId, Value};
 use ferratomic_db::{merge::merge, store::Store};
+use ferratomic_verify::bench_helpers::{
+    build_shifted_store, build_store, doc_entity, doc_value, DOC_ATTRIBUTE, SCALE_INPUT_SIZES,
+};
 
-const SCALE_INPUT_SIZES: [usize; 3] = [1_000, 10_000, 100_000];
-
-const DOC_ATTRIBUTE: &str = "db/doc";
-
-fn doc_entity(index: usize) -> EntityId {
-    EntityId::from_content(format!("entity-{index}").as_bytes())
-}
-
-fn doc_value(index: usize) -> Value {
-    Value::String(Arc::from(format!("document-{index}").as_str()))
-}
-
-fn doc_datom(index: usize) -> Datom {
-    Datom::new(
-        doc_entity(index),
-        Attribute::from(DOC_ATTRIBUTE),
-        doc_value(index),
-        TxId::new(index as u64 + 1, 0, 1),
-        Op::Assert,
-    )
-}
-
-/// Build a `Store` in `Positional` representation (cold-start path).
-fn build_shifted_store(start: usize, count: usize) -> Store {
-    let datoms = (start..start + count)
-        .map(doc_datom)
-        .collect::<BTreeSet<_>>();
-    Store::from_datoms(datoms)
-}
-
-fn build_store(count: usize) -> Store {
-    build_shifted_store(0, count)
-}
+// ---------------------------------------------------------------------------
+// Merge-specific helper: OrdMap-representation store builder
+// ---------------------------------------------------------------------------
 
 /// Build a `Store` in `OrdMap` representation (write-active path).
 ///
@@ -51,7 +21,7 @@ fn build_shifted_store_ordmap(start: usize, count: usize) -> Store {
             ferratomic_db::writer::Transaction::new(ferratom::AgentId::from_bytes([0xBBu8; 16]))
                 .assert_datom(
                     doc_entity(index),
-                    Attribute::from(DOC_ATTRIBUTE),
+                    ferratom::Attribute::from(DOC_ATTRIBUTE),
                     doc_value(index),
                 )
                 .commit_unchecked();

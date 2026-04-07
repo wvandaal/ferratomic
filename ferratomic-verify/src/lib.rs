@@ -12,6 +12,7 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+pub mod bench_helpers;
 pub mod confidence;
 pub mod fault_injection;
 pub mod generators;

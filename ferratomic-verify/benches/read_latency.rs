@@ -1,57 +1,25 @@
-use std::{collections::BTreeSet, sync::Arc};
-
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use ferratom::{Attribute, Datom, EntityId, Op, TxId, Value};
-use ferratomic_db::{
-    indexes::{EavtKey, IndexBackend},
-    store::Store,
+use ferratomic_db::indexes::IndexBackend;
+use ferratomic_verify::bench_helpers::{
+    build_shifted_store, doc_entity, lookup_key, SCALE_INPUT_SIZES,
 };
 
-const SCALE_INPUT_SIZES: [usize; 3] = [1_000, 10_000, 100_000];
+// ---------------------------------------------------------------------------
+// Read-latency-specific store builder: promotes to OrdMap for index access
+// ---------------------------------------------------------------------------
 
-const DOC_ATTRIBUTE: &str = "db/doc";
-
-fn doc_entity(index: usize) -> EntityId {
-    EntityId::from_content(format!("entity-{index}").as_bytes())
-}
-
-fn doc_value(index: usize) -> Value {
-    Value::String(Arc::from(format!("document-{index}").as_str()))
-}
-
-fn doc_datom(index: usize) -> Datom {
-    Datom::new(
-        doc_entity(index),
-        Attribute::from(DOC_ATTRIBUTE),
-        doc_value(index),
-        TxId::new(index as u64 + 1, 0, 1),
-        Op::Assert,
-    )
-}
-
-fn build_shifted_store(start: usize, count: usize) -> Store {
-    let datoms = (start..start + count)
-        .map(doc_datom)
-        .collect::<BTreeSet<_>>();
-    let mut store = Store::from_datoms(datoms);
+fn build_store_promoted(count: usize) -> ferratomic_db::store::Store {
+    let mut store = build_shifted_store(0, count);
     // bd-h2fz: promote to OrdMap so indexes() returns Some.
     store.promote();
     store
-}
-
-fn build_store(count: usize) -> Store {
-    build_shifted_store(0, count)
-}
-
-fn lookup_key(index: usize) -> EavtKey {
-    EavtKey::from_datom(&doc_datom(index))
 }
 
 fn bench_read_latency(c: &mut Criterion) {
     let mut group = c.benchmark_group("inv_ferr_027_read_latency_eavt");
 
     for datom_count in SCALE_INPUT_SIZES {
-        let store = build_store(datom_count);
+        let store = build_store_promoted(datom_count);
         let key = lookup_key(datom_count / 2);
 
         group.throughput(Throughput::Elements(1));
@@ -88,7 +56,7 @@ fn bench_eavt_full_scan_filter_10k(c: &mut Criterion) {
     let mut group = c.benchmark_group("inv_ferr_027_eavt_full_scan_filter");
 
     let datom_count: usize = 10_000;
-    let store = build_store(datom_count);
+    let store = build_store_promoted(datom_count);
 
     // Pre-compute the entity IDs that define the scan range boundaries.
     // We select entities from index 2,500..7,500 (5,000 entities out of 10,000).

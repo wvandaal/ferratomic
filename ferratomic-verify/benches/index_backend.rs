@@ -13,52 +13,21 @@
 //! generics), both benchmarks should produce statistically identical
 //! results at each size.
 
-use std::{collections::BTreeSet, sync::Arc};
-
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use ferratom::{Attribute, Datom, EntityId, Op, TxId, Value};
-use ferratomic_db::{
-    indexes::{EavtKey, IndexBackend},
-    store::Store,
-};
+use ferratom::Datom;
+use ferratomic_db::indexes::{EavtKey, IndexBackend};
+use ferratomic_verify::bench_helpers::{build_shifted_store, doc_datom, lookup_key};
 use im::OrdMap;
 
-const DOC_ATTRIBUTE: &str = "db/doc";
+// ---------------------------------------------------------------------------
+// Index-backend-specific helpers
+// ---------------------------------------------------------------------------
 
-fn doc_entity(index: usize) -> EntityId {
-    EntityId::from_content(format!("entity-{index}").as_bytes())
-}
-
-fn doc_value(index: usize) -> Value {
-    Value::String(Arc::from(format!("document-{index}").as_str()))
-}
-
-fn doc_datom(index: usize) -> Datom {
-    Datom::new(
-        doc_entity(index),
-        Attribute::from(DOC_ATTRIBUTE),
-        doc_value(index),
-        TxId::new(index as u64 + 1, 0, 1),
-        Op::Assert,
-    )
-}
-
-fn build_shifted_store(start: usize, count: usize) -> Store {
-    let datoms = (start..start + count)
-        .map(doc_datom)
-        .collect::<BTreeSet<_>>();
-    let mut store = Store::from_datoms(datoms);
+fn build_store_promoted(count: usize) -> ferratomic_db::store::Store {
+    let mut store = build_shifted_store(0, count);
     // bd-h2fz: promote to OrdMap so indexes() returns Some.
     store.promote();
     store
-}
-
-fn build_store(count: usize) -> Store {
-    build_shifted_store(0, count)
-}
-
-fn lookup_key(index: usize) -> EavtKey {
-    EavtKey::from_datom(&doc_datom(index))
 }
 
 /// Build a bare `OrdMap<EavtKey, Datom>` with the same data the store would
@@ -73,11 +42,15 @@ fn build_direct_ordmap(count: usize) -> OrdMap<EavtKey, Datom> {
     map
 }
 
+// ---------------------------------------------------------------------------
+// Benchmarks
+// ---------------------------------------------------------------------------
+
 fn bench_index_backend(c: &mut Criterion) {
     let mut group = c.benchmark_group("inv_ferr_025_index_backend");
 
     for &size in &[1_000usize, 10_000] {
-        let store = build_store(size);
+        let store = build_store_promoted(size);
         let direct = build_direct_ordmap(size);
         let key = lookup_key(size / 2);
 
@@ -139,7 +112,7 @@ fn bench_perf3_overhead_assertion(c: &mut Criterion) {
     // 1.5x generous bound to avoid flaky CI on loaded machines
     const MAX_OVERHEAD_RATIO: f64 = 1.5;
 
-    let store = build_store(DATOM_COUNT);
+    let store = build_store_promoted(DATOM_COUNT);
     let direct = build_direct_ordmap(DATOM_COUNT);
     let key = lookup_key(DATOM_COUNT / 2);
 

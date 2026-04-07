@@ -3,12 +3,12 @@
 
 ### External Traceability
 
-This specification traces to two foundational documents that live outside this repository:
+This specification traces to two foundational documents:
 
 - **SEED.md** — The foundational design document defining datoms, the harvest/seed lifecycle,
-  and the bootstrap philosophy. Referenced as `SEED.md §N` throughout. The key axioms are:
-  §4 (Core Abstraction: Datoms, identity, snapshots, schema-as-data), §5 (Harvest/Seed
-  Lifecycle: durability, recovery), §10 (The Bootstrap: self-hosting, genesis).
+  and the bootstrap philosophy. Referenced as `SEED.md §N` throughout. A self-contained
+  summary of all referenced axioms (§1, §4, §5, §9.2, §10) is maintained at
+  [`docs/design/SEED_AXIOMS.md`](../docs/design/SEED_AXIOMS.md).
 
 - **Historical STORE algebra** — the precursor STORE namespace defined the five lattice
   laws preserved verbatim in Ferratomic. In this repository, that algebra now lives across
