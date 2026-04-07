@@ -45,13 +45,36 @@ pub(crate) fn compute_fingerprint(canonical: &[Datom]) -> [u8; 32] {
 /// intrinsics. LLVM may further vectorize to AVX2 at `-O2`.
 #[inline]
 pub(crate) fn xor_hash_into(fp: &mut [u8; 32], hash: &[u8; 32]) {
-    // Low 128 bits (bytes 0..16).
-    let fp_lo = u128::from_ne_bytes(fp[..16].try_into().unwrap_or([0; 16]));
-    let h_lo = u128::from_ne_bytes(hash[..16].try_into().unwrap_or([0; 16]));
-    fp[..16].copy_from_slice(&(fp_lo ^ h_lo).to_ne_bytes());
+    let (fp_lo, fp_hi) = split_u128(fp);
+    let (h_lo, h_hi) = split_u128_ref(hash);
+    (fp_lo ^ h_lo)
+        .to_ne_bytes()
+        .iter()
+        .enumerate()
+        .for_each(|(i, &b)| fp[i] = b);
+    (fp_hi ^ h_hi)
+        .to_ne_bytes()
+        .iter()
+        .enumerate()
+        .for_each(|(i, &b)| fp[16 + i] = b);
+}
 
-    // High 128 bits (bytes 16..32).
-    let fp_hi = u128::from_ne_bytes(fp[16..].try_into().unwrap_or([0; 16]));
-    let h_hi = u128::from_ne_bytes(hash[16..].try_into().unwrap_or([0; 16]));
-    fp[16..].copy_from_slice(&(fp_hi ^ h_hi).to_ne_bytes());
+/// Split `[u8; 32]` into two `u128` values. Infallible by construction.
+#[inline]
+fn split_u128_ref(bytes: &[u8; 32]) -> (u128, u128) {
+    let lo = u128::from_ne_bytes([
+        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7], bytes[8],
+        bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15],
+    ]);
+    let hi = u128::from_ne_bytes([
+        bytes[16], bytes[17], bytes[18], bytes[19], bytes[20], bytes[21], bytes[22], bytes[23],
+        bytes[24], bytes[25], bytes[26], bytes[27], bytes[28], bytes[29], bytes[30], bytes[31],
+    ]);
+    (lo, hi)
+}
+
+/// Split mutable `[u8; 32]` into two `u128` values. Infallible by construction.
+#[inline]
+fn split_u128(bytes: &[u8; 32]) -> (u128, u128) {
+    split_u128_ref(bytes)
 }

@@ -1,17 +1,20 @@
 //! Graph adjacency index (INV-FERR-083, bd-ewma).
 //!
-//! Precomputed from Ref-valued datoms: `EntityId -> Vec<(AttributeId, EntityId)>`.
-//! Enables O(1) neighbor lookup for graph traversal in both forward and
-//! reverse directions.
+//! Precomputed from LIVE Ref-valued datoms:
+//! `EntityId -> Vec<(AttributeId, EntityId)>`.
+//! Enables O(log E) neighbor lookup for graph traversal in both forward
+//! and reverse directions (where E = entities with edges).
 //!
-//! The index is built from the canonical datom array by scanning for
-//! `Value::Ref` datoms with `Op::Assert`. Retracted edges are excluded.
-//! Attributes are resolved to `AttributeId` via `AttributeIntern` for
-//! compact, integer-comparable storage.
+//! The index is built from the canonical datom array filtered by the LIVE
+//! bitvector (INV-FERR-029): only datoms at positions where `live_bits[p]`
+//! is set are indexed. This ensures Assert datoms that have been superseded
+//! by later Retracts are excluded. Attributes are resolved to `AttributeId`
+//! via `AttributeIntern`.
 
 use std::collections::BTreeMap;
 
-use ferratom::{AttributeId, AttributeIntern, Datom, EntityId, Op, Value};
+use bitvec::prelude::{BitVec, Lsb0};
+use ferratom::{AttributeId, AttributeIntern, Datom, EntityId, Value};
 
 // ---------------------------------------------------------------------------
 // AdjacencyIndex (INV-FERR-083)
@@ -38,20 +41,25 @@ pub struct AdjacencyIndex {
 const EMPTY_EDGES: &[(AttributeId, EntityId)] = &[];
 
 impl AdjacencyIndex {
-    /// Build from canonical datom array (INV-FERR-083).
+    /// Build from canonical datom array filtered by LIVE bitvector
+    /// (INV-FERR-083, INV-FERR-029).
     ///
-    /// Scans for `Value::Ref` datoms with `Op::Assert`. Requires
-    /// `AttributeIntern` for `Attribute -> AttributeId` resolution.
-    /// Datoms whose attribute is not in the intern table are skipped
-    /// (should not happen for schema-validated stores).
+    /// Only datoms at LIVE positions (where `live_bits[p]` is set) are
+    /// indexed. This correctly excludes Assert datoms that have been
+    /// superseded by later Retracts for the same (e, a, v) triple.
+    /// Datoms whose attribute is not in the intern table are skipped.
     #[must_use]
-    pub fn from_canonical(datoms: &[Datom], intern: &AttributeIntern) -> Self {
+    pub fn from_canonical(
+        datoms: &[Datom],
+        live_bits: &BitVec<u64, Lsb0>,
+        intern: &AttributeIntern,
+    ) -> Self {
         let mut forward: BTreeMap<EntityId, Vec<(AttributeId, EntityId)>> = BTreeMap::new();
         let mut reverse: BTreeMap<EntityId, Vec<(AttributeId, EntityId)>> = BTreeMap::new();
 
-        for datom in datoms {
-            // Only asserted Ref datoms produce edges.
-            if datom.op() != Op::Assert {
+        for (pos, datom) in datoms.iter().enumerate() {
+            // Only LIVE Ref datoms produce edges (INV-FERR-029).
+            if live_bits.get(pos).as_deref() != Some(&true) {
                 continue;
             }
             let target = match datom.value() {
@@ -73,7 +81,7 @@ impl AdjacencyIndex {
     /// Forward neighbors: entities reachable from `entity` via Ref edges.
     ///
     /// Returns `(AttributeId, EntityId)` pairs for each outgoing edge.
-    /// O(1) lookup (`BTreeMap` point query). Returns an empty slice if the
+    /// O(log E) lookup (`BTreeMap` point query, E = entities with edges). Returns an empty slice if the
     /// entity has no outgoing Ref edges.
     #[must_use]
     pub fn neighbors(&self, entity: &EntityId) -> &[(AttributeId, EntityId)] {
@@ -83,7 +91,7 @@ impl AdjacencyIndex {
     /// Reverse neighbors: entities that point TO `entity` via Ref edges.
     ///
     /// Returns `(AttributeId, EntityId)` pairs for each incoming edge.
-    /// O(1) lookup. Returns an empty slice if no entity points to this one.
+    /// O(log E) lookup. Returns an empty slice if no entity points to this one.
     #[must_use]
     pub fn reverse_neighbors(&self, entity: &EntityId) -> &[(AttributeId, EntityId)] {
         self.reverse.get(entity).map_or(EMPTY_EDGES, Vec::as_slice)
@@ -126,6 +134,23 @@ mod tests {
             .expect("intern table construction must succeed in tests")
     }
 
+    /// Helper: build an all-LIVE bitvector for n datoms.
+    fn all_live(n: usize) -> BitVec<u64, Lsb0> {
+        let mut bv = BitVec::<u64, Lsb0>::new();
+        bv.resize(n, true);
+        bv
+    }
+
+    /// Helper: build a LIVE bitvector with specific positions set.
+    fn live_at(n: usize, live_positions: &[usize]) -> BitVec<u64, Lsb0> {
+        let mut bv = BitVec::<u64, Lsb0>::new();
+        bv.resize(n, false);
+        for &p in live_positions {
+            bv.set(p, true);
+        }
+        bv
+    }
+
     /// Helper: create a Ref datom (Assert).
     fn ref_datom(source: &[u8], attr: &str, target: &[u8], tx_phys: u64) -> Datom {
         Datom::new(
@@ -166,7 +191,7 @@ mod tests {
     #[test]
     fn test_inv_ferr_083_empty_store_empty_adjacency() {
         let intern = make_intern(&[]);
-        let index = AdjacencyIndex::from_canonical(&[], &intern);
+        let index = AdjacencyIndex::from_canonical(&[], &all_live(0), &intern);
 
         assert_eq!(index.forward_entity_count(), 0);
         assert_eq!(index.reverse_entity_count(), 0);
@@ -192,7 +217,7 @@ mod tests {
         let intern = make_intern(&["knows"]);
         let datoms = [ref_datom(b"alice", "knows", b"bob", 1)];
 
-        let index = AdjacencyIndex::from_canonical(&datoms, &intern);
+        let index = AdjacencyIndex::from_canonical(&datoms, &all_live(datoms.len()), &intern);
 
         let alice = EntityId::from_content(b"alice");
         let bob = EntityId::from_content(b"bob");
@@ -235,7 +260,7 @@ mod tests {
             ),
         ];
 
-        let index = AdjacencyIndex::from_canonical(&datoms, &intern);
+        let index = AdjacencyIndex::from_canonical(&datoms, &all_live(datoms.len()), &intern);
 
         assert_eq!(
             index.total_edges(),
@@ -259,7 +284,7 @@ mod tests {
             ref_datom(b"alice", "works-with", b"dave", 3),
         ];
 
-        let index = AdjacencyIndex::from_canonical(&datoms, &intern);
+        let index = AdjacencyIndex::from_canonical(&datoms, &all_live(datoms.len()), &intern);
 
         let alice = EntityId::from_content(b"alice");
         let fwd = index.neighbors(&alice);
@@ -287,7 +312,7 @@ mod tests {
             ref_datom(b"carol", "likes", b"alice", 3),
         ];
 
-        let index = AdjacencyIndex::from_canonical(&datoms, &intern);
+        let index = AdjacencyIndex::from_canonical(&datoms, &all_live(datoms.len()), &intern);
 
         // For every forward edge (source -> target), there must be a
         // corresponding reverse edge (target <- source).
@@ -318,37 +343,52 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Test 6: Retracted Ref datoms are excluded
+    // Test 6: Non-LIVE datoms are excluded (standalone Retract)
     // -----------------------------------------------------------------------
 
     #[test]
-    fn test_inv_ferr_083_retracted_refs_excluded() {
+    fn test_inv_ferr_083_non_live_excluded() {
         let intern = make_intern(&["knows"]);
         let datoms = [
             ref_datom(b"alice", "knows", b"bob", 1),
             retracted_ref_datom(b"carol", "knows", b"dave", 2),
         ];
+        // carol's retract (pos 1) is not LIVE.
+        let live = live_at(2, &[0]);
+        let index = AdjacencyIndex::from_canonical(&datoms, &live, &intern);
 
-        let index = AdjacencyIndex::from_canonical(&datoms, &intern);
-
-        // Only the asserted edge should be present.
         assert_eq!(
             index.total_edges(),
             1,
-            "INV-FERR-083: retracted Ref datoms must not produce edges"
+            "INV-FERR-083: non-LIVE datoms must not produce edges"
         );
+    }
 
-        let carol = EntityId::from_content(b"carol");
-        assert!(
-            index.neighbors(&carol).is_empty(),
-            "INV-FERR-083: retracted edge must not appear in forward index"
-        );
+    // -----------------------------------------------------------------------
+    // Test 6b: Assert-then-Retract of same triple — LIVE resolves correctly
+    // -----------------------------------------------------------------------
 
-        let dave = EntityId::from_content(b"dave");
+    #[test]
+    fn test_inv_ferr_083_assert_then_retract_same_triple() {
+        let intern = make_intern(&["knows"]);
+        // alice asserts knows-bob at tx=1, then retracts at tx=2.
+        // In the canonical array (EAVT sorted), both appear.
+        // The LIVE bitvector marks NEITHER as live (the retraction
+        // supersedes the assert for this (e,a,v) triple).
+        let datoms = [
+            ref_datom(b"alice", "knows", b"bob", 1),
+            retracted_ref_datom(b"alice", "knows", b"bob", 2),
+        ];
+        // Neither datom is LIVE after retraction.
+        let live = live_at(2, &[]);
+        let index = AdjacencyIndex::from_canonical(&datoms, &live, &intern);
+
+        let alice = EntityId::from_content(b"alice");
         assert!(
-            index.reverse_neighbors(&dave).is_empty(),
-            "INV-FERR-083: retracted edge must not appear in reverse index"
+            index.neighbors(&alice).is_empty(),
+            "INV-FERR-083: retracted edge must not appear — alice should have 0 neighbors"
         );
+        assert_eq!(index.total_edges(), 0);
     }
 
     // -----------------------------------------------------------------------
@@ -364,7 +404,7 @@ mod tests {
             ref_datom(b"alice", "secret-link", b"carol", 2),
         ];
 
-        let index = AdjacencyIndex::from_canonical(&datoms, &intern);
+        let index = AdjacencyIndex::from_canonical(&datoms, &all_live(datoms.len()), &intern);
 
         // Only "knows" edge should be present; "secret-link" is skipped.
         assert_eq!(

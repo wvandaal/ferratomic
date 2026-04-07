@@ -332,6 +332,7 @@ pub fn serialize_v3_live_first(
     }
 
     let payload = V3LiveFirstPayloadWrite {
+        // schema_pairs clone retained: bincode Serialize requires owned String fields.
         schema_pairs: schema_pairs.to_vec(),
         live_datoms,
         hist_datoms,

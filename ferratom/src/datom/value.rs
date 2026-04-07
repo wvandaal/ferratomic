@@ -100,21 +100,25 @@ impl AttributeIntern {
     ) -> Result<Self, super::super::FerraError> {
         use std::collections::BTreeSet;
         let sorted: BTreeSet<Attribute> = attrs.into_iter().collect();
-        if sorted.len() > usize::from(u16::MAX) {
+        // u16 holds 0..65535 = 65536 distinct IDs.
+        if sorted.len() > usize::from(u16::MAX) + 1 {
             return Err(super::super::FerraError::InvariantViolation {
                 invariant: "ADR-FERR-030".to_string(),
                 details: format!(
-                    "attribute count {} exceeds u16 capacity {}",
+                    "attribute count {} exceeds u16 capacity (max 65536)",
                     sorted.len(),
-                    u16::MAX
                 ),
             });
         }
         let mut to_id = std::collections::BTreeMap::new();
         let mut to_name = Vec::with_capacity(sorted.len());
         for (i, attr) in sorted.into_iter().enumerate() {
-            // i < sorted.len() <= u16::MAX (checked above).
-            let id = AttributeId(u16::try_from(i).unwrap_or(0));
+            let id = AttributeId(u16::try_from(i).map_err(|_| {
+                super::super::FerraError::InvariantViolation {
+                    invariant: "ADR-FERR-030".to_string(),
+                    details: "attribute index exceeds u16 range".to_string(),
+                }
+            })?);
             to_id.insert(attr.clone(), id);
             to_name.push(Arc::from(attr.as_str()));
         }

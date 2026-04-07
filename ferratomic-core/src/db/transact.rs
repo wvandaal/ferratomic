@@ -87,7 +87,11 @@ impl Database<Ready> {
     /// ticks under the write lock. Epochs are strictly increasing.
     ///
     /// INV-FERR-008: all WAL entries are written and fsynced before the
-    /// `ArcSwap` publish, ensuring durability of the entire batch.
+    /// `ArcSwap` publish. NOTE: WAL writes are per-entry with per-entry
+    /// fsync. A crash mid-batch may leave a durable PREFIX of the batch
+    /// in the WAL. Recovery replays this prefix, producing a state that
+    /// was never visible to readers. True all-or-nothing batch WAL writes
+    /// require a batch-marker protocol (deferred to Phase 4b `WriterActor`).
     ///
     /// INV-FERR-009: schema evolution happens per-transaction within the batch,
     /// so later transactions in the batch can reference attributes defined by
@@ -135,6 +139,11 @@ impl Database<Ready> {
                 })?;
             for tx in transactions {
                 let tx_id = clock.tick();
+                // NOTE: tx.agent() is NOT preserved — all metadata uses the
+                // HLC's agent (the Database's agent). This is correct for
+                // single-node operation where the Database IS the agent.
+                // Multi-agent batch support requires extending the batch
+                // tuple to carry per-tx AgentId (deferred to Phase 4b).
                 let datoms = tx.into_datoms();
                 batches.push((datoms, tx_id));
             }

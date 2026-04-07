@@ -267,8 +267,8 @@ impl Store {
             });
         }
 
-        // Collect all datoms from receipts for the single merge pass.
-        // Borrows from receipts -- no extra allocation per datom.
+        // Clone all datoms from receipts for the single merge pass.
+        // O(K_total) clones — the receipts own the datoms for return to caller.
         let all_new_datoms: Vec<Datom> = receipts
             .iter()
             .flat_map(|r| r.datoms.iter().cloned())

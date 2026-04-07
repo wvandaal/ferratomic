@@ -11,7 +11,8 @@
 //! 32 bytes). Keep the K smallest hashes (the "signature"). Two stores
 //! exchange signatures (~8 KB each for K=256). Jaccard similarity =
 //! |intersection of min-hashes| / |union of min-hashes|. Estimated
-//! symmetric difference = `(count_a + count_b) * (1 - J) / 2`.
+//! symmetric difference = `(count_a + count_b) * (1 - J) / (1 + J)`.
+//! Integer arithmetic avoids floating-point precision issues.
 //!
 //! ## Phase roadmap
 //!
@@ -197,14 +198,13 @@ impl StoreSketch {
     /// Estimate the symmetric difference size between two stores.
     ///
     /// Uses integer arithmetic to avoid floating-point precision issues:
-    /// `diff = (count_a + count_b) * (union - intersection) / (2 * union)`
+    /// `diff = (count_a + count_b) * (1 - J) / (1 + J)`
     ///
-    /// This is algebraically equivalent to `(count_a + count_b) * (1 - J) / 2`
-    /// but computed without floating-point intermediate values.
+    /// In integer form: `total * (union - intersection) / (union + intersection)`.
+    /// This is the standard `MinHash`-based symmetric difference estimator.
     ///
-    /// This is a probabilistic estimate. For identical stores it returns 0.
-    /// For completely disjoint stores it returns approximately the sum of
-    /// both store sizes divided by 2 (which equals the average store size).
+    /// For identical stores (J=1): returns 0. For completely disjoint
+    /// stores (J=0): returns `count_a + count_b` (the full symmetric diff).
     ///
     /// # Errors
     ///
@@ -243,25 +243,23 @@ impl StoreSketch {
             return Ok(0);
         }
 
-        // Integer arithmetic: diff = total * diff_fraction / 2
-        // where diff_fraction = (union - intersection) / union.
+        // Integer arithmetic: diff = total * (1 - J) / (1 + J)
+        //   = total * (union - intersection) / (union + intersection)
         //
-        // To preserve precision with integers:
-        //   diff = total * (union - intersection) / (2 * union)
-        //
-        // Use u128 to avoid overflow for large stores (total can be ~2^64).
-        // usize -> u64: lossless on both 32-bit and 64-bit platforms.
+        // Use u128 to avoid overflow for large stores.
         let count_a = self.count as u64;
         let count_b = other.count as u64;
         let total = u128::from(count_a) + u128::from(count_b);
         let diff_numerator = u128::from(counts.union - counts.intersection);
-        let denominator = u128::from(counts.union) * 2;
+        let denominator = u128::from(counts.union) + u128::from(counts.intersection);
+
+        if denominator == 0 {
+            return Ok(0);
+        }
 
         // Integer division with rounding: (a + b/2) / b
         let result = (total * diff_numerator + denominator / 2) / denominator;
 
-        // Result fits in usize: it's at most total/2 which is at most
-        // (count_a + count_b) / 2, bounded by usize.
         Ok(usize::try_from(result).unwrap_or(usize::MAX))
     }
 
