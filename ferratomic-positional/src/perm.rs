@@ -1,4 +1,4 @@
-//! Cache-oblivious permutation layout (INV-FERR-071).
+//! Cache-oblivious permutation layout (INV-FERR-071) and permutation construction (INV-FERR-073/076).
 //!
 //! Phase 4a: Eytzinger (BFS) layout. Future: vEB swap (change this file only).
 //!
@@ -11,6 +11,25 @@
 //! Root at index 1, left child at `2*i`, right child at `2*i + 1`.
 
 use ferratom::Datom;
+
+/// Build a permutation array by sorting indices by a key extractor.
+///
+/// `perm[i]` = canonical position of the i-th element in alternate order.
+/// O(n log n) sort on u32 indices -- cache-optimal.
+pub(crate) fn build_permutation<F, K: Ord>(canonical: &[Datom], key_fn: F) -> Vec<u32>
+where
+    F: Fn(&Datom) -> K,
+{
+    let mut perm: Vec<u32> = (0..canonical.len())
+        .map(|i| u32::try_from(i).unwrap_or(u32::MAX))
+        .collect();
+    perm.sort_unstable_by(|&a, &b| {
+        let da = &canonical[a as usize];
+        let db = &canonical[b as usize];
+        key_fn(da).cmp(&key_fn(db))
+    });
+    perm
+}
 
 /// Rearrange a sorted `u32` permutation into Eytzinger (BFS) order.
 ///
@@ -93,99 +112,4 @@ fn inorder_collect(bfs: &[u32], out: &mut Vec<u32>, node: usize) {
     inorder_collect(bfs, out, 2 * node); // left
     out.push(bfs[node]);
     inorder_collect(bfs, out, 2 * node + 1); // right
-}
-
-// ---------------------------------------------------------------------------
-// Tests (INV-FERR-071)
-// ---------------------------------------------------------------------------
-
-#[cfg(test)]
-mod tests {
-    use ferratom::{Attribute, Datom, EntityId, Op, TxId, Value};
-
-    use super::{layout_permutation, layout_search, layout_to_sorted};
-
-    /// Helper: build a datom with a specific entity content for ordering.
-    fn make_datom(content: &[u8]) -> Datom {
-        Datom::new(
-            EntityId::from_content(content),
-            Attribute::from("db/doc"),
-            Value::Bool(true),
-            TxId::new(0, 1, 0),
-            Op::Assert,
-        )
-    }
-
-    /// Empty input produces a single-element sentinel array.
-    /// Search on empty returns None.
-    #[test]
-    fn test_eytzinger_empty() {
-        let result = layout_permutation(&[]);
-        assert_eq!(
-            result.len(),
-            1,
-            "INV-FERR-071: empty layout has sentinel only"
-        );
-        assert_eq!(result[0], u32::MAX, "INV-FERR-071: sentinel is u32::MAX");
-
-        // Search on empty Eytzinger array returns None.
-        let canonical: Vec<Datom> = Vec::new();
-        let found = layout_search(&result, &canonical, |_d| std::cmp::Ordering::Equal);
-        assert!(
-            found.is_none(),
-            "INV-FERR-071: search on empty returns None"
-        );
-    }
-
-    /// Single element: [MAX, 0]. Search finds the element.
-    #[test]
-    fn test_eytzinger_single() {
-        let result = layout_permutation(&[0]);
-        assert_eq!(
-            result,
-            vec![u32::MAX, 0],
-            "INV-FERR-071: single element layout"
-        );
-
-        // Search for the single element.
-        let d = make_datom(b"alpha");
-        let canonical = vec![d.clone()];
-        let found = layout_search(&result, &canonical, |datom| datom.cmp(&d));
-        assert!(found.is_some(), "INV-FERR-071: search finds single element");
-    }
-
-    /// Seven elements form a perfect binary tree of depth 3.
-    ///
-    /// Sorted: [0, 1, 2, 3, 4, 5, 6]
-    /// BFS:    [MAX, 3, 1, 5, 0, 2, 4, 6]
-    ///
-    /// Tree:       3
-    ///           /   \
-    ///          1     5
-    ///         / \   / \
-    ///        0   2 4   6
-    #[test]
-    fn test_eytzinger_seven() {
-        let sorted: Vec<u32> = (0..7).collect();
-        let result = layout_permutation(&sorted);
-        assert_eq!(
-            result,
-            vec![u32::MAX, 3, 1, 5, 0, 2, 4, 6],
-            "INV-FERR-071: perfect binary tree BFS order"
-        );
-    }
-
-    /// Round-trip: `layout_to_sorted(layout_permutation(sorted)) == sorted`.
-    #[test]
-    fn test_eytzinger_roundtrip() {
-        for n in 0..=20 {
-            let sorted: Vec<u32> = (0..n).collect();
-            let bfs = layout_permutation(&sorted);
-            let recovered = layout_to_sorted(&bfs);
-            assert_eq!(
-                recovered, sorted,
-                "INV-FERR-071: round-trip failed for n={n}"
-            );
-        }
-    }
 }

@@ -1,0 +1,123 @@
+//! LIVE bitvector construction and kernels (INV-FERR-029).
+//!
+//! A datom is live iff it is the last (highest `TxId`) Assert in its
+//! `(entity, attribute, value)` group. Since canonical datoms are
+//! EAVT-sorted, all entries for a fixed `(e, a, v)` triple are
+//! contiguous -- single-pass O(n).
+
+use bitvec::prelude::{BitVec, Lsb0};
+use ferratom::{Datom, Op};
+
+/// Build LIVE bitvector from EAVT-sorted canonical array (INV-FERR-029).
+///
+/// For each `(entity, attribute, value)` triple, the datom with the
+/// highest `TxId` determines liveness. Since canonical is EAVT-sorted,
+/// datoms for the same `(e,a,v)` are contiguous -- single-pass O(n).
+///
+/// A datom is marked live iff it is the last (highest `TxId`) in its
+/// `(e,a,v)` group AND its `Op` is `Assert`.
+pub(crate) fn build_live_bitvector(canonical: &[Datom]) -> BitVec<u64, Lsb0> {
+    let mut live = BitVec::repeat(false, canonical.len());
+    for position in live_positions_kernel(canonical) {
+        live.set(position as usize, true);
+    }
+    live
+}
+
+/// Build a LIVE bitvector from EAVT-sorted datoms (public).
+///
+/// Delegates to `build_live_bitvector`. Used by V3 checkpoint deserialization
+/// when loading from non-Positional stores (INV-FERR-029, INV-FERR-076).
+#[must_use]
+pub fn build_live_bitvector_pub(sorted_datoms: &[Datom]) -> BitVec<u64, Lsb0> {
+    build_live_bitvector(sorted_datoms)
+}
+
+/// Proof-friendly LIVE kernel for canonical datoms (INV-FERR-029, INV-FERR-076).
+///
+/// Returns the canonical positions whose latest event in each
+/// `(entity, attribute, value)` group is `Assert`.
+///
+/// This isolates the semantic part of LIVE reconstruction from the concrete
+/// `BitVec` representation so verification can target the algebra directly.
+/// INV-FERR-029: a datom is live iff it is the last (highest `TxId`) Assert
+/// in its `(e, a, v)` group. This function exposes that predicate for
+/// Kani and proptest harnesses.
+#[cfg(any(test, feature = "test-utils"))]
+#[must_use]
+pub fn live_positions_for_test(sorted_datoms: &[Datom]) -> Vec<u32> {
+    live_positions_kernel(sorted_datoms)
+}
+
+/// Test-only access to the sorted-run LIVE kernel over proof-friendly keys.
+///
+/// This uses the same run-grouping algorithm as `live_positions_kernel`, but
+/// accepts already-projected `(group_key, op)` pairs so verifiers can avoid
+/// incidental complexity from runtime datom field representations.
+#[cfg(any(test, feature = "test-utils"))]
+#[must_use]
+pub fn live_positions_from_sorted_run_keys_for_test<K: PartialEq>(entries: &[(K, Op)]) -> Vec<u32> {
+    live_positions_from_sorted_runs(entries.len(), |idx| &entries[idx].0, |idx| entries[idx].1)
+}
+
+/// Proof-friendly LIVE reconstruction kernel over sorted group keys.
+///
+/// The input domain is any sequence already grouped by the canonical
+/// `(entity, attribute, value)` equivalence relation. The last element of each
+/// equal-key run decides whether that run contributes a LIVE position.
+pub(crate) fn live_positions_from_sorted_runs<K, FKey, FOp>(
+    len: usize,
+    key_at: FKey,
+    op_at: FOp,
+) -> Vec<u32>
+where
+    K: PartialEq,
+    FKey: Fn(usize) -> K,
+    FOp: Fn(usize) -> Op,
+{
+    // INV-FERR-076: canonical arrays are bounded to u32 position space.
+    // The debug_assert catches overflow in debug/test builds. In release,
+    // try_from().unwrap_or(u32::MAX) is the fallback -- producing a sentinel
+    // rather than panicking (NEG-FERR-001). This sentinel would corrupt
+    // positions if reached, but the debug_assert ensures it never fires
+    // in tested builds. A store with >4B datoms would require architectural
+    // changes (u64 positions) regardless.
+    debug_assert!(
+        u32::try_from(len).is_ok(),
+        "INV-FERR-076: canonical array exceeds u32 position space"
+    );
+
+    let mut live_positions = Vec::new();
+    let mut i = 0;
+    while i < len {
+        let key = key_at(i);
+        let mut j = i + 1;
+        while j < len && key_at(j) == key {
+            j += 1;
+        }
+        if op_at(j - 1) == Op::Assert {
+            live_positions.push(u32::try_from(j - 1).unwrap_or(u32::MAX));
+        }
+        i = j;
+    }
+    live_positions
+}
+
+/// Proof-friendly LIVE reconstruction kernel over canonical datoms.
+///
+/// Since canonical datoms are EAVT-sorted, all entries for a fixed
+/// `(entity, attribute, value)` triple are contiguous. This kernel returns the
+/// last position of each group whose latest operation is `Assert`.
+pub(crate) fn live_positions_kernel(canonical: &[Datom]) -> Vec<u32> {
+    live_positions_from_sorted_runs(
+        canonical.len(),
+        |idx| {
+            (
+                canonical[idx].entity(),
+                canonical[idx].attribute(),
+                canonical[idx].value(),
+            )
+        },
+        |idx| canonical[idx].op(),
+    )
+}

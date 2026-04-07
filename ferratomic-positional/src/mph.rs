@@ -71,7 +71,7 @@ pub(crate) struct ChdBackend {
     /// One displacement value per bucket.
     displacements: Vec<u32>,
     /// Reverse mapping: `slot_to_key_idx[slot]` = index in sorted keys array.
-    /// `~1.25 × key count` slots (non-minimal overprovisioning).
+    /// `~1.25 x key count` slots (non-minimal overprovisioning).
     slot_to_key_idx: Vec<u32>,
 }
 
@@ -110,7 +110,7 @@ fn reduce_hash(hash_val: u64, modulus: usize) -> usize {
     let result = hash_val % (modulus as u64);
     debug_assert!(
         usize::try_from(result).is_ok(),
-        "reduce_hash: result {result} exceeds usize::MAX — modulus invariant violated"
+        "reduce_hash: result {result} exceeds usize::MAX -- modulus invariant violated"
     );
     usize::try_from(result).unwrap_or(0)
 }
@@ -257,7 +257,7 @@ pub(crate) struct Mph {
     /// The MPH backend (Phase 4a: `ChdBackend`).
     backend: ChdBackend,
     /// `entity_first_pos[i]` = canonical position of first datom for entity rank i.
-    /// Verification uses `canonical[pos].entity()` — no separate keys storage.
+    /// Verification uses `canonical[pos].entity()` -- no separate keys storage.
     /// Length = number of unique entities.
     entity_first_pos: Vec<u32>,
 }
@@ -266,7 +266,7 @@ impl Mph {
     /// Build from sorted unique `EntityId`s and their first canonical positions
     /// (contributes to INV-FERR-027).
     ///
-    /// The `sorted_keys` are borrowed for backend construction only — NOT stored.
+    /// The `sorted_keys` are borrowed for backend construction only -- NOT stored.
     /// Verification uses the canonical datom array (passed to `entity_position`).
     /// This saves 32 bytes per unique entity vs storing a keys copy.
     ///
@@ -300,9 +300,9 @@ impl Mph {
         }
         let slot = self.backend.lookup(key);
         let key_idx = self.backend.reverse_lookup(slot)?;
-        // .get() handles bounds check — no redundant key_idx >= len() needed.
+        // .get() handles bounds check -- no redundant key_idx >= len() needed.
         let pos = *self.entity_first_pos.get(key_idx)?;
-        // Verify against canonical array — zero-copy, no duplicate keys storage.
+        // Verify against canonical array -- zero-copy, no duplicate keys storage.
         if canonical.get(pos as usize).map(ferratom::Datom::entity) == Some(*key) {
             Some(pos)
         } else {
@@ -315,7 +315,7 @@ impl Mph {
 mod tests {
     use ferratom::{Attribute, Datom, EntityId, Op, TxId, Value};
 
-    use crate::positional::PositionalStore;
+    use crate::store::PositionalStore;
 
     fn make_entity(seed: u8) -> EntityId {
         EntityId::from_content(&[seed])
