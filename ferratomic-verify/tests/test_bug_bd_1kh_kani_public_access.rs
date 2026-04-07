@@ -31,7 +31,9 @@ fn test_bug_bd_1kh_kani_public_access() {
         for pattern in forbidden {
             assert!(
                 !source.contains(pattern),
-                "bd-1kh: {name} still depends on internal field pattern `{pattern}`"
+                "bd-1kh: {} still depends on internal field pattern `{}`",
+                name,
+                pattern
             );
         }
     }

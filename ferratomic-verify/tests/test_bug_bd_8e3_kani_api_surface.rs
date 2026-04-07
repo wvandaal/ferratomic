@@ -16,15 +16,18 @@ fn test_bug_bd_8e3_kani_api_surface() {
     for (name, source) in kani_sources() {
         assert!(
             !source.contains("store::{Committed, Store, Transaction}"),
-            "bd-8e3: {name} still imports Transaction from store module"
+            "bd-8e3: {} still imports Transaction from store module",
+            name
         );
         assert!(
             !source.contains("store::{Store, Transaction}"),
-            "bd-8e3: {name} still mixes Store and Transaction from store module"
+            "bd-8e3: {} still mixes Store and Transaction from store module",
+            name
         );
         assert!(
             !source.contains("store::Transaction"),
-            "bd-8e3: {name} still refers to store::Transaction"
+            "bd-8e3: {} still refers to store::Transaction",
+            name
         );
     }
 }
