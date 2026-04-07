@@ -5,8 +5,9 @@
 //! count of 1-bits in `[0, i)`. `select1(k)` uses binary search on the
 //! prefix sums: O(log(n/64)).
 //!
-//! Space overhead: one `u64` per 64-bit word = 12.5% of the bitvector.
-//! This is cheaper than Rank9 (25%) and sufficient for Phase 4a.
+//! Space overhead: one `u64` per 64-bit word (~100% of `BitVec` raw
+//! storage). Simpler than Rank9 (~25% overhead) at the cost of more
+//! space. Sufficient for Phase 4a; Rank9 upgrade path for Phase 4b.
 
 use bitvec::prelude::{BitVec, Lsb0};
 
@@ -263,5 +264,32 @@ mod tests {
         assert_eq!(sbv.select1(0), Some(0));
         assert_eq!(sbv.select1(1), Some(7));
         assert_eq!(sbv.select1(2), Some(14));
+    }
+
+    #[test]
+    fn test_select1_all_zeros() {
+        let sbv = SuccinctBitVec::from_bitvec(make_bitvec(&[false; 128]));
+        assert_eq!(sbv.ones_count(), 0);
+        assert_eq!(
+            sbv.select1(0),
+            None,
+            "ADR-FERR-030: select1(0) on all-zeros must return None"
+        );
+    }
+
+    #[test]
+    fn test_rank1_at_exact_length() {
+        let bits = make_bitvec(&[true, false, true, true]);
+        let sbv = SuccinctBitVec::from_bitvec(bits);
+        assert_eq!(
+            sbv.rank1(sbv.len()),
+            sbv.ones_count(),
+            "ADR-FERR-030: rank1(len) must equal ones_count"
+        );
+        assert_eq!(
+            sbv.rank1(sbv.len() + 100),
+            sbv.ones_count(),
+            "ADR-FERR-030: rank1 beyond len must equal ones_count"
+        );
     }
 }

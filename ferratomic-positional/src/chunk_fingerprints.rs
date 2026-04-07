@@ -134,10 +134,13 @@ impl ChunkFingerprints {
     }
 
     /// Mark a chunk as dirty (modified since last LIVE rebuild).
+    /// Extends the dirty bitvector if `chunk_idx` is beyond current range
+    /// (consistent with `insert_hash` auto-extend behavior).
     pub fn mark_dirty(&mut self, chunk_idx: usize) {
-        if chunk_idx < self.dirty.len() {
-            self.dirty.set(chunk_idx, true);
+        if chunk_idx >= self.dirty.len() {
+            self.dirty.resize(chunk_idx + 1, false);
         }
+        self.dirty.set(chunk_idx, true);
     }
 
     /// Iterator over dirty chunk indices (INV-FERR-080 prerequisite).

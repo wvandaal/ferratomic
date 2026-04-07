@@ -119,6 +119,7 @@ pub fn serialize_v3_bytes(
     live_bits: &BitVec<u64, Lsb0>,
 ) -> Result<Vec<u8>, FerraError> {
     let payload = V3PayloadWrite {
+        // schema_pairs clone retained: bincode Serialize requires owned String fields.
         schema_pairs: schema_pairs.to_vec(),
         datoms,
         live_bits: live_bits.clone(),
@@ -272,13 +273,13 @@ pub fn deserialize_v3_bytes(data: &[u8]) -> Result<CheckpointData, FerraError> {
 /// preserve EAVT sort order (subsequences of the canonical array).
 /// ADR-FERR-010: uses core `Datom` (`Serialize` only).
 #[derive(Serialize)]
-struct V3LiveFirstPayloadWrite {
+struct V3LiveFirstPayloadWrite<'a> {
     /// Schema attributes sorted by name for deterministic output.
     schema_pairs: Vec<(String, AttributeDef)>,
-    /// LIVE datoms in canonical EAVT order (INV-FERR-029).
-    live_datoms: Vec<Datom>,
+    /// LIVE datoms in canonical EAVT order (INV-FERR-029, zero-clone bd-86ap).
+    live_datoms: Vec<&'a Datom>,
     /// Historical (non-LIVE) datoms in canonical EAVT order (INV-FERR-075).
-    hist_datoms: Vec<Datom>,
+    hist_datoms: Vec<&'a Datom>,
 }
 
 /// Deserialization payload for LIVE-first V3 checkpoint (INV-FERR-075).
@@ -319,13 +320,14 @@ pub fn serialize_v3_live_first(
     // datom per (e,a,v) group is placed in live_datoms. This is correct because
     // the LIVE functional property eval(Q, S) = eval(Q, LIVE_datoms(S)) holds
     // for the witness-only subset — the witness alone determines the LIVE view.
-    let mut live_datoms = Vec::new();
-    let mut hist_datoms = Vec::new();
+    // Zero-clone partition: collect references, not clones (bd-86ap/bd-tlqo).
+    let mut live_datoms: Vec<&Datom> = Vec::new();
+    let mut hist_datoms: Vec<&Datom> = Vec::new();
     for (i, datom) in datoms.iter().enumerate() {
         if live_bits.get(i).as_deref() == Some(&true) {
-            live_datoms.push(datom.clone());
+            live_datoms.push(datom);
         } else {
-            hist_datoms.push(datom.clone());
+            hist_datoms.push(datom);
         }
     }
 

@@ -207,13 +207,18 @@ impl Store {
         self.transact(transaction, tx_id)
     }
 
-    /// Merge-sort splice: insert datoms into Positional without `OrdMap`
-    /// detour (bd-886d, INV-FERR-072).
+    /// Merge-sort splice: INV-FERR-072 Path A (bd-886d).
     ///
-    /// Produces identical datom set to promote+insert+demote.
+    /// Inserts datoms into Positional without `OrdMap` detour. Produces
+    /// identical datom set to promote+insert+demote (batch equivalence
+    /// theorem). Takes `&[Datom]` (not `Vec<Datom>` as in spec Level 2)
+    /// because the caller owns the stamped datoms for the receipt.
+    ///
     /// Cost: O(N + K log K) — N = store size, K = transaction size.
+    /// Fingerprint is recomputed in O(N+K) via `from_sorted_canonical`
+    /// (spec Level 2 describes O(K) incremental XOR — deferred to Phase 4b).
     ///
-    /// 1. Sort new datoms into canonical EAVT order: O(K log K)
+    /// 1. Sort + dedup new datoms into canonical EAVT order: O(K log K)
     /// 2. Merge into existing canonical array: O(N + K)
     /// 3. Build new `PositionalStore` (fingerprint + LIVE in parallel): O(N + K)
     /// 4. Update `live_causal`/`live_set` for new datoms only: O(K log M)

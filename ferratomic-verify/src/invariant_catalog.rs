@@ -86,10 +86,13 @@ impl Invariant {
     }
 }
 
-/// Complete catalog of all 69 invariants (67 INV-FERR + 2 CI-FERR).
+/// Invariant catalog: 70 entries (68 INV-FERR + 2 CI-FERR).
 ///
+/// Covers INV-FERR-001 through INV-FERR-077 + INV-FERR-084 + CI-FERR-001-002.
+/// INV-FERR-078-083, 085 (spec/09 remaining) not yet cataloged.
 /// Order matches spec module order: 01-core, 02-concurrency, 03-performance,
-/// 04-decisions, 05-federation, 06-prolly, 07-refinement, 08-verification.
+/// 04-decisions, 05-federation, 06-prolly, 07-refinement, 08-verification,
+/// 09-performance-architecture.
 pub const CATALOG: &[Invariant] = &[
     // -----------------------------------------------------------------------
     // 01-core-invariants.md: INV-FERR-001..012 (Stage 0)
@@ -882,6 +885,17 @@ pub const CATALOG: &[Invariant] = &[
         integration_test: None,
         type_level: None,
     },
+    Invariant {
+        id: "INV-FERR-084",
+        name: "WAL Dedup Bloom Filter",
+        stage: Stage::Stage1,
+        lean_theorem: None,
+        proptest_fn: None,
+        kani_harness: None,
+        stateright_model: None,
+        integration_test: None,
+        type_level: Some("WalDedupBloom struct with Box<[u64]> bit array"),
+    },
     // -----------------------------------------------------------------------
     // 07-refinement.md: CI-FERR-001..002 (Stage 0 -- foundational coupling)
     // -----------------------------------------------------------------------
@@ -990,21 +1004,22 @@ pub fn invariants_without_test() -> Vec<&'static str> {
 mod tests {
     use super::*;
 
-    /// ADR-FERR-013: catalog must contain all 69 invariants (67 INV + 2 CI).
+    /// ADR-FERR-013: catalog must contain all 70 invariants (68 INV + 2 CI).
     ///
     /// Breakdown: 12 core (001-012) + 12 concurrency (013-024) +
     /// 8 performance (025-032) + 4 decisions (033-036) +
     /// 8 federation (037-044) + 6 prolly (045-050) +
     /// 5 VKN (051-055) + 4 verification (056-059) +
-    /// 8 perf-architecture (070-077) + 2 CI-FERR (001-002).
+    /// 9 perf-architecture (070-077, 084) + 2 CI-FERR (001-002).
+    /// Not yet cataloged: INV-FERR-078-083, 085.
     ///
     /// Update this count and breakdown if the spec adds or removes invariants.
     #[test]
     fn test_catalog_count() {
         assert_eq!(
             CATALOG.len(),
-            69,
-            "ADR-FERR-013: expected 69 invariants (67 INV-FERR + 2 CI-FERR), got {}",
+            70,
+            "ADR-FERR-013: expected 70 invariants (68 INV-FERR + 2 CI-FERR), got {}",
             CATALOG.len()
         );
     }
@@ -1034,10 +1049,10 @@ mod tests {
             "Stage 0 total: expected 50, got {}",
             counts[0].2
         );
-        // Stage 1: 14 original + 4 perf-architecture (073, 074, 075, 077) = 18
+        // Stage 1: 14 original + 5 perf-architecture (073, 074, 075, 077, 084) = 19
         assert_eq!(
-            counts[1].2, 18,
-            "Stage 1 total: expected 18, got {}",
+            counts[1].2, 19,
+            "Stage 1 total: expected 19, got {}",
             counts[1].2
         );
         // Stage 2: unchanged = 1

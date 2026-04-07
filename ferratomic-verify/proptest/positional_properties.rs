@@ -627,4 +627,104 @@ proptest! {
             ps.len(), cf.num_chunks()
         );
     }
+
+    /// INV-FERR-079: incremental update theorem.
+    ///
+    /// Building from N-1 datoms then insert_hash-ing the Nth must produce
+    /// the same store fingerprint as building from all N datoms at once.
+    ///
+    /// Falsification: incremental fingerprint differs from batch.
+    #[test]
+    fn inv_ferr_079_insert_hash_incremental(
+        datoms in prop::collection::btree_set(arb_datom(), 2..200),
+    ) {
+        use ferratomic_db::positional::ChunkFingerprints;
+
+        let all: Vec<_> = datoms.into_iter().collect();
+        let last = &all[all.len() - 1];
+        let rest = &all[..all.len() - 1];
+
+        let ps_all = PositionalStore::from_datoms(all.iter().cloned());
+        let ps_rest = PositionalStore::from_datoms(rest.iter().cloned());
+
+        let cf_batch = ChunkFingerprints::from_canonical(ps_all.datoms(), 16);
+
+        // Find position of `last` in the full canonical array.
+        let pos = ps_all.datoms().iter().position(|d| d == last);
+        if let Some(p) = pos {
+            let mut cf_inc = ChunkFingerprints::from_canonical(ps_rest.datoms(), 16);
+            cf_inc.insert_hash(p, &last.content_hash());
+
+            // Fingerprints may differ (positions shift when inserting), but
+            // store_fingerprint (XOR of all hashes) must match because XOR
+            // is order-independent.
+            prop_assert_eq!(
+                cf_inc.store_fingerprint(),
+                cf_batch.store_fingerprint(),
+                "INV-FERR-079: incremental insert_hash store fingerprint must match batch"
+            );
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ADR-FERR-030: SuccinctBitVec rank-select properties
+// ---------------------------------------------------------------------------
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(10_000))]
+
+    /// ADR-FERR-030: rank-select inverse property.
+    ///
+    /// For any bitvector, `rank1(select1(k)) == k` for all k < ones_count.
+    /// This is the fundamental correctness property of succinct bitvectors.
+    ///
+    /// Falsification: rank1(select1(k)) != k for some k.
+    #[test]
+    fn adr_ferr_030_rank_select_inverse(
+        datoms in prop::collection::btree_set(arb_datom(), 0..500),
+    ) {
+        use ferratomic_db::positional::SuccinctBitVec;
+
+        // Build a PositionalStore and use its LIVE bitvector as test input.
+        // This exercises SuccinctBitVec on realistic bitvectors from the
+        // actual LIVE computation (not synthetic patterns).
+        let ps = PositionalStore::from_datoms(datoms.into_iter());
+        let sbv = SuccinctBitVec::from_bitvec(ps.live_bits_clone());
+
+        // rank1(len) == ones_count (boundary condition)
+        prop_assert_eq!(
+            sbv.rank1(sbv.len()), sbv.ones_count(),
+            "ADR-FERR-030: rank1(len) must equal ones_count"
+        );
+
+        // rank-select inverse for all k
+        for k in 0..sbv.ones_count() {
+            if let Some(pos) = sbv.select1(k) {
+                let rank_at_pos = sbv.rank1(pos);
+                prop_assert_eq!(
+                    rank_at_pos, k,
+                    "ADR-FERR-030: rank1(select1({})) = {}, expected {}",
+                    k, rank_at_pos, k
+                );
+                // selected position must actually be a 1-bit
+                prop_assert!(
+                    sbv.get(pos),
+                    "ADR-FERR-030: select1({k}) = {pos} but bit is not set"
+                );
+            }
+        }
+
+        // rank monotonicity: rank1(i) <= rank1(i+1)
+        let mut prev = 0;
+        for i in 0..sbv.len() {
+            let r = sbv.rank1(i);
+            prop_assert!(
+                r >= prev,
+                "ADR-FERR-030: rank1({i})={r} < rank1({})={prev} — monotonicity violated",
+                i.saturating_sub(1)
+            );
+            prev = r;
+        }
+    }
 }

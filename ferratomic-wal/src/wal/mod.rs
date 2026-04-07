@@ -183,9 +183,15 @@ impl Wal {
 
     /// Mutable access to the dedup Bloom filter (INV-FERR-084).
     ///
-    /// The caller (Database layer) uses this to check/insert datom
-    /// content hashes before WAL writes. Advisory — false positives
-    /// are safe due to set semantics (INV-FERR-003).
+    /// Mutable access to the dedup Bloom filter (INV-FERR-084).
+    ///
+    /// The Database layer calls this to check/insert datom content hashes
+    /// using the two-phase protocol: (1) `probably_contains` → if true,
+    /// (2) verify datom exists in store → skip WAL write only if both pass.
+    ///
+    /// Integration into `Database::transact` is deferred — the data
+    /// structure is ready and tested, wiring requires the Database write
+    /// lock refactor (Phase 4b `WriterActor`).
     pub fn dedup_bloom_mut(&mut self) -> &mut dedup_bloom::WalDedupBloom {
         &mut self.dedup_bloom
     }

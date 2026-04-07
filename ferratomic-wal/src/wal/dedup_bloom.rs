@@ -132,7 +132,10 @@ fn hash_indices(hash: &[u8; 32]) -> [usize; K] {
     let mut i = 0;
     while i < K {
         let bit_idx = h1.wrapping_add((i as u64).wrapping_mul(h2)).rem_euclid(m);
-        // bit_idx < BLOOM_BITS = 524,288 which fits in u32 on all platforms.
+        // rem_euclid(m) guarantees bit_idx in [0, BLOOM_BITS). BLOOM_BITS = 524,288
+        // fits in u32, so try_from is infallible on all platforms (usize >= u32).
+        // unwrap_or(0) satisfies NEG-FERR-001 (no panic) as a fallback that can
+        // never actually trigger.
         indices[i] = usize::try_from(bit_idx).unwrap_or(0);
         i += 1;
     }
