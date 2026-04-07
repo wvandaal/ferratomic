@@ -143,9 +143,7 @@ fn measure_p99_read_latency_ns(
         .map(|i| EntityId::from_content(format!("entity-{}", i % datom_count).as_bytes()))
         .collect();
 
-    let indexes = store.indexes().unwrap();
-
-    // Warm up: fault in pages / warm caches.
+    // Warm up key.
     let warmup_key = EavtKey::from_datom(&ferratom::Datom::new(
         lookup_entities[0],
         Attribute::from("db/doc"),
@@ -153,7 +151,14 @@ fn measure_p99_read_latency_ns(
         ferratom::TxId::new(0, 0, 0),
         ferratom::Op::Assert,
     ));
-    let _ = indexes.eavt().backend_get(&warmup_key);
+
+    // Dispatch on store variant: OrdMap uses indexes(), Positional uses eavt_get().
+    // Both provide O(log n) EAVT point lookup (INV-FERR-027).
+    if let Some(indexes) = store.indexes() {
+        let _ = indexes.eavt().backend_get(&warmup_key);
+    } else if let Some(ps) = store.positional() {
+        let _ = ps.eavt_get(&warmup_key);
+    }
 
     let mut latencies_ns: Vec<u128> = Vec::with_capacity(lookup_count);
 
@@ -167,7 +172,13 @@ fn measure_p99_read_latency_ns(
         ));
 
         let start = Instant::now();
-        let result = indexes.eavt().backend_get(&key);
+        let result = if let Some(indexes) = store.indexes() {
+            indexes.eavt().backend_get(&key)
+        } else if let Some(ps) = store.positional() {
+            ps.eavt_get(&key)
+        } else {
+            None
+        };
         let elapsed = start.elapsed();
 
         std::hint::black_box(result);
@@ -279,12 +290,14 @@ fn threshold_inv_ferr_028_cold_start() {
         .expect("INV-FERR-028: cold_start must succeed with valid checkpoint");
     let elapsed = start.elapsed();
 
-    // Verify we actually recovered data, not just a genesis.
+    // Verify we actually recovered data, not just an empty genesis.
+    // Note: Store::from_datoms() sets epoch=0, so we check datom count
+    // rather than epoch to prove recovery loaded the checkpoint.
+    let recovered_count = result.database.snapshot().datoms().count();
     assert!(
-        result.database.epoch() > 0,
-        "INV-FERR-028: recovered database must have epoch > 0, got {}. \
-         Cold start may have fallen through to genesis.",
-        result.database.epoch()
+        recovered_count >= datom_count,
+        "INV-FERR-028: recovered database must have >= {datom_count} datoms, \
+         got {recovered_count}. Cold start may have fallen through to genesis."
     );
 
     assert!(
@@ -364,11 +377,11 @@ fn threshold_inv_ferr_028_cold_start_5k() {
         .expect("INV-FERR-028: cold_start must succeed with valid checkpoint");
     let elapsed = start.elapsed();
 
+    let recovered_count = result.database.snapshot().datoms().count();
     assert!(
-        result.database.epoch() > 0,
-        "INV-FERR-028: recovered database must have epoch > 0, got {}. \
-         Cold start may have fallen through to genesis.",
-        result.database.epoch()
+        recovered_count >= datom_count,
+        "INV-FERR-028: recovered database must have >= {datom_count} datoms, \
+         got {recovered_count}. Cold start may have fallen through to genesis."
     );
 
     assert!(
