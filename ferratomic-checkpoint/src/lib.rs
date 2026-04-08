@@ -1,9 +1,34 @@
 //! Checkpoint: serialize/deserialize datom stores with BLAKE3 integrity.
 //!
-//! INV-FERR-013: `load(checkpoint(S)) = S` — round-trip identity.
-//! The datom set, indexes, schema, and epoch are preserved exactly
-//! through serialization and deserialization. No datom is lost, added,
-//! or reordered.
+//! This crate handles durable snapshots of the entire datom store — the
+//! "cold start" artifact that lets a database recover without replaying
+//! the full WAL history.
+//!
+//! ## Dependency DAG
+//!
+//! Depends on `ferratom` (datom types), `ferratomic-index` (for index
+//! key reconstruction on load), `ferratomic-positional` (LIVE bitvector),
+//! and `bitvec`. Consumed by `ferratomic-core` for cold-start recovery
+//! and periodic snapshotting.
+//!
+//! ## Key Types
+//!
+//! - [`CheckpointData`] — plain struct of raw components (datoms, schema,
+//!   epoch, LIVE bitvector) returned by deserialization. The store layer
+//!   reconstructs `Store` from this, avoiding a circular dependency.
+//! - [`write_checkpoint`] / [`load_checkpoint`] — top-level I/O functions
+//!   that operate on a [`StorageBackend`](ferratomic_storage::StorageBackend).
+//! - [`write_checkpoint_live_first`] — V3 serializer with LIVE-first
+//!   ordering for faster filtered reads.
+//!
+//! ## Invariants
+//!
+//! - INV-FERR-013: `load(checkpoint(S)) = S` — round-trip identity.
+//!   The datom set, indexes, schema, and epoch are preserved exactly
+//!   through serialization and deserialization. No datom is lost, added,
+//!   or reordered.
+//! - INV-FERR-028: Cold start completes in bounded time — checkpoint
+//!   deserialization is the fast path; WAL replay handles only the delta.
 //!
 //! ## Design: raw data, no Store dependency
 //!
@@ -13,12 +38,18 @@
 //! reconstructs `Store` from `CheckpointData`. This avoids a circular
 //! dependency between ferratomic-checkpoint and ferratomic-db.
 //!
-//! ## Format dispatch
+//! ## Format Dispatch (Version Selection Guide)
 //!
-//! Deserialization dispatches on the first 4 magic bytes:
-//! - `b"CHKP"` — V2 (legacy)
-//! - `b"CHK3"` — V3 (pre-sorted, LIVE bitvector persisted)
-//! - `b"CHK4"` — V4 (columnar, per-column bincode)
+//! Deserialization dispatches on the first 4 magic bytes. When choosing
+//! a format for new checkpoints, prefer V3 (the default) unless you need
+//! columnar access patterns (V4). V2 is read-only legacy.
+//!
+//! - `b"CHKP"` — **V2 (legacy)**: monolithic bincode payload. Read-only
+//!   support retained for existing checkpoint files. Do not produce new V2.
+//! - `b"CHK3"` — **V3 (LIVE-first)**: pre-sorted datoms with a persisted
+//!   LIVE bitvector. Default serialization format. Best for general use.
+//! - `b"CHK4"` — **V4 (columnar)**: per-column bincode for selective
+//!   deserialization. Use when only a subset of columns is needed.
 //!
 //! Serialization produces V3 by default. V4 serialization is available via
 //! [`serialize_v4_checkpoint_bytes`]. V2 read support is retained for

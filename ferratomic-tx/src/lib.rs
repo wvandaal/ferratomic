@@ -1,8 +1,28 @@
 //! Transaction typestate builder for Ferratomic.
 //!
-//! INV-FERR-009: Schema validation at the transact boundary.
-//! INV-FERR-006: Transaction atomicity — all datoms commit or none do.
-//! INV-FERR-018: Committed transactions are immutable (enforced by typestate).
+//! Encodes the `Building -> Committed` lifecycle at the type level so that
+//! invalid state transitions (e.g., reading datoms before commit, mutating
+//! after commit) are compile-time errors rather than runtime checks.
+//!
+//! ## Dependency DAG
+//!
+//! Leaf crate. Depends only on `ferratom` (for `Datom`, `EntityId`,
+//! `Attribute`, `Value`, `AgentId`, `Schema`). Consumed by
+//! `ferratomic-store` to feed validated datom batches into the CRDT.
+//!
+//! ## Key Types
+//!
+//! - `Transaction<Building>` — mutable accumulator. Accepts datoms via
+//!   `assert_datom`. Cannot be read.
+//! - `Transaction<Committed>` — sealed, immutable batch. Exposes `datoms()`
+//!   for downstream consumption. Produced by `commit(schema)` (validates
+//!   against schema) or `commit_unchecked()` (testing only).
+//!
+//! ## Invariants
+//!
+//! - INV-FERR-020: Transaction atomicity — all datoms commit or none do.
+//! - INV-FERR-009: Schema validation at the transact boundary.
+//! - INV-FERR-018: Committed transactions are immutable (enforced by typestate).
 //!
 //! # Typestate Pattern
 //!
