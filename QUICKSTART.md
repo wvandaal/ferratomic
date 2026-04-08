@@ -6,16 +6,9 @@
 
 ## Current Phase
 
-Phases 0-3 COMPLETE. **Phase 4a (core implementation) — gate closure in progress.**
-bd-add has 35 dependencies, 2 closed, 33 remaining. Key categories:
-- **bd-4i6u** (perf EPIC, CLOSED) — 20/20 beads, 72 audit defects fixed
-- **bd-cly9** (decomposition, CLOSED) — 11 crates
-- **bd-7fub** (Path to 10.0 EPIC, OPEN) — 11 tier EPICs + ~120 children
-- **bd-7fub.22.10** (re-review, IN_PROGRESS) — cleanroom re-review + 10.0/A+
-- **bd-y1w5** (tag v0.4.0-gate, OPEN) — tag + gate closure document
-- **28 standalone tasks** (OPEN) — testing, docs, bugs, code quality
-Fastest path: close 28 standalones → quality EPICs → re-review → tag → gate.
-Run `br show bd-add` for full list. See `docs/prompts/session-017-continuation.md`.
+Phases 0-3 COMPLETE. **Phase 4a CLOSED 2026-04-08 at composite 9.55-9.57 / A+** within Phase 4a's closed scope. Tag `v0.4.0-gate` at commit `732c3aa`. Closure document at `docs/reviews/2026-04-08-phase-4a-gate-closure.md`. Two independent verification layers: lifecycle/13 deep-mode review (prior session) + bd-snnh empirical 100M validation (today). The 0.43 gap from literal 10.0 is structurally Phase 4b/4c implementation work, not Phase 4a defects.
+
+**Phase 4a.5 + Phase 4b begin in parallel (diamond topology).** The next session will conduct full bead audits (lifecycle/14) and full spec audit (lifecycle/17) of Phases 4a.5 and 4b BEFORE implementation begins, to ensure lab-grade quality on the entire upcoming work surface.
 
 | Phase | Status |
 |-------|--------|
@@ -23,7 +16,11 @@ Run `br show bd-add` for full list. See `docs/prompts/session-017-continuation.m
 | 1: Lean proofs (0 sorry) | DONE |
 | 2: Tests (red phase) | DONE |
 | 3: Type definitions | DONE |
-| **4: Implementation** | **IN PROGRESS** |
+| **4a: Core implementation** | **CLOSED at A+ 2026-04-08 (v0.4.0-gate)** |
+| **4a.5: Federation foundations** | **NEXT (diamond track 1)** |
+| **4b: Performance + canonical spec form** | **NEXT (diamond track 2)** |
+| 4c: Federation/transport | — |
+| 4d: Datalog query engine | — |
 | 5: Integration | — |
 
 ## Where to Start
