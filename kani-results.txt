@@ -1,0 +1,521 @@
+Kani Rust Verifier 0.67.0 (cargo plugin)
+   Compiling ferratomic-verify v0.1.0 (/data/projects/ddis/ferratomic/ferratomic-verify)
+warning: unused variable: `stage`
+    --> ferratomic-verify/src/invariant_catalog.rs:1066:14
+     |
+1066 |           for (stage, covered, total) in &counts {
+     |                ^^^^^
+1067 | /             assert!(
+1068 | |                 covered <= total,
+1069 | |                 "ADR-FERR-013: {stage:?} covered ({covered}) > total ({total})"
+1070 | |             );
+     | |_____________- you might have meant to use string interpolation in this string literal
+     |
+     = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+help: if this is intentional, prefix it with an underscore
+     |
+1066 |         for (_stage, covered, total) in &counts {
+     |              +
+
+warning: unused variable: `i`
+   --> ferratomic-verify/src/../stateright/snapshot_isolation_model.rs:774:14
+    |
+774 |           for (i, history) in s0.observer_epoch_history.iter().enumerate() {
+    |                ^
+775 | /             assert!(
+776 | |                 history.is_empty(),
+777 | |                 "INV-FERR-011: observer {i} must start with empty epoch history"
+778 | |             );
+    | |_____________- you might have meant to use string interpolation in this string literal
+    |
+help: if this is intentional, prefix it with an underscore
+    |
+774 |         for (_i, history) in s0.observer_epoch_history.iter().enumerate() {
+    |              +
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 7.81s
+   Compiling ferratomic-verify v0.1.0 (/data/projects/ddis/ferratomic/ferratomic-verify)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.47s
+   Compiling ferratomic-verify v0.1.0 (/data/projects/ddis/ferratomic/ferratomic-verify)
+warning: unused variable: `i`
+   --> ferratomic-verify/integration/test_crdt.rs:495:10
+    |
+495 |       for (i, datom) in datoms.iter().enumerate() {
+    |            ^
+496 | /         assert!(
+497 | |             filter.accepts(datom),
+498 | |             "INV-FERR-030: AcceptAll must accept datom {i}, got false"
+499 | |         );
+    | |_________- you might have meant to use string interpolation in this string literal
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+help: if this is intentional, prefix it with an underscore
+    |
+495 |     for (_i, datom) in datoms.iter().enumerate() {
+    |          +
+
+warning: unused variable: `i`
+   --> ferratomic-verify/integration/test_crdt.rs:585:10
+    |
+585 |       for (i, (f, r)) in eavt_f.iter().zip(eavt_r.iter()).enumerate() {
+    |            ^
+586 | /         assert_eq!(
+587 | |             f.entity(),
+588 | |             r.entity(),
+589 | |             "INV-FERR-010: EAVT entity diverged at position {i}"
+590 | |         );
+    | |_________- you might have meant to use string interpolation in this string literal
+591 | /         assert_eq!(
+592 | |             f.attribute(),
+593 | |             r.attribute(),
+594 | |             "INV-FERR-010: EAVT attribute diverged at position {i}"
+595 | |         );
+    | |_________- you might have meant to use string interpolation in this string literal
+596 | /         assert_eq!(
+597 | |             f.value(),
+598 | |             r.value(),
+599 | |             "INV-FERR-010: EAVT value diverged at position {i}"
+600 | |         );
+    | |_________- you might have meant to use string interpolation in this string literal
+601 | /         assert_eq!(
+602 | |             f.tx(),
+603 | |             r.tx(),
+604 | |             "INV-FERR-010: EAVT tx diverged at position {i}"
+605 | |         );
+    | |_________- you might have meant to use string interpolation in this string literal
+    |
+help: if this is intentional, prefix it with an underscore
+    |
+585 |     for (_i, (f, r)) in eavt_f.iter().zip(eavt_r.iter()).enumerate() {
+    |          +
+
+warning: unused variable: `index_name`
+   --> ferratomic-verify/integration/test_crdt.rs:613:5
+    |
+613 |       index_name: &str,
+    |       ^^^^^^^^^^
+614 |   ) {
+615 | /     assert_eq!(
+616 | |         forward_datoms.len(),
+617 | |         reverse_datoms.len(),
+618 | |         "INV-FERR-010: {index_name} index cardinality diverged"
+619 | |     );
+    | |_____- you might have meant to use string interpolation in this string literal
+620 |       for (i, (f, r)) in forward_datoms.iter().zip(reverse_datoms.iter()).enumerate() {
+621 | /         assert_eq!(
+622 | |             f, r,
+623 | |             "INV-FERR-010: {index_name} index diverged at position {i}"
+624 | |         );
+    | |_________- you might have meant to use string interpolation in this string literal
+    |
+help: if this is intentional, prefix it with an underscore
+    |
+613 |     _index_name: &str,
+    |     +
+
+warning: unused variable: `i`
+   --> ferratomic-verify/integration/test_crdt.rs:620:10
+    |
+620 |       for (i, (f, r)) in forward_datoms.iter().zip(reverse_datoms.iter()).enumerate() {
+    |            ^
+621 | /         assert_eq!(
+622 | |             f, r,
+623 | |             "INV-FERR-010: {index_name} index diverged at position {i}"
+624 | |         );
+    | |_________- you might have meant to use string interpolation in this string literal
+    |
+help: if this is intentional, prefix it with an underscore
+    |
+620 |     for (_i, (f, r)) in forward_datoms.iter().zip(reverse_datoms.iter()).enumerate() {
+    |          +
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.85s
+   Compiling ferratomic-verify v0.1.0 (/data/projects/ddis/ferratomic/ferratomic-verify)
+warning: unused variable: `context`
+   --> ferratomic-verify/integration/test_recovery.rs:182:5
+    |
+182 |       context: &str,
+    |       ^^^^^^^
+...
+186 | /         assert!(
+187 | |             datoms.iter().any(|d| d.entity() == expected_entity),
+188 | |             "{context}: user-{i} entity must be present"
+189 | |         );
+    | |_________- you might have meant to use string interpolation in this string literal
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+help: if this is intentional, prefix it with an underscore
+    |
+182 |     _context: &str,
+    |     +
+
+warning: unused variable: `label`
+   --> ferratomic-verify/integration/test_recovery.rs:274:5
+    |
+274 |     label: &str,
+    |     ^^^^^
+...
+286 |     assert_eq!(expected.1, actual.1, "{label}: epoch mismatch");
+    |     ----------------------------------------------------------- you might have meant to use string interpolation in this string literal
+287 |     assert_eq!(expected.2, actual.2, "{label}: schema mismatch");
+    |     ------------------------------------------------------------ you might have meant to use string interpolation in this string literal
+288 |     assert_eq!(expected.0, actual.0, "{label}: datom set mismatch");
+    |     --------------------------------------------------------------- you might have meant to use string interpolation in this string literal
+    |
+help: if this is intentional, prefix it with an underscore
+    |
+274 |     _label: &str,
+    |     +
+
+warning: unused variable: `context`
+   --> ferratomic-verify/integration/test_recovery.rs:343:58
+    |
+343 |   fn assert_dc_entities_present(db: &Database, count: u64, context: &str) {
+    |                                                            ^^^^^^^
+...
+347 | /         assert!(
+348 | |             snap.datoms().any(|d| d.entity() == expected),
+349 | |             "{context}: dc-entity-{i} must be present"
+350 | |         );
+    | |_________- you might have meant to use string interpolation in this string literal
+    |
+help: if this is intentional, prefix it with an underscore
+    |
+343 | fn assert_dc_entities_present(db: &Database, count: u64, _context: &str) {
+    |                                                          +
+
+warning: unused variable: `context`
+   --> ferratomic-verify/integration/test_recovery.rs:523:58
+    |
+523 |   fn assert_tc_entities_present(db: &Database, count: u64, context: &str) {
+    |                                                            ^^^^^^^
+...
+527 | /         assert!(
+528 | |             snap.datoms().any(|d| d.entity() == expected),
+529 | |             "{context}: tc-entity-{i} must be present"
+530 | |         );
+    | |_________- you might have meant to use string interpolation in this string literal
+    |
+help: if this is intentional, prefix it with an underscore
+    |
+523 | fn assert_tc_entities_present(db: &Database, count: u64, _context: &str) {
+    |                                                          +
+
+warning: unused variable: `context`
+   --> ferratomic-verify/integration/test_recovery.rs:704:58
+    |
+704 |   fn assert_pc_entities_present(db: &Database, count: u64, context: &str) {
+    |                                                            ^^^^^^^
+...
+708 | /         assert!(
+709 | |             snap.datoms().any(|d| d.entity() == expected),
+710 | |             "{context}: pc-entity-{i} must be present"
+711 | |         );
+    | |_________- you might have meant to use string interpolation in this string literal
+    |
+help: if this is intentional, prefix it with an underscore
+    |
+704 | fn assert_pc_entities_present(db: &Database, count: u64, _context: &str) {
+    |                                                          +
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.78s
+   Compiling ferratomic-verify v0.1.0 (/data/projects/ddis/ferratomic/ferratomic-verify)
+warning: unused variable: `variant`
+   --> ferratomic-verify/integration/test_schema.rs:315:44
+    |
+315 | fn assert_message_variant_valid(msg: &str, variant: &str) {
+    |                                            ^^^^^^^
+316 |     assert!(!msg.is_empty(), "{variant} message should not be empty");
+    |     ----------------------------------------------------------------- you might have meant to use string interpolation in this string literal
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+help: if this is intentional, prefix it with an underscore
+    |
+315 | fn assert_message_variant_valid(msg: &str, _variant: &str) {
+    |                                            +
+
+warning: unused variable: `variant`
+   --> ferratomic-verify/integration/test_schema.rs:320:43
+    |
+320 |   fn assert_attr_non_empty(attribute: &str, variant: &str) {
+    |                                             ^^^^^^^
+321 | /     assert!(
+322 | |         !attribute.is_empty(),
+323 | |         "{variant} attribute should not be empty"
+324 | |     );
+    | |_____- you might have meant to use string interpolation in this string literal
+    |
+help: if this is intentional, prefix it with an underscore
+    |
+320 | fn assert_attr_non_empty(attribute: &str, _variant: &str) {
+    |                                           +
+
+warning: unused variable: `name`
+   --> ferratomic-verify/integration/test_schema.rs:492:35
+    |
+492 |   fn assert_display_and_error_match(name: &str, error: &FerraError) {
+    |                                     ^^^^
+493 |       let display = format!("{error}");
+494 | /     assert!(
+495 | |         !display.is_empty(),
+496 | |         "INV-FERR-019: Display for {name} must produce non-empty output"
+497 | |     );
+    | |_____- you might have meant to use string interpolation in this string literal
+...
+500 | /     assert!(
+501 | |         !error_str.is_empty(),
+502 | |         "INV-FERR-019: Error trait for {name} must produce non-empty output"
+503 | |     );
+    | |_____- you might have meant to use string interpolation in this string literal
+504 | /     assert_eq!(
+505 | |         display, error_str,
+506 | |         "INV-FERR-019: Display and Error output must match for {name}"
+507 | |     );
+    | |_____- you might have meant to use string interpolation in this string literal
+    |
+help: if this is intentional, prefix it with an underscore
+    |
+492 | fn assert_display_and_error_match(_name: &str, error: &FerraError) {
+    |                                   +
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.55s
+   Compiling ferratomic-verify v0.1.0 (/data/projects/ddis/ferratomic/ferratomic-verify)
+warning: unused variable: `context`
+   --> ferratomic-verify/integration/test_snapshot.rs:668:5
+    |
+668 |     context: &str,
+    |     ^^^^^^^
+669 | ) {
+670 |     assert_eq!(limiter.active_count(), expected, "INV-FERR-021: {context}");
+    |     ----------------------------------------------------------------------- you might have meant to use string interpolation in this string literal
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+help: if this is intentional, prefix it with an underscore
+    |
+668 |     _context: &str,
+    |     +
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.80s
+   Compiling ferratomic-verify v0.1.0 (/data/projects/ddis/ferratomic/ferratomic-verify)
+warning: unused variable: `median_ns`
+   --> ferratomic-verify/integration/test_thresholds.rs:263:10
+    |
+263 |       let (median_ns, p99_ns, max_ns) =
+    |            ^^^^^^^^^
+...
+266 | /     assert!(
+267 | |         p99_ns < MAX_READ_LATENCY_NS,
+268 | |         "INV-FERR-027: P99 EAVT lookup latency {p99_ns}ns exceeds \
+269 | |          threshold {MAX_READ_LATENCY_NS}ns (1ms). \
+270 | |          {lookup_count} lookups across {datom_count} datoms. \
+271 | |          Median: {median_ns}ns, P99: {p99_ns}ns, Max: {max_ns}ns."
+272 | |     );
+    | |_____- you might have meant to use string interpolation in this string literal
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+help: if this is intentional, prefix it with an underscore
+    |
+263 |     let (_median_ns, p99_ns, max_ns) =
+    |          +
+
+warning: unused variable: `max_ns`
+   --> ferratomic-verify/integration/test_thresholds.rs:263:29
+    |
+263 |       let (median_ns, p99_ns, max_ns) =
+    |                               ^^^^^^
+...
+266 | /     assert!(
+267 | |         p99_ns < MAX_READ_LATENCY_NS,
+268 | |         "INV-FERR-027: P99 EAVT lookup latency {p99_ns}ns exceeds \
+269 | |          threshold {MAX_READ_LATENCY_NS}ns (1ms). \
+270 | |          {lookup_count} lookups across {datom_count} datoms. \
+271 | |          Median: {median_ns}ns, P99: {p99_ns}ns, Max: {max_ns}ns."
+272 | |     );
+    | |_____- you might have meant to use string interpolation in this string literal
+    |
+help: if this is intentional, prefix it with an underscore
+    |
+263 |     let (median_ns, p99_ns, _max_ns) =
+    |                             +
+
+warning: unused variable: `median_ns`
+   --> ferratomic-verify/integration/test_thresholds.rs:351:10
+    |
+351 |       let (median_ns, p99_ns, max_ns) =
+    |            ^^^^^^^^^
+...
+354 | /     assert!(
+355 | |         p99_ns < MAX_READ_LATENCY_NS,
+356 | |         "INV-FERR-027: P99 EAVT lookup latency {p99_ns}ns at 25K datoms \
+357 | |          exceeds threshold {MAX_READ_LATENCY_NS}ns (1ms). \
+358 | |          {lookup_count} lookups across {datom_count} datoms. \
+359 | |          Median: {median_ns}ns, P99: {p99_ns}ns, Max: {max_ns}ns."
+360 | |     );
+    | |_____- you might have meant to use string interpolation in this string literal
+    |
+help: if this is intentional, prefix it with an underscore
+    |
+351 |     let (_median_ns, p99_ns, max_ns) =
+    |          +
+
+warning: unused variable: `max_ns`
+   --> ferratomic-verify/integration/test_thresholds.rs:351:29
+    |
+351 |       let (median_ns, p99_ns, max_ns) =
+    |                               ^^^^^^
+...
+354 | /     assert!(
+355 | |         p99_ns < MAX_READ_LATENCY_NS,
+356 | |         "INV-FERR-027: P99 EAVT lookup latency {p99_ns}ns at 25K datoms \
+357 | |          exceeds threshold {MAX_READ_LATENCY_NS}ns (1ms). \
+358 | |          {lookup_count} lookups across {datom_count} datoms. \
+359 | |          Median: {median_ns}ns, P99: {p99_ns}ns, Max: {max_ns}ns."
+360 | |     );
+    | |_____- you might have meant to use string interpolation in this string literal
+    |
+help: if this is intentional, prefix it with an underscore
+    |
+351 |     let (median_ns, p99_ns, _max_ns) =
+    |                             +
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.64s
+   Compiling ferratomic-verify v0.1.0 (/data/projects/ddis/ferratomic/ferratomic-verify)
+warning: unused variable: `msg`
+   --> ferratomic-verify/kani/durability.rs:250:51
+    |
+250 | fn assert_ordering_rejected(steps: [WalPhase; 4], msg: &str) {
+    |                                                   ^^^
+251 |     assert_eq!(try_commit(steps), CommitResult::OrderingViolation, "{msg}");
+    |     ----------------------------------------------------------------------- you might have meant to use string interpolation in this string literal
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+help: if this is intentional, prefix it with an underscore
+    |
+250 | fn assert_ordering_rejected(steps: [WalPhase; 4], _msg: &str) {
+    |                                                   +
+
+warning: Found the following unsupported constructs:
+             - C string literal (2)
+             - TerminatorKind::InlineAsm (1)
+             - caller_location (1)
+             - catch_unwind (17)
+             - foreign function (2)
+             - simd_reduce_all (1)
+         
+         Verification will fail if one or more of these constructs is reachable.
+         See https://model-checking.github.io/kani/rust-feature-support.html for more details.
+
+warning: Kani currently does not support concurrency. The following constructs will be treated as sequential operations:
+             - atomic_load (21)
+             - atomic_or (5)
+             - atomic_cxchg (45)
+             - atomic_xadd (5)
+             - atomic_store (15)
+             - atomic_singlethreadfence (4)
+             - atomic_cxchgweak (45)
+             - atomic_xchg (10)
+             - atomic_xsub (5)
+             - atomic_fence (4)
+             - thread local (replaced by static variable) (13)
+         
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6m 13s
+   Compiling ferratomic-verify v0.1.0 (/data/projects/ddis/ferratomic/ferratomic-verify)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.21s
+   Compiling ferratomic-verify v0.1.0 (/data/projects/ddis/ferratomic/ferratomic-verify)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.83s
+   Compiling ferratomic-verify v0.1.0 (/data/projects/ddis/ferratomic/ferratomic-verify)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.49s
+   Compiling ferratomic-verify v0.1.0 (/data/projects/ddis/ferratomic/ferratomic-verify)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.35s
+   Compiling ferratomic-verify v0.1.0 (/data/projects/ddis/ferratomic/ferratomic-verify)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.68s
+   Compiling ferratomic-verify v0.1.0 (/data/projects/ddis/ferratomic/ferratomic-verify)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.65s
+   Compiling ferratomic-verify v0.1.0 (/data/projects/ddis/ferratomic/ferratomic-verify)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.00s
+   Compiling ferratomic-verify v0.1.0 (/data/projects/ddis/ferratomic/ferratomic-verify)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.93s
+   Compiling ferratomic-verify v0.1.0 (/data/projects/ddis/ferratomic/ferratomic-verify)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.21s
+   Compiling ferratomic-verify v0.1.0 (/data/projects/ddis/ferratomic/ferratomic-verify)
+warning: unused variable: `i`
+  --> ferratomic-verify/proptest/refinement.rs:76:10
+   |
+76 |       for (i, variant) in variants.iter().enumerate() {
+   |            ^
+77 |           let debug_repr = format!("{variant:?}");
+78 | /         assert!(
+79 | |             !debug_repr.is_empty(),
+80 | |             "CI-FERR-002: Value variant {i} must have a non-empty Debug representation"
+81 | |         );
+   | |_________- you might have meant to use string interpolation in this string literal
+...
+87 | /             assert_ne!(
+88 | |                 std::mem::discriminant(&variants[i]),
+89 | |                 std::mem::discriminant(&variants[j]),
+90 | |                 "CI-FERR-002: Value variants {i} and {j} must have distinct discriminants"
+91 | |             );
+   | |_____________- you might have meant to use string interpolation in this string literal
+   |
+   = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+help: if this is intentional, prefix it with an underscore
+   |
+76 |     for (_i, variant) in variants.iter().enumerate() {
+   |          +
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.51s
+   Compiling ferratomic-verify v0.1.0 (/data/projects/ddis/ferratomic/ferratomic-verify)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.36s
+   Compiling ferratomic-verify v0.1.0 (/data/projects/ddis/ferratomic/ferratomic-verify)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.95s
+   Compiling ferratomic-verify v0.1.0 (/data/projects/ddis/ferratomic/ferratomic-verify)
+warning: unused variable: `name`
+  --> ferratomic-verify/tests/test_bug_bd_1kh_kani_public_access.rs:30:10
+   |
+30 |       for (name, source) in kani_sources() {
+   |            ^^^^
+31 |           for pattern in forbidden {
+32 | /             assert!(
+33 | |                 !source.contains(pattern),
+34 | |                 "bd-1kh: {name} still depends on internal field pattern `{pattern}`"
+35 | |             );
+   | |_____________- you might have meant to use string interpolation in this string literal
+   |
+   = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+help: if this is intentional, prefix it with an underscore
+   |
+30 |     for (_name, source) in kani_sources() {
+   |          +
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.83s
+   Compiling ferratomic-verify v0.1.0 (/data/projects/ddis/ferratomic/ferratomic-verify)
+warning: unused variable: `name`
+  --> ferratomic-verify/tests/test_bug_bd_8e3_kani_api_surface.rs:16:10
+   |
+16 |       for (name, source) in kani_sources() {
+   |            ^^^^
+17 | /         assert!(
+18 | |             !source.contains("store::{Committed, Store, Transaction}"),
+19 | |             "bd-8e3: {name} still imports Transaction from store module"
+20 | |         );
+   | |_________- you might have meant to use string interpolation in this string literal
+21 | /         assert!(
+22 | |             !source.contains("store::{Store, Transaction}"),
+23 | |             "bd-8e3: {name} still mixes Store and Transaction from store module"
+24 | |         );
+   | |_________- you might have meant to use string interpolation in this string literal
+25 | /         assert!(
+26 | |             !source.contains("store::Transaction"),
+27 | |             "bd-8e3: {name} still refers to store::Transaction"
+28 | |         );
+   | |_________- you might have meant to use string interpolation in this string literal
+   |
+   = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+help: if this is intentional, prefix it with an underscore
+   |
+16 |     for (_name, source) in kani_sources() {
+   |          +
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.53s
+Checking harness anti_entropy::null_anti_entropy_roundtrip...
