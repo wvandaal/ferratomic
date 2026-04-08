@@ -19,12 +19,12 @@
 //! ## Module layout
 //!
 //! - [`store`] -- `Store`, `Snapshot`, `TxReceipt` (core types).
-//! - [`apply`] -- transaction application, WAL replay, merge construction.
-//! - [`merge`] -- CRDT merge (set union) and schema conflict resolution.
-//! - [`query`] -- snapshot and LIVE-set query helpers.
+//! - `apply` -- transaction application, WAL replay, merge construction.
+//! - [`merge`](mod@merge) -- CRDT merge (set union) and schema conflict resolution.
+//! - `query` -- snapshot and LIVE-set query helpers.
 //! - [`iter`] -- unified iteration over dual representation.
-//! - [`checkpoint`] -- byte serialization convenience methods.
-//! - [`schema_evolution`] -- genesis meta-schema and schema evolution.
+//! - `checkpoint` -- byte serialization convenience methods.
+//! - `schema_evolution` -- genesis meta-schema and schema evolution.
 //! - [`sketch`] -- `MinHash` sketch for O(delta) federation reconciliation.
 
 #![forbid(unsafe_code)]

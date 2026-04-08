@@ -17,7 +17,7 @@
 //!   epoch, LIVE bitvector) returned by deserialization. The store layer
 //!   reconstructs `Store` from this, avoiding a circular dependency.
 //! - [`write_checkpoint`] / [`load_checkpoint`] — top-level I/O functions
-//!   that operate on a [`StorageBackend`](ferratomic_storage::StorageBackend).
+//!   that operate on a `StorageBackend`.
 //! - [`write_checkpoint_live_first`] — V3 serializer with LIVE-first
 //!   ordering for faster filtered reads.
 //!

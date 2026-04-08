@@ -159,7 +159,7 @@ impl<C: ClockSource> HybridClock<C> {
     ///
     /// Returns [`ClockError::LogicalOverflow`] if the logical counter
     /// overflows and the wall clock does not advance within
-    /// [`MAX_BUSY_WAIT_RETRIES`] iterations (INV-FERR-021).
+    /// `MAX_BUSY_WAIT_RETRIES` iterations (INV-FERR-021).
     pub fn tick(&mut self) -> Result<TxId, ClockError> {
         let now = self.clock.now();
 

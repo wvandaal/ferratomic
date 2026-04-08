@@ -27,7 +27,7 @@
 //! # Module Structure
 //!
 //! - Backend types re-exported from `ferratomic-storage`: [`StorageBackend`], [`FsBackend`], [`InMemoryBackend`]
-//! - [`recovery`]: Cold-start recovery cascade (generic + filesystem)
+//! - `recovery`: Cold-start recovery cascade (generic + filesystem)
 //!
 //! # Examples
 //!

@@ -35,7 +35,7 @@ impl Datom {
     /// - Assert and retract on the same entity (op decoupled from e)
     /// - Multiple values per entity-attribute pair
     ///
-    /// The seed encodes: bits[0] = op, bits[1] = attribute, bits[2..] = entity.
+    /// The seed encodes: bits\[0\] = op, bits\[1\] = attribute, bits\[2..\] = entity.
     /// Value and tx are fixed (identity in a G-Set is the full 5-tuple).
     pub const fn from_seed(seed: u64) -> Self {
         Self {

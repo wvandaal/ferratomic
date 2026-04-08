@@ -20,7 +20,7 @@
 //! The primary store uses `im::OrdSet<Datom>` (ADR-FERR-001). Snapshots
 //! are O(1) via structural sharing -- `clone()` shares the tree spine.
 //! Four secondary indexes (EAVT, AEVT, VAET, AVET) are maintained in
-//! bijection with the primary set via [`SortedVecIndexes`](ferratomic_index::SortedVecIndexes).
+//! bijection with the primary set via [`SortedVecIndexes`].
 //! INV-FERR-005 is satisfied by updating all indexes on every insert.
 
 use std::{collections::BTreeSet, sync::Arc};
@@ -154,7 +154,7 @@ impl Store {
     ///
     /// Accepts `BTreeSet` for generator/test compatibility. Builds a
     /// `PositionalStore` internally (bd-h2fz: cold-start path).
-    /// For merge, use [`from_merge`] which preserves schema and epoch.
+    /// For merge, use `Store::merge` which preserves schema and epoch.
     #[must_use]
     pub fn from_datoms(datoms: BTreeSet<Datom>) -> Self {
         let positional = PositionalStore::from_datoms(datoms.into_iter());
