@@ -60,7 +60,7 @@ These are honest estimates. They represent my best calibration, not aspirations.
 |-------|-------------|------------------|-------------------|
 | 4a | ferratomic-store complete + perf substrate | 95% | 95% |
 | 4a.5 | Federation foundations (signing, frontier, filters) | 85% | 85% |
-| 4b | Performance at scale (validated against 100M datoms) | 70% | 65% |
+| 4b | Performance at scale (validated against 100M datoms) | 70% → **99%** | 65% → **95%** |
 | 4c | Federation in production (real network, real adversaries) | 50% | 45% |
 | 4d | Datalog evaluator with proof production | 40% | 40% |
 | RR-tech | Reflective rules technical machinery | 60% | — |
@@ -69,6 +69,14 @@ These are honest estimates. They represent my best calibration, not aspirations.
 
 **Build confidence** = "given infinite patience, can we make this code pass our quality gates?"
 **Outcome confidence** = "given that we built it, will it actually do what we hoped?"
+
+### 2.1.1 Recalibration log
+
+**2026-04-08 — bd-snnh closed (HOLD verdict)**: Phase 4b "Performance at scale" build confidence raised 70% → 99%, outcome confidence raised 65% → 95%. Justification: empirical validation of the current PositionalStore architecture (sorted vec + interpolation search + lazy permutations + CHD MPH) at 100M datoms shows EAVT p50=2.2µs (5× headroom on the 10µs target), EAVT p99=4.1µs (25× headroom on 100µs), range scan throughput 40-58M dps (4-6× headroom on 10M target), memory 137 bytes/datom matching the spec/09 cost model. The 100M ceiling that this row predicted is no longer in question — it is empirically demonstrated. Full report: `docs/research/2026-04-08-index-scaling-100M.md`.
+
+**Note on the 99% / 95% split**: build confidence is now 99% because the substrate exists and was directly measured at 100M. Outcome confidence is 95% (not 99%) because Phase 4b also includes other deliverables (canonical spec form, R16 witnesses, dogfood demo, federation foundations) whose outcome risk is independent of the perf result. The 5% gap is non-perf risk, not perf risk.
+
+**Note on billion-scale**: this row covers "validated against 100M datoms" — the original Phase 4b target. The user has explicitly extended Phase 4b's target to **billion-scale in-memory** via the wavelet matrix (bd-gvil). Billion-scale confidence is captured in §6 Scaling Risks, not in this Phase 4b row, because it depends on a separate substrate (the wavelet matrix).
 
 These are independent. Phase 4d might compile, pass tests, satisfy specs, AND still produce derivations slowly enough to be useless. Reflective rules might work mechanically AND still descend into chaos as the rule library grows.
 
@@ -296,7 +304,27 @@ The four indexes (EAVT, AEVT, AVET, VAET) each store one entry per datom. Plus t
 
 **Mitigation**: The wavelet matrix compression is the main lever. We've designed for it but not validated it at scale.
 
-**Status**: EMPIRICAL. See fail-fast experiment §9.1.
+**Status**: VALIDATED at 100M (2026-04-08). bd-snnh empirical results: 137 bytes/datom for the canonical PositionalStore array, 13.73 GB at 100M, matching the spec/09 ~130 bytes/datom prediction within measurement noise. The four indexes (EAVT, AEVT, AVET, VAET) are reconstructible from this canonical array via lazy permutation builds — they do NOT add 4× overhead. Wavelet matrix compression remains the lever for billion-scale (1B at 137 bytes = 137 GB does not fit commodity RAM; 1B at 5 bytes/datom = 5 GB fits any laptop). For 100M, the current architecture is empirically sufficient. For 1B+, the wavelet matrix is structurally required. See `docs/research/2026-04-08-index-scaling-100M.md`.
+
+### 6.2.1 Billion-scale in-memory (Phase 4b extended target)
+
+**Risk**: The user has explicitly extended Phase 4b's target to **billion-scale in-memory** (1B-10B datoms in a single process). At 137 bytes/datom (validated by bd-snnh), 1B datoms = 137 GB, which does not fit in commodity RAM. The wavelet matrix promotion (bd-gvil) is the structural enabler.
+
+**Math**:
+| Scale | PositionalStore (137 B/d) | Wavelet matrix (5 B/d projected) |
+|-------|---------------------------|----------------------------------|
+| 100M | 13.7 GB (validated) | 500 MB (projected) |
+| 1B | 137 GB (does not fit) | 5 GB (fits any laptop) |
+| 10B | 1.37 TB (does not fit) | 50 GB (fits workstation) |
+
+**Confidence (post-bd-snnh)**:
+- Wavelet matrix projection of 5 bytes/datom is achievable: **90%** (cost model validated at 100M; same primitives used for the wavelet construction)
+- Phase 4b reaches 1B in-memory WITH wavelet matrix: **80%** (depends on bd-gvil implementation)
+- Phase 4b reaches 1B in-memory WITHOUT wavelet matrix: **5%** (would require 256 GB+ RAM, defeats commodity-hardware goal)
+
+**Mitigation**: Ship bd-gvil decomposition (gvil.1 through gvil.11) as Phase 4b critical path. Rollback if perf validation (gvil.10) fails to hit projected density: PositionalStore + sharding (100M/shard × 100 shards) is the fallback path.
+
+**Status**: WAVELET MATRIX IS PHASE 4B CRITICAL PATH. The bd-snnh validation provides the empirical foundation for the underlying primitives; bd-gvil builds the wavelet structure on top.
 
 ### 6.3 Rule Library Size
 
