@@ -304,18 +304,18 @@ The four indexes (EAVT, AEVT, AVET, VAET) each store one entry per datom. Plus t
 
 **Mitigation**: The wavelet matrix compression is the main lever. We've designed for it but not validated it at scale.
 
-**Status**: VALIDATED at 100M (2026-04-08). bd-snnh empirical results: 137 bytes/datom for the canonical PositionalStore array, 13.73 GB at 100M, matching the spec/09 ~130 bytes/datom prediction within measurement noise. The four indexes (EAVT, AEVT, AVET, VAET) are reconstructible from this canonical array via lazy permutation builds — they do NOT add 4× overhead. Wavelet matrix compression remains the lever for billion-scale (1B at 137 bytes = 137 GB does not fit commodity RAM; 1B at 5 bytes/datom = 5 GB fits any laptop). For 100M, the current architecture is empirically sufficient. For 1B+, the wavelet matrix is structurally required. See `docs/research/2026-04-08-index-scaling-100M.md`.
+**Status**: VALIDATED at 100M (2026-04-08). bd-snnh empirical results: 137 bytes/datom for the canonical PositionalStore array, 13.73 GB at 100M, matching the spec/09 ~130 bytes/datom prediction within measurement noise. The four indexes (EAVT, AEVT, AVET, VAET) are reconstructible from this canonical array via lazy permutation builds — they do NOT add 4× overhead. Wavelet matrix compression remains the lever for billion-scale (1B at 137 bytes = 137 GB exceeds typical commodity RAM (32-128 GB laptop/workstation) and requires a 192-256 GB workstation at the top of the commodity range; 1B at 5 bytes/datom = 5 GB fits any laptop). For 100M, the current architecture is empirically sufficient. For 1B+, the wavelet matrix is the structural path that does not depend on top-tier commodity hardware. See `docs/research/2026-04-08-index-scaling-100M.md`.
 
 ### 6.2.1 Billion-scale in-memory (Phase 4b extended target)
 
-**Risk**: The user has explicitly extended Phase 4b's target to **billion-scale in-memory** (1B-10B datoms in a single process). At 137 bytes/datom (validated by bd-snnh), 1B datoms = 137 GB, which does not fit in commodity RAM. The wavelet matrix promotion (bd-gvil) is the structural enabler.
+**Risk**: The user has explicitly extended Phase 4b's target to **billion-scale in-memory** (1B-10B datoms in a single process). At 137 bytes/datom (validated by bd-snnh), 1B datoms = 137 GB, which exceeds typical commodity RAM (32-64 GB laptop, 96-128 GB workstation) and only fits at the absolute top of the commodity range (192 GB Mac Studio Ultra, 256 GB high-end PC workstation). 10B datoms = 1.37 TB which requires server-class hardware. The wavelet matrix promotion (bd-gvil) is the structural enabler that breaks the dependence on top-tier hardware.
 
 **Math**:
 | Scale | PositionalStore (137 B/d) | Wavelet matrix (5 B/d projected) |
 |-------|---------------------------|----------------------------------|
-| 100M | 13.7 GB (validated) | 500 MB (projected) |
-| 1B | 137 GB (does not fit) | 5 GB (fits any laptop) |
-| 10B | 1.37 TB (does not fit) | 50 GB (fits workstation) |
+| 100M | 13.7 GB (validated, fits any modern laptop) | 500 MB (projected, fits any device) |
+| 1B | 137 GB (exceeds typical commodity; needs 192-256 GB top-tier workstation) | 5 GB (fits any laptop) |
+| 10B | 1.37 TB (server-class only) | 50 GB (fits workstation) |
 
 **Confidence (post-bd-snnh)**:
 - Wavelet matrix projection of 5 bytes/datom is achievable: **90%** (cost model validated at 100M; same primitives used for the wavelet construction)
