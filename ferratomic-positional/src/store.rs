@@ -9,7 +9,7 @@
 use std::sync::OnceLock;
 
 use bitvec::prelude::{BitVec, Lsb0};
-use ferratom::{AttributeId, AttributeIntern, Datom, EntityId, Op, TxId};
+use ferratom::{Datom, EntityId, TxId};
 use ferratomic_index::{AevtKey, AvetKey, EavtKey, VaetKey};
 
 use crate::{
@@ -18,7 +18,7 @@ use crate::{
     fingerprint::compute_fingerprint,
     live::build_live_bitvector,
     mph::Mph,
-    perm::{build_permutation, layout_permutation, layout_search, layout_to_sorted},
+    perm::{build_permutation, layout_permutation, layout_search},
     search::interpolation_search,
 };
 
@@ -325,106 +325,6 @@ impl PositionalStore {
         layout_search(perm, &self.canonical, |d| key.cmp_datom(d).reverse())
     }
 
-    /// Access the AEVT permutation array in Eytzinger (BFS) order (INV-FERR-071, INV-FERR-076).
-    ///
-    /// Lazily builds the permutation on first access. The returned slice
-    /// has `n + 1` elements: index 0 is a sentinel (`u32::MAX`), root at index 1.
-    /// Use `perm_aevt_sorted()` for the original sorted permutation.
-    #[must_use]
-    pub fn perm_aevt(&self) -> &[u32] {
-        self.perm_aevt.get_or_init(|| {
-            let sorted = build_permutation(&self.canonical, AevtKey::from_datom);
-            layout_permutation(&sorted)
-        })
-    }
-
-    /// Access the VAET permutation array in Eytzinger (BFS) order (INV-FERR-071, INV-FERR-076).
-    ///
-    /// Lazily builds the permutation on first access. The returned slice
-    /// has `n + 1` elements: index 0 is a sentinel (`u32::MAX`), root at index 1.
-    /// Use `perm_vaet_sorted()` for the original sorted permutation.
-    #[must_use]
-    pub fn perm_vaet(&self) -> &[u32] {
-        self.perm_vaet.get_or_init(|| {
-            let sorted = build_permutation(&self.canonical, VaetKey::from_datom);
-            layout_permutation(&sorted)
-        })
-    }
-
-    /// Access the AVET permutation array in Eytzinger (BFS) order (INV-FERR-071, INV-FERR-076).
-    ///
-    /// Lazily builds the permutation on first access. The returned slice
-    /// has `n + 1` elements: index 0 is a sentinel (`u32::MAX`), root at index 1.
-    /// Use `perm_avet_sorted()` for the original sorted permutation.
-    #[must_use]
-    pub fn perm_avet(&self) -> &[u32] {
-        self.perm_avet.get_or_init(|| {
-            let sorted = build_permutation(&self.canonical, AvetKey::from_datom);
-            layout_permutation(&sorted)
-        })
-    }
-
-    /// Recover the sorted AEVT permutation from Eytzinger layout (INV-FERR-071).
-    ///
-    /// O(n) in-order traversal. Used for checkpoint serialization where
-    /// the original sorted permutation order is required.
-    #[must_use]
-    pub fn perm_aevt_sorted(&self) -> Vec<u32> {
-        layout_to_sorted(self.perm_aevt())
-    }
-
-    /// Recover the sorted VAET permutation from Eytzinger layout (INV-FERR-071).
-    ///
-    /// O(n) in-order traversal. Used for checkpoint serialization where
-    /// the original sorted permutation order is required.
-    #[must_use]
-    pub fn perm_vaet_sorted(&self) -> Vec<u32> {
-        layout_to_sorted(self.perm_vaet())
-    }
-
-    /// Recover the sorted AVET permutation from Eytzinger layout (INV-FERR-071).
-    ///
-    /// O(n) in-order traversal. Used for checkpoint serialization where
-    /// the original sorted permutation order is required.
-    #[must_use]
-    pub fn perm_avet_sorted(&self) -> Vec<u32> {
-        layout_to_sorted(self.perm_avet())
-    }
-
-    /// TxId-order permutation array in Eytzinger (BFS) layout (INV-FERR-081).
-    ///
-    /// Lazily builds the permutation on first access. The returned slice
-    /// has `n + 1` elements: index 0 is a sentinel (`u32::MAX`), root at index 1.
-    /// Use `perm_txid_sorted()` for the original sorted permutation.
-    /// Enables O(log N) temporal range queries across all entities.
-    ///
-    /// Uses canonical position as a stable tiebreaker when two datoms share
-    /// the same `TxId`, ensuring deterministic permutation order regardless
-    /// of sort algorithm stability (INV-FERR-081).
-    #[must_use]
-    pub fn perm_txid(&self) -> &[u32] {
-        self.perm_txid.get_or_init(|| {
-            let mut indices: Vec<u32> =
-                (0..u32::try_from(self.canonical.len()).unwrap_or(0)).collect();
-            indices.sort_by(|&a, &b| {
-                self.canonical[a as usize]
-                    .tx()
-                    .cmp(&self.canonical[b as usize].tx())
-                    .then_with(|| a.cmp(&b))
-            });
-            layout_permutation(&indices)
-        })
-    }
-
-    /// Recover the sorted `TxId` permutation from Eytzinger layout (INV-FERR-081).
-    ///
-    /// O(n) in-order traversal. Used for checkpoint serialization where
-    /// the original sorted permutation order is required.
-    #[must_use]
-    pub fn perm_txid_sorted(&self) -> Vec<u32> {
-        layout_to_sorted(self.perm_txid())
-    }
-
     /// Length of the LIVE bitvector (INV-FERR-076: equals `len()`).
     #[must_use]
     pub fn live_bits_len(&self) -> usize {
@@ -525,65 +425,5 @@ impl PositionalStore {
             col_txids: OnceLock::new(),
             col_ops: OnceLock::new(),
         })
-    }
-
-    // -----------------------------------------------------------------------
-    // SoA columnar accessors (INV-FERR-078, bd-574c)
-    // -----------------------------------------------------------------------
-
-    /// Entity column: `col_entities[p] = canonical[p].entity()` (INV-FERR-078).
-    ///
-    /// Lazily built on first access. Returns a contiguous `&[EntityId]` slice
-    /// for cache-optimal entity-only scans. 32 bytes per datom, avoids loading
-    /// full `Datom` cache lines when only the entity is needed.
-    #[must_use]
-    pub fn col_entities(&self) -> &[EntityId] {
-        self.col_entities
-            .get_or_init(|| self.canonical.iter().map(Datom::entity).collect())
-    }
-
-    /// Transaction column: `col_txids[p] = canonical[p].tx()`.
-    ///
-    /// Lazily built on first access. Returns a contiguous `&[TxId]` slice
-    /// for cache-optimal transaction-order scans. 28 bytes per datom.
-    #[must_use]
-    pub fn col_txids(&self) -> &[TxId] {
-        self.col_txids
-            .get_or_init(|| self.canonical.iter().map(Datom::tx).collect())
-    }
-
-    /// Op column: `col_ops[p]` = `(canonical[p].op() == Op::Assert)`.
-    ///
-    /// Lazily built on first access. 1 bit per datom: `true` = Assert,
-    /// `false` = Retract. Same `BitVec<u64, Lsb0>` representation as
-    /// `live_bits` for consistency.
-    #[must_use]
-    pub fn col_ops(&self) -> &BitVec<u64, Lsb0> {
-        self.col_ops.get_or_init(|| {
-            self.canonical
-                .iter()
-                .map(|d| d.op() == Op::Assert)
-                .collect()
-        })
-    }
-
-    /// Build interned attribute column from an `AttributeIntern` table (ADR-FERR-030).
-    ///
-    /// Unlike `col_entities`/`col_txids`/`col_ops`, the attribute column
-    /// cannot be lazily self-built because `PositionalStore` does not own an
-    /// `AttributeIntern`. The caller provides the intern table and receives
-    /// the column. 2 bytes per datom plus `Option` tag.
-    ///
-    /// Returns `Option<AttributeId>` per position to preserve positional
-    /// correspondence with the canonical array. `None` means the attribute
-    /// at that position is not present in the intern table. Callers that
-    /// require a complete column should ensure the intern table covers all
-    /// attributes in the store.
-    #[must_use]
-    pub fn build_col_attrs(&self, intern: &AttributeIntern) -> Vec<Option<AttributeId>> {
-        self.canonical
-            .iter()
-            .map(|d| intern.id_of(d.attribute()))
-            .collect()
     }
 }

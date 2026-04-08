@@ -17,12 +17,14 @@
 pub mod adjacency;
 mod bloom;
 pub mod chunk_fingerprints;
+mod columns;
 pub mod entity_rle;
 mod fingerprint;
 pub mod live;
 pub mod merge;
 pub(crate) mod mph;
 pub(crate) mod perm;
+mod perm_accessors;
 mod search;
 pub mod store;
 pub mod succinct;
