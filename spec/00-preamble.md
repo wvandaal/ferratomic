@@ -5,10 +5,28 @@
 
 This specification traces to two foundational documents:
 
-- **SEED.md** — The foundational design document defining datoms, the harvest/seed lifecycle,
-  and the bootstrap philosophy. Referenced as `SEED.md §N` throughout. A self-contained
-  summary of all referenced axioms (§1, §4, §5, §9.2, §10) is maintained at
-  [`docs/design/SEED_AXIOMS.md`](../docs/design/SEED_AXIOMS.md).
+- **SEED.md** — The foundational design document defining datoms, the harvest/seed
+  lifecycle, and the bootstrap philosophy. Referenced as `SEED.md §N` throughout.
+  The referenced axioms are:
+
+  - **§1** (Foundational Epistemology): "Verifiable coherence" — knowledge must be
+    traceable, integrity-verified, and relationally confirmed. Drives C2, C5,
+    and the federation trust architecture.
+  - **§4** (Core Abstraction): Datoms, identity, snapshots, schema-as-data, CRDT
+    merge, substrate independence. Axiom 1 (append-only, C1), Axiom 2 (store =
+    `(P(D), ∪)`, C4, L1-L5), Axiom 3 (snapshots, INV-FERR-006). Design
+    commitments: content-addressed identity (C2), schema-as-data (C3),
+    traceability (C5), substrate independence (C8), temporal ordering (HLC),
+    "CRDT merge scales learning across organizations" (federation).
+  - **§5** (Harvest/Seed Lifecycle): Durability, recovery, knowledge persistence
+    across conversation boundaries. Drives WAL-before-snapshot (INV-FERR-008),
+    crash recovery (INV-FERR-014), append-only guarantees.
+  - **§9.2** (Central Finding): The memory architecture bottleneck in agentic
+    systems — substrate divergence is the primary scaling obstacle. Drives
+    INV-FERR-024 (Substrate Agnosticism).
+  - **§10** (The Bootstrap): Self-hosting, genesis, self-verifying systems.
+    Schema that defines datoms is itself stored as datoms (C7). Drives
+    INV-FERR-013, INV-FERR-014, ADR-FERR-007.
 
 - **Historical STORE algebra** — the precursor STORE namespace defined the five lattice
   laws preserved verbatim in Ferratomic. In this repository, that algebra now lives across
