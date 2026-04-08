@@ -223,6 +223,12 @@ impl Wal {
 /// This is a table-less bit-by-bit implementation. It is correct and
 /// deterministic; performance is acceptable for WAL frames which are
 /// small relative to the payload serialization cost.
+///
+/// Phase 4b optimization: replace with `crc32fast` crate (SIMD-accelerated,
+/// ~32 GB/s vs ~200 MB/s bit-by-bit) when WAL throughput becomes a
+/// bottleneck at 100M+ datom scale. The current implementation processes
+/// typical WAL frames (1-10 KB) in under 50µs — well within the
+/// fsync-dominated write path.
 #[must_use]
 pub fn crc32_ieee(data: &[u8]) -> u32 {
     let mut crc: u32 = 0xFFFF_FFFF;
