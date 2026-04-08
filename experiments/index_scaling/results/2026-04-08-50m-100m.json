@@ -1,0 +1,178 @@
+[
+  {
+    "scale": 50000000,
+    "build_secs": 64.781671945,
+    "memory_estimate_bytes": 7200000000,
+    "fingerprint": "0ea7d0c49705652cee571943a2e73f92a5f7010a9a8f16e52bf6270962c2174e",
+    "eavt_point_query": {
+      "samples": 100000,
+      "p50_ns": 2244,
+      "p90_ns": 2956,
+      "p99_ns": 10710,
+      "p999_ns": 77504,
+      "max_ns": 3599468,
+      "mean_ns": 2730
+    },
+    "aevt_point_query": {
+      "samples": 100000,
+      "p50_ns": 12704,
+      "p90_ns": 25578,
+      "p99_ns": 70220,
+      "p999_ns": 635258,
+      "max_ns": 77816880,
+      "mean_ns": 21507
+    },
+    "range_scans": [
+      {
+        "selectivity": 0.00001,
+        "expected_matches": 500,
+        "iterations": 1000,
+        "summary": {
+          "samples": 1000,
+          "p50_ns": 14426,
+          "p90_ns": 27943,
+          "p99_ns": 48881,
+          "p999_ns": 187508,
+          "max_ns": 187508,
+          "mean_ns": 16512
+        },
+        "avg_throughput_dps": 30281007.751937985
+      },
+      {
+        "selectivity": 0.0001,
+        "expected_matches": 5000,
+        "iterations": 1000,
+        "summary": {
+          "samples": 1000,
+          "p50_ns": 143656,
+          "p90_ns": 199981,
+          "p99_ns": 399611,
+          "p999_ns": 1192671,
+          "max_ns": 1192671,
+          "mean_ns": 151863
+        },
+        "avg_throughput_dps": 32924412.134621337
+      },
+      {
+        "selectivity": 0.001,
+        "expected_matches": 50000,
+        "iterations": 1000,
+        "summary": {
+          "samples": 1000,
+          "p50_ns": 1314167,
+          "p90_ns": 1882471,
+          "p99_ns": 4262585,
+          "p999_ns": 18964172,
+          "max_ns": 18964172,
+          "mean_ns": 1437682
+        },
+        "avg_throughput_dps": 34778205.472420186
+      },
+      {
+        "selectivity": 0.01,
+        "expected_matches": 500000,
+        "iterations": 1000,
+        "summary": {
+          "samples": 1000,
+          "p50_ns": 10237987,
+          "p90_ns": 16008198,
+          "p99_ns": 38392473,
+          "p999_ns": 315090352,
+          "max_ns": 315090352,
+          "mean_ns": 12265435
+        },
+        "avg_throughput_dps": 40764962.67763842
+      }
+    ],
+    "full_scan_secs": 0.929288431,
+    "full_scan_throughput_dps": 53804608.27021745
+  },
+  {
+    "scale": 100000000,
+    "build_secs": 157.349838094,
+    "memory_estimate_bytes": 14400000000,
+    "fingerprint": "4c7fd3a965cd9c1ab8741e1d1ca9aadc36903f9aff2983a2582f2b7eb024fcac",
+    "eavt_point_query": {
+      "samples": 100000,
+      "p50_ns": 2274,
+      "p90_ns": 3015,
+      "p99_ns": 4127,
+      "p999_ns": 43461,
+      "max_ns": 4373509,
+      "mean_ns": 2679
+    },
+    "aevt_point_query": {
+      "samples": 100000,
+      "p50_ns": 10118,
+      "p90_ns": 16610,
+      "p99_ns": 35767,
+      "p999_ns": 161340,
+      "max_ns": 67689009,
+      "mean_ns": 13384
+    },
+    "range_scans": [
+      {
+        "selectivity": 0.00001,
+        "expected_matches": 1000,
+        "iterations": 1000,
+        "summary": {
+          "samples": 1000,
+          "p50_ns": 17233,
+          "p90_ns": 29425,
+          "p99_ns": 65811,
+          "p999_ns": 145460,
+          "max_ns": 145460,
+          "mean_ns": 20558
+        },
+        "avg_throughput_dps": 48642864.091837734
+      },
+      {
+        "selectivity": 0.0001,
+        "expected_matches": 10000,
+        "iterations": 1000,
+        "summary": {
+          "samples": 1000,
+          "p50_ns": 183620,
+          "p90_ns": 250714,
+          "p99_ns": 476313,
+          "p999_ns": 4677752,
+          "max_ns": 4677752,
+          "mean_ns": 200333
+        },
+        "avg_throughput_dps": 49916888.38084589
+      },
+      {
+        "selectivity": 0.001,
+        "expected_matches": 100000,
+        "iterations": 1000,
+        "summary": {
+          "samples": 1000,
+          "p50_ns": 1830814,
+          "p90_ns": 2803557,
+          "p99_ns": 17376965,
+          "p999_ns": 66711185,
+          "max_ns": 66711185,
+          "mean_ns": 2486095
+        },
+        "avg_throughput_dps": 40223724.354861744
+      },
+      {
+        "selectivity": 0.01,
+        "expected_matches": 1000000,
+        "iterations": 1000,
+        "summary": {
+          "samples": 1000,
+          "p50_ns": 16152935,
+          "p90_ns": 21160439,
+          "p99_ns": 40360694,
+          "p999_ns": 64948368,
+          "max_ns": 64948368,
+          "mean_ns": 17107318
+        },
+        "avg_throughput_dps": 58454516.36545249
+      }
+    ],
+    "full_scan_secs": 1.5386381230000001,
+    "full_scan_throughput_dps": 64992540.159490116
+  }
+]

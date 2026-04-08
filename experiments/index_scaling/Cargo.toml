@@ -1,0 +1,31 @@
+[package]
+name = "index-scaling-experiment"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Standalone experiment — explicitly out of the workspace per the bd-snnh
+# bead's "throwaway code" frame condition.
+[workspace]
+
+# bd-snnh: Index scaling validation at 100M datoms.
+# Throwaway experiment per the bead's frame conditions: lives in
+# experiments/, NOT a workspace member, NOT in production code paths.
+# Validates that the current PositionalStore architecture (sorted vec
+# + interpolation search + Eytzinger layout + CHD MPH) hits perf
+# targets at 100M before Phase 4b commits to it.
+
+[dependencies]
+ferratom = { path = "../../ferratom" }
+ferratomic-index = { path = "../../ferratomic-index" }
+ferratomic-positional = { path = "../../ferratomic-positional" }
+rand = "0.8"
+rand_chacha = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+debug = "line-tables-only"
