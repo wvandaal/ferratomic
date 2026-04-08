@@ -3450,6 +3450,47 @@ for advertised vs actual complexity. No O(n) operations hide inside O(1) interfa
 | `Snapshot::datoms()` | O(n) iter | O(n) iter | Delegates to `Store::datoms()` |
 | `HybridClock::tick()` | O(1) | O(1) amortized | Bounded retry on overflow |
 
+### Verification Tier Structure
+
+Performance threshold tests are tiered by scale to keep the per-commit
+feedback loop fast while still enforcing scale validation before tags.
+
+| Tier | Scale | Frequency | Tool | Runtime budget |
+|------|-------|-----------|------|---------------|
+| **1 — Correctness** | 1K-25K datoms | Every commit | `cargo test` | < 5 min total |
+| **2 — Regression** | 50K-100K datoms | Nightly CI | `cargo bench` (Criterion baseline) | < 30 min |
+| **3 — Scale validation** | 200K+ datoms | Pre-tag manual | `cargo test --features scale-tests` | Hours OK |
+
+**Tier 1** lives in `ferratomic-verify/integration/test_thresholds.rs` and
+runs unconditionally. Targets:
+- INV-FERR-026: WA < 10x at 1K and 10K
+- INV-FERR-027: P99 < 1ms at 10K and 25K
+- INV-FERR-028: cold start < 5s at 1K and 5K
+
+**Tier 2** lives in `ferratomic-verify/benches/` (Criterion). Statistical
+sampling with baseline diffs for performance regression detection. Run on
+schedule, not per-commit. Targets the same INV-FERR but with throughput
+metrics rather than hard pass/fail.
+
+**Tier 3** is gated behind the `scale-tests` Cargo feature in
+`ferratomic-verify`. Tests at 200K datoms with stricter targets (5x WA,
+100µs P99, 120s cold start). Release-mode runs take 1-12 hours depending
+on hardware — `im::OrdMap` index construction at 200K is the dominant
+cost (see Inherent Constants §5 above).
+
+**Critical**: Tier 3 must NOT run in CI per-commit. Use scheduled
+(nightly/weekly) jobs. To run manually before tagging:
+
+```text
+cargo test --release -p ferratomic-verify --features scale-tests \
+  --test integration_thresholds
+```
+
+This tier structure was added in Session 018 after a Tier 3 test
+exceeded 13 hours of CPU time during a normal `cargo test --release`
+invocation, blocking iteration. Conflating tiers in a single binary
+defeats the feedback loop.
+
 ### Performance Audit Findings (Session 018, 2026-04-07)
 
 Systematic scan of all production code for hidden O(n), unnecessary allocations,

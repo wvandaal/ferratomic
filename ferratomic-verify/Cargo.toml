@@ -22,6 +22,25 @@ tokio = { workspace = true }
 rand = "0.8"
 serde_json = { workspace = true }
 
+[features]
+# Tiered testing per spec/09 §Verification Tier Structure:
+#
+# - Default (unflagged): correctness tests at small scale (1K-25K).
+#   Run on every commit. Total runtime budget: < 5 min.
+#
+# - `scale-tests`: 200K-scale threshold tests for INV-FERR-026/027/028.
+#   These exercise the im::OrdMap representation at the upper bound of
+#   Phase 4a's measured envelope. Release-mode runs take 1-12 hours
+#   depending on hardware (im::OrdMap construction at 200K is the
+#   dominant cost — see spec/09 §Performance Audit).
+#
+#   Run manually before tagging:
+#     cargo test --release -p ferratomic-verify --features scale-tests \
+#       --test integration_thresholds
+#
+#   Do NOT run in CI per-commit. Use scheduled (nightly/weekly) jobs.
+scale-tests = []
+
 [lints.rust]
 unexpected_cfgs = { level = "allow", check-cfg = ['cfg(kani)'] }
 

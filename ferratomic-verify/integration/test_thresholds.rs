@@ -6,6 +6,25 @@
 //!
 //! These are pass/fail `#[test]` functions, NOT Criterion benchmarks.
 //! They enforce spec-defined performance bounds as regression gates.
+//!
+//! # Tier structure
+//!
+//! Tests are tiered by scale per `spec/09 §Verification Tier Structure`:
+//!
+//! - **Tier 1 (default)**: 1K-25K datoms. Run on every commit. Total
+//!   runtime budget: < 5 min in debug mode.
+//! - **Tier 2 (`scale-tests` feature)**: 200K datoms with strict release
+//!   targets. Run manually before tagging. Hours per scenario in release;
+//!   `im::OrdMap` index construction at 200K is the dominant cost (see
+//!   spec/09 §Performance Audit).
+//!
+//! To run scale tests:
+//! ```text
+//! cargo test --release -p ferratomic-verify --features scale-tests \
+//!   --test integration_thresholds
+//! ```
+//!
+//! Do NOT run scale tests in CI per-commit. Use scheduled jobs.
 
 use std::{collections::BTreeSet, time::Instant};
 
@@ -200,6 +219,9 @@ fn measure_p99_read_latency_ns(
 /// per insert with full index rebuild, which is prohibitively slow at 200K+
 /// in debug builds. Batch construction builds the BTreeSet first, then
 /// constructs indexes once.
+///
+/// Used only by `scale-tests` feature gated tests.
+#[cfg(feature = "scale-tests")]
 fn build_store_batch(count: usize) -> Store {
     let tx_id = TxId::new(1, 0, 0);
     let datoms: BTreeSet<Datom> = (0..count)
@@ -415,6 +437,9 @@ fn threshold_inv_ferr_028_cold_start_5k() {
 /// Scale-up variant. At 200K datoms per-frame WAL overhead should amortize
 /// further, but total file size is large enough to expose compaction
 /// regressions or framing bloat invisible at 10K.
+///
+/// Gated behind `scale-tests` feature. See Cargo.toml for tier rationale.
+#[cfg(feature = "scale-tests")]
 #[test]
 fn threshold_inv_ferr_026_write_amplification_200k() {
     // WA ratio is scale-independent (per-frame overhead is constant).
@@ -450,6 +475,9 @@ fn threshold_inv_ferr_026_write_amplification_200k() {
 /// Debug: 10K datoms (im::OrdMap construction at 200K takes minutes).
 /// Release: 200K datoms with full scale validation.
 /// The P99 threshold is scale-independent (tree depth matters, not count).
+///
+/// Gated behind `scale-tests` feature. See Cargo.toml for tier rationale.
+#[cfg(feature = "scale-tests")]
 #[test]
 fn threshold_inv_ferr_027_read_latency_200k() {
     let datom_count = if cfg!(debug_assertions) {
@@ -482,6 +510,9 @@ fn threshold_inv_ferr_027_read_latency_200k() {
 /// Debug: 10K datoms (im::OrdMap index rebuild at 200K takes minutes).
 /// Release: 200K datoms with full scale validation.
 /// The 200K strict tests (below) enforce the tighter Phase 4a ceiling.
+///
+/// Gated behind `scale-tests` feature. See Cargo.toml for tier rationale.
+#[cfg(feature = "scale-tests")]
 #[test]
 fn threshold_inv_ferr_028_cold_start_200k() {
     let datom_count = if cfg!(debug_assertions) {
@@ -525,9 +556,11 @@ fn threshold_inv_ferr_028_cold_start_200k() {
 // ---------------------------------------------------------------------------
 
 /// INV-FERR-026 strict: write amplification < 5x at 200K datoms (release).
+#[cfg(feature = "scale-tests")]
 const STRICT_MAX_WRITE_AMPLIFICATION: f64 = 5.0;
 
 /// INV-FERR-027 strict: P99 read latency < 100us at 200K datoms (release).
+#[cfg(feature = "scale-tests")]
 const STRICT_MAX_READ_LATENCY_NS: u128 = 100_000;
 
 /// INV-FERR-028 strict: cold start < 120s at 200K datoms (release).
@@ -538,6 +571,7 @@ const STRICT_MAX_READ_LATENCY_NS: u128 = 100_000;
 /// assumes a production backend (RocksDB/LSM, Phase 4b INV-FERR-025).
 /// This threshold catches O(n^2) pathologies while being honest about
 /// the current architecture's constant factors.
+#[cfg(feature = "scale-tests")]
 const STRICT_MAX_COLD_START_SECS: u64 = 120;
 
 /// INV-FERR-026 strict: Write amplification < 5x at 200K datoms.
@@ -545,6 +579,9 @@ const STRICT_MAX_COLD_START_SECS: u64 = 120;
 /// Tighter than the 10x spec ceiling. In release mode, WAL framing overhead
 /// amortizes over 200K datoms and must stay below 5x. Debug mode skips the
 /// strict assertion because unoptimized bincode serialization inflates WA.
+///
+/// Gated behind `scale-tests` feature. See Cargo.toml for tier rationale.
+#[cfg(feature = "scale-tests")]
 #[test]
 fn strict_inv_ferr_026_write_amplification_200k_release() {
     if cfg!(debug_assertions) {
@@ -574,6 +611,9 @@ fn strict_inv_ferr_026_write_amplification_200k_release() {
 /// 100x under the spec's 10ms ceiling. With release-mode optimized im::OrdMap
 /// lookups, P99 over 10K probes against a 200K-datom store must stay below
 /// 100us. Debug mode skips because unoptimized tree traversal is 10-50x slower.
+///
+/// Gated behind `scale-tests` feature. See Cargo.toml for tier rationale.
+#[cfg(feature = "scale-tests")]
 #[test]
 fn strict_inv_ferr_027_read_latency_200k_release() {
     if cfg!(debug_assertions) {
@@ -607,6 +647,9 @@ fn strict_inv_ferr_027_read_latency_200k_release() {
 /// In release mode, checkpoint deserialization and index reconstruction for
 /// 200K datoms must complete in under 2 seconds. Debug mode skips because
 /// unoptimized index construction is 50-100x slower.
+///
+/// Gated behind `scale-tests` feature. See Cargo.toml for tier rationale.
+#[cfg(feature = "scale-tests")]
 #[test]
 fn strict_inv_ferr_028_cold_start_200k_release() {
     if cfg!(debug_assertions) {
