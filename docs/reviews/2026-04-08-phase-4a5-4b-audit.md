@@ -2132,6 +2132,280 @@ All four use the **experiment template** (Hypothesis / Methodology / Success Cri
 
 ---
 
+### 5.6 Hidden Phase 4b orphans (audited session 022)
+
+> Per audit doc §17.3, 7 hidden Phase 4b orphans need lab-grade audit before
+> spec audit work begins (Option X chosen in §17.8). Audited sequentially by
+> orchestrator per `lifecycle/14`. Findings continue from FINDING-170.
+>
+> **Audit method**: Per-bead `br show <id>` + `jq` query of `.beads/issues.jsonl`
+> for structured fields + spec/code grep verification. Phase 1 (4 checks) +
+> Phase 2 (8 lenses) per `lifecycle/14`. Cross-cut findings on other beads
+> discovered during this audit are recorded inline as separate finding numbers.
+
+#### bd-gvil — Wavelet matrix compressed store (master EPIC of gvil.1-11)
+
+**Phase 1**:
+- Code refs: N/A — design EPIC, no concrete file paths in body.
+- Spec refs: WEAK — body doesn't cite INV-FERR/ADR-FERR; existing spec/09 has ADR-FERR-030 (Wavelet Matrix as Information-Theoretic Convergence Target) and ADR-FERR-031 (Wavelet Matrix Phase 4a Prerequisites) that bd-gvil should trace to.
+- Deps: 11 valid parent-child (gvil.1-11) + 1 PHANTOM (bd-snnh, closed 2026-04-08 HOLD verdict — Pattern A) + 2 valid blocks (bd-kt98 value pool prerequisite, bd-85j.13 prolly tree chunk boundary prerequisite).
+- Duplicate: OVERLAPS bd-7hmv ("ALIEN-OMEGA: Columnar datom store") — bd-gvil's own body says "It subsumes columnar (bd-7hmv), eliminates separate permutation arrays, and approaches the information-theoretic minimum encoding." bd-7hmv is still open, P2, phase-4b.
+
+**Structured field state** (`jq` query of `.beads/issues.jsonl` + `br label list`):
+```
+{ "id": "bd-gvil", "status": "open", "issue_type": "task", "priority": 0 }
+$ br label list bd-gvil
+No labels for bd-gvil.
+```
+**issue_type=task** but bead has 11 parent-child children → should be **epic** (mirrors FINDING-008 bd-bdvf).
+**No labels** at all — missing phase-4b that all 11 children carry.
+
+(Note: the JSONL schema uses `issue_type` not `type`, and labels are stored in beads.db SQLite — not in issues.jsonl. Earlier "type=null" / "labels=null" notation in this audit doc reflects missing fields on the JSONL side, but the canonical query is `br label list <id>` and `jq .issue_type`.)
+
+**Phase 2** (8 lenses):
+- L0 Epistemic: N/A (epic — children carry verification methods)
+- L1 Structural: **FAIL** (type=null, labels=null, missing epic template Child Beads/Completion Criterion/Progress sections)
+- L2 Spec Trace: WEAK (trace to forthcoming spec content rather than existing spec/09 ADR-FERR-030/031)
+- L3 Postcondition: N/A (epic)
+- L4 Scope: PASS as epic / FAIL as task (11 children → epic)
+- L5 Frame: N/A (epic)
+- L6 Compiler Test: N/A (no Rust types directly)
+- L7 Axiological: **STRONG PASS** — Phase 4b primary backend for billion-scale per bd-4vwk; central to True North agentic OS scale targets
+
+**Canonical framing** (per bd-4vwk, dated 2026-04-08, post-bd-snnh): "Wavelet matrix is the Phase 4b primary backend FOR billion-scale operation. PositionalStore remains the current default, validated to 100M. The wavelet matrix becomes the default once gvil.10 perf validation confirms density at 100M empirical scale." This RESOLVES the apparent contradiction between bd-snnh closure ("no longer urgent for Phase 4b gate") and audit doc §17.3 (relabel to phase-4b): both are consistent — bd-gvil is Phase 4b structurally (parent of phase-4b children, primary backend for billion-scale) but no longer gate-blocking.
+
+**Verdict**: NEEDS WORK → **RECLASSIFY (task→epic) + REWRITE (epic body modernization)** — combines fix categories from `lifecycle/14` Phase 2 action menu.
+
+**Findings raised**:
+- [FINDING-171] bd-gvil issue_type=task but has 11 parent-child children → should be epic. Lens 1 + Lens 4. MAJOR. (mirrors FINDING-008 bd-bdvf — same root pattern of misclassified epic)
+- [FINDING-172] bd-gvil has no labels (`br label list bd-gvil` returns "No labels") — missing phase-4b that all 11 children carry. Lens 1 + §17.3. MAJOR.
+- [FINDING-173] bd-gvil title contains stale "(Phase 4c+)" annotation — body lies about phase scope per bd-4vwk reframe. Lens 1. MAJOR.
+- [FINDING-174] bd-gvil body framed as "Phase 4c+ Theoretical Endpoint" + "Phase 4c+ timeline" (stale narrative ~3 sessions out of date). Lens 1+2+7. MAJOR.
+- [FINDING-175] bd-gvil missing epic template fields (## Child Beads, ## Completion Criterion, ## Progress). Lens 1. MAJOR.
+- [FINDING-176] bd-gvil → bd-snnh PHANTOM. Pattern A (expand §19.1 batch). MINOR.
+- [FINDING-177] bd-gvil subsumes bd-7hmv per body but bd-7hmv lacks superseded marker (still open P2 phase-4b). Phase 1 Check 4. MINOR.
+
+**Cross-cut finding discovered during bd-gvil audit** (bd-4vwk Pattern F + Pattern H expansion):
+- [FINDING-178] **bd-4vwk is a 9th Pattern H victim AND missing from §18.2 Pattern F victim list**. Discovered while reading bd-4vwk to verify the canonical wavelet framing. Two cross-cuts:
+  - **Pattern F (federation/perf collision)**: bd-4vwk acceptance #1 says "Author **ADR-FERR-031** in spec/09 amending ADR-FERR-030..." — but spec/09 already has ADR-FERR-031 (Wavelet Matrix Phase 4a Prerequisites). The audit doc §18.2 Option α resolves this by giving bd-4vwk **ADR-FERR-037** instead, but bd-4vwk's body has not been updated to reflect this. bd-4vwk is missing from §18.2's affected-bead list (which currently lists bd-qguw, bd-mklv, bd-6j0r, bd-3t63 only).
+  - **Pattern H (fabricated spec citations)**: bd-4vwk acceptance #2 says "Spec/06 §S23.9.3 amended: remove 'im::OrdMap unchanged from 4a' line, replace with 'WaveletStore is the billion-scale primary backend...'". Per Pattern H investigation (§18.1), §S23.9.3 is a fabricated section reference that does not exist in spec/06. The 8 known Pattern H victims (§18.1) do NOT include bd-4vwk — this makes bd-4vwk a **9th Pattern H victim**, expanding the §18.1 list from 8 to 9.
+  - **Severity**: MAJOR (cross-cuts to two CRITICAL patterns)
+  - **Lens**: cross-pattern, discovered via reading primary source (bd-4vwk) for context on bd-gvil
+  - **Fix**: (a) Add bd-4vwk to §18.1 affected-bead list (this session 022 audit doc edit). (b) Add bd-4vwk to §18.2 affected-bead list (this session 022 audit doc edit). (c) bd-4vwk acceptance #1 update to reference ADR-FERR-037 (Phase 3 reconciliation, session 025). (d) bd-4vwk acceptance #2 update to reference whatever §23.9.x section session 023 authors during Pattern H content authoring.
+  - **No STOP condition**: This is an expansion of existing Patterns F+H, not a 9th NEW pattern. Per audit doc stop conditions, only "9th NEW pattern beyond A-H" triggers escalation.
+
+#### bd-uyy9 — Add self-merge fast path for INV-FERR-003 idempotency
+
+**Phase 1**:
+- Code refs: TWO STALE paths (Pattern B). Cited `ferratomic-core/src/store/merge.rs` (from_merge) → actually at `ferratomic-store/src/merge.rs` (verified by Glob). Cited `ferratomic-core/src/positional.rs` (fingerprint) → actually at `ferratomic-positional/src/fingerprint.rs` (verified by Glob).
+- Spec refs: STRONG. Cites INV-FERR-003 (merge idempotency `merge(X,X) = X`) at Level 0 algebraic law, INV-FERR-028 (100M scale target), INV-FERR-074 (BLAKE3 XOR fingerprint). All exist in spec/01 + spec/03 + spec/09.
+- Deps: NO Dependencies section in body. Should be a leaf task (perf optimization on existing primitives — fingerprint already exists, from_merge already exists). Body should explicitly state "Leaf task — no predecessors, no successors" per `lifecycle/14` template.
+- Duplicate: UNIQUE. No similar self-merge fast-path bead known. (bd-i4k2 about observer broadcast clone is unrelated.)
+
+**Structured field state** (`jq` + `br label list`):
+```
+{ "id": "bd-uyy9", "status": "open", "issue_type": "task", "priority": 2 }
+$ br label list bd-uyy9
+No labels for bd-uyy9.
+```
+**issue_type=task** is CORRECT (atomic perf optimization, no children). **No labels** — missing phase-4b. Session 015 cleanroom finding never relabeled.
+
+**Phase 2** (8 lenses):
+- L0 Epistemic: PASS — proptest for correctness preservation + benchmark for the 1us claim are appropriate methods for a perf optimization on an algebraically-guaranteed property.
+- L1 Structural: **FAIL** — type=null, labels=null, missing Frame Conditions, missing Pseudocode Contract, missing Dependencies declaration.
+- L2 Spec Trace: PASS — strong INV-FERR-003 + 028 + 074 chain.
+- L3 Postcondition: PASS — "self-merge < 1us regardless of store size" is verifiable via benchmark; test names cited (`test_inv_ferr_003_self_merge_fast_path`).
+- L4 Scope: PASS — 2 files, atomic, single concept (fast-path short-circuit).
+- L5 Frame: **FAIL** — no Frame Conditions section. Should state: "Must NOT change correctness of merge for non-identical inputs (INV-FERR-001/002/003 proptests must remain green)."
+- L6 Compiler Test: **FAIL** — modifies `from_merge` semantically but no Pseudocode Contract showing the StoreRepr enum match arms, fingerprint().eq() comparison, or Arc::ptr_eq placement (inside or outside fingerprint check).
+- L7 Axiological: **STRONG PASS** — directly serves INV-FERR-028 (100M scale) for federation anti-entropy use case (already-converged replicas merging).
+
+**Verdict**: NEEDS WORK → **EDIT** (5 fixes: type, label, Pattern B paths, Frame Conditions, Pseudocode Contract; recommend Dependencies declaration as MINOR).
+
+**Findings raised**:
+- [FINDING-179] bd-uyy9 has no labels (`br label list bd-uyy9` returns "No labels") — missing phase-4b label (orphan classification root cause, same as bd-gvil). Lens 1 + §17.3. MAJOR. (Note: issue_type=task is CORRECT here, no type bug.)
+- [FINDING-180] bd-uyy9 STALE file paths (Pattern B). `ferratomic-core/src/store/merge.rs` → `ferratomic-store/src/merge.rs`; `ferratomic-core/src/positional.rs` → `ferratomic-positional/src/fingerprint.rs`. Phase 1 Check 1 + Pattern B. MAJOR. **Add bd-uyy9 to bd-0n9k coverage** (currently missing from §19.2 batch list).
+- [FINDING-181] bd-uyy9 missing Frame Conditions section. Lens 5. MAJOR.
+- [FINDING-182] bd-uyy9 missing Pseudocode Contract for modified from_merge. Lens 6. MAJOR.
+- [FINDING-183] bd-uyy9 missing Dependencies declaration ("Leaf task" or explicit deps). Lens 1. MINOR.
+
+#### bd-fcta — WireEntityId pub inner field bypasses trust boundary (ADR-FERR-010)
+
+**Phase 1**:
+- Code refs: ferratom/src/wire.rs:39 EXISTS but **contents DO NOT MATCH** the bug claim. Current code at line 39: `pub struct WireEntityId([u8; 32]);` (private inner field — default tuple struct visibility). bd-fcta claims the line is `pub struct WireEntityId(pub [u8; 32]);` (the `pub` on the inner field). The bead's proposed "fix" (visibility change + WireEntityId::new constructor) is **ALREADY APPLIED**: `WireEntityId::new(bytes)` exists at lines 44-47, `as_bytes()` at lines 50-53, all test sites updated to use `WireEntityId::new(*x.as_bytes())` instead of `WireEntityId(*x.as_bytes())`.
+- **git log evidence**: `git log --all -p -G "pub struct WireEntityId" -- ferratom/src/wire.rs` proves the bug was fixed in commit **`d14f47c "fix: close 24 Phase 4a gate blockers — bugs, docs, tests, quality"`**. The diff shows BEFORE `pub struct WireEntityId(pub [u8; 32]);`, AFTER `pub struct WireEntityId([u8; 32]);` + new constructor + new `as_bytes()` accessor + 4 test-site updates.
+- Spec refs: ADR-FERR-010 verified at `spec/04-decisions-and-constraints.md:377` (Deserialization Trust Boundary). INV-FERR-012 verified to exist. VALID.
+- Deps: No Dependencies section in body. Currently the bead is correctly leaf-task-shaped because the work was already done as part of d14f47c.
+- Duplicate: UNIQUE.
+
+**Structured field state**:
+```
+{ "id": "bd-fcta", "status": "open", "issue_type": "bug", "priority": 2 }
+$ br label list bd-fcta
+No labels for bd-fcta.
+```
+**issue_type=bug** is correct in form but the bug DOES NOT EXIST in current code.
+
+**Phase 2** (8 lenses): NOT APPLICABLE — Phase 1 verdict is CLOSE, Phase 2 lens analysis is moot. The bead represents work that was completed but never closed.
+
+**Verdict**: **CLOSE** — completed work (commit `d14f47c`, Phase 4a gate blocker closure batch). The 4 postconditions in the bead body are all SATISFIED by current code:
+- ✓ "WireEntityId inner field is `pub(crate)` or private" — VERIFIED: private (default tuple struct visibility)
+- ✓ "WireEntityId::new(bytes: [u8; 32]) -> Self constructor exists" — VERIFIED at wire.rs:44-47
+- ✓ "Test code updated to use constructor" — VERIFIED in d14f47c diff (4 test sites)
+- ✓ "WireDatom::new() still works" — VERIFIED: workspace builds (Phase 4a gate closed)
+
+**Findings raised**:
+- [FINDING-184] bd-fcta is COMPLETED — bug fixed by commit d14f47c (Phase 4a gate blocker batch) before this audit. All 4 postconditions satisfied by current code. Phase 1 Check 1 (CONFIRMED→COMPLETED). **MAJOR** (unclosed bead representing completed work). Action: `br close bd-fcta --reason "Already fixed in commit d14f47c (Phase 4a gate blockers). WireEntityId now has private inner field + WireEntityId::new() constructor + as_bytes() accessor. Verified by audit doc §5.6 in session 022."`
+- [FINDING-185] bd-fcta meta-finding: §17.3 listed bd-fcta as a "Hidden Phase 4b orphan" with note "Substantive lab-grade body" — but the §17.3 classification step was descriptive (read body) without grep-verifying the cited code. Session 022 lifecycle/14 audit caught this. NOT a defect against bd-fcta itself; rather a confirmation that the lifecycle/14 sequential audit catches what taxonomy passes miss. **MINOR**, informational only.
+
+**Note on phase-label classification**: Audit doc §17.3 row for bd-fcta says "Phase 4a.5/4c federation security" in the rationale column but lists bd-fcta in the "Hidden Phase 4b orphans" table. After Phase 1 CLOSE verdict, the phase-label classification is moot (closed beads don't need labels).
+
+**Pattern observation (held — not yet promoted)**: bd-fcta is the first orphan with verdict CLOSE due to completed work. If bd-l64y, bd-8rvz, or other Session 015 cleanroom-finding orphans are ALSO already-fixed, this would constitute **Pattern I — Session 015 cleanroom findings whose fixes landed in later commits but the beads were never closed**. Pattern decision deferred until all 7 orphans are audited (after bd-l64y, bd-wwia, bd-8rvz, bd-0wn5).
+
+#### bd-l64y — merge_causal homomorphism inexact for same-TxId cross-Op (INV-FERR-029)
+
+**Phase 1**:
+- Code refs: STALE paths (Pattern B with rename), bug logic **CONFIRMED still present**:
+  - Cited `ferratomic-core/src/store/merge.rs` (merge_causal) → actually at `ferratomic-store/src/merge.rs:228-235`. Bug logic intact: `entries_a.union_with(entries_b, std::cmp::max)` — tuple max gives Retract > Assert on tie.
+  - Cited `ferratomic-core/src/store/query.rs` (build_live_causal) → actually at `ferratomic-store/src/query.rs:96-110`. Bug logic intact: `existing_tx >= datom.tx()` — keeps first insertion (Assert wins via EAVT order).
+  - Cited `ferratomic-core/src/store/mod.rs` (live_apply) → actually at `ferratomic-store/src/store.rs:460-490` (filename renamed mod.rs → store.rs in 11-crate decomposition). Bug logic intact: `datom.tx() > existing_tx` — keeps existing on tie (Assert wins if inserted first).
+  - **Three-path tie-breaking inconsistency CONFIRMED at line precision.**
+- Spec refs: INV-FERR-029 verified at `spec/03-performance.md:500` (title: "LIVE View Resolution"). VALID. (Note: bd-l64y cites INV-FERR-029 without quoting a title, so unlike bd-u5vi/u2tx Pattern D citation defects, bd-l64y has no title mismatch.)
+- Deps: No Dependencies section.
+- Duplicate: UNIQUE.
+
+**Structured field state**:
+```
+{ "id": "bd-l64y", "status": "open", "issue_type": "bug", "priority": 2 }
+$ br label list bd-l64y
+No labels for bd-l64y.
+```
+**issue_type=bug** is correct. **No labels** — orphan classification.
+
+**Pattern D 3rd hit (semantic, not citation)**: Per audit doc §17.7, bd-l64y is the 3rd Pattern D hit but is **structurally different** from bd-u5vi/u2tx (which are number-title mismatches). bd-l64y identifies a real **spec ambiguity**: INV-FERR-029 (LIVE View Resolution) does not currently specify the tie-breaking rule for same-TxId different-Op datoms, so three independent implementations chose three different defaults. This is a SPEC LEVEL 1 GAP that the spec audit (originally scoped to spec/05 §23.8.5) should address as a cross-section finding when reading spec/03 INV-FERR-029 for Pattern D resolution.
+
+**Phase 2** (8 lenses):
+- L0 Epistemic: proptest for the new same-TxId cross-Op invariant + regression test for the specific scenario. PASS.
+- L1 Structural: type=bug ✓, missing labels, missing Frame Conditions, missing Pseudocode Contract (touches 3 function bodies — must show unified logic), missing Dependencies.
+- L2 Spec Trace: PASS — strong INV-FERR-029 + INV-FERR-001 chain, BUT the cited INV is itself ambiguous on the failure mode (Pattern D semantic ambiguity).
+- L3 Postcondition: PASS — 3 strong, binary, verifiable postconditions.
+- L4 Scope: PASS — 3 files, all in ferratomic-store, single concept (unify tie-breaking).
+- L5 Frame: **FAIL** — must NOT change the homomorphism for normal merge cases (only fix the same-TxId edge case).
+- L6 Compiler Test: **FAIL** — fix touches 3 function bodies in 3 files; bead must show the unified tie-breaking logic with exact match arms or comparison expressions.
+- L7 Axiological: **STRONG PASS** — INV-FERR-029 homomorphism is foundational for federation correctness (Phase 4a.5/4c).
+
+**Verdict**: NEEDS WORK → **EDIT** (6 fixes: label, Pattern B paths with rename note, Frame Conditions, Pseudocode Contract, Dependencies declaration; PLUS spec audit must resolve Pattern D semantic ambiguity in spec/03 INV-FERR-029).
+
+**Findings raised**:
+- [FINDING-186] bd-l64y: STALE file paths (Pattern B with rename). `ferratomic-core/src/store/{merge,query,mod}.rs` → `ferratomic-store/src/{merge,query,store}.rs`. **Filename rename**: live_apply moved from `mod.rs` to `store.rs`. Phase 1 Check 1 + Pattern B. MAJOR. **Add bd-l64y to bd-0n9k coverage** (currently missing from §19.2 batch list).
+- [FINDING-187] bd-l64y: no labels (`br label list bd-l64y` returns "No labels"). Most-natural label is **phase-4a5** (federation correctness, predates phase-4b prolly tree work). Lens 1 + §17.3. MAJOR. (Note: §17.3 lists bd-l64y as Phase 4b orphan but body context is federation-side; recommend phase-4a5 over phase-4b.)
+- [FINDING-188] bd-l64y: missing Frame Conditions section. Lens 5. MAJOR.
+- [FINDING-189] bd-l64y: missing Pseudocode Contract showing unified tie-breaking logic across 3 function bodies. Lens 6. MAJOR.
+- [FINDING-190] bd-l64y: missing Dependencies declaration. Lens 1. MINOR.
+- [FINDING-191] **bd-l64y cross-cut to spec audit**: INV-FERR-029 (spec/03:500) does not specify the tie-breaking rule for same-TxId different-Op datoms, allowing three implementations to choose three different defaults. Pattern D semantic-ambiguity hit (3rd, per §17.7). **CRITICAL** for spec audit Section 6 (recommend expanding scope to include spec/03 INV-FERR-029 per §17.7). The bead-side fix and the spec-side fix must converge on the same tie-breaking rule. Recommended rule (per bd-l64y refinement sketch): Assert-wins on tie (matches transact semantics where Assert precedes Retract in EAVT order). Cross-cut to §6 spec audit findings.
+
+**Pattern I status update**: bd-l64y is REAL UNFIXED bug logic verified at line precision. Pattern I hypothesis (Session 015 phantom-bug pattern) currently 1/2 confirmed (bd-fcta yes, bd-l64y no). Pattern decision still deferred until bd-8rvz + bd-0wn5 audited.
+
+#### bd-wwia — Increase --unwind to 8 for error_display_non_empty Kani harness
+
+**Phase 1**:
+- Code refs: title cites `error_display_non_empty` Kani harness. Verified to exist at `ferratomic-verify/kani/error_exhaustiveness.rs:18` with current `#[cfg_attr(kani, kani::unwind(4))]` at line 15. **Work NOT yet done** — current value is still 4, bead wants 8. (**Pattern I negative**: not a phantom-fix case.)
+- Spec refs: title doesn't cite an INV-FERR. Bead body is **EMPTY** so no spec reference can be verified. The harness doc-comment cites INV-FERR-019 (FerraError Display non-empty) and INV-FERR-023 (no unsafe / Send + Sync) — those exist in spec/01.
+- Deps: empty body → no deps stated.
+- Duplicate: UNIQUE.
+
+**Structured field state**:
+```
+{ "id": "bd-wwia", "status": "open", "issue_type": "task", "priority": 2,
+  "title": "Increase --unwind to 8 for error_display_non_empty Kani harness (format expansion)" }
+```
+**No `description` field at all in JSONL** — the bead's `body` was never authored. Created and updated at the same timestamp (2026-04-02T05:08:43Z) — never edited after creation.
+```
+$ br label list bd-wwia
+No labels for bd-wwia.
+```
+
+**Phase 2** (8 lenses):
+- L0 Epistemic: N/A — bead has no body to evaluate methods against.
+- L1 Structural: **CATASTROPHIC FAIL** — body is entirely missing (worst-form Pattern E, same severity class as bdvf.13). type=task ✓, priority ✓, title ✓ are the only present fields.
+- L2-L7: **N/A** — cannot evaluate without a body.
+
+**Cryptic title issue**: Title says "Increase --unwind to 8" but the harness has **12 FerraError variants** in its array literal (lines 19-50 + InvariantViolation at 61). Increasing unwind from 4 to 8 would still leave 4 variants unverified. Either:
+- (a) The intent is "8" because of format string expansion depth, not loop iterations (the parenthetical "(format expansion)" hints at this — Display formatting may unwind through `format!` macro expansion several times per iteration)
+- (b) "8" is wrong and should be "12" or larger to cover all variants
+- (c) The harness was originally smaller and the array grew without the unwind being updated
+
+**Without a body, this is unresolvable from the bead alone.** The empty body is preventing a lab-grade fix decision.
+
+**Verdict**: NEEDS WORK → **REWRITE** (worst-form Pattern E). **Add bd-wwia to §19.4 REWRITE list** alongside bdvf.13/pdns/a7i0/q188.
+
+**Findings raised**:
+- [FINDING-192] bd-wwia: BODY EMPTY (Pattern E worst form). Same severity class as bdvf.13 (FINDING-012), bd-pdns (FINDING-152), bd-a7i0 (FINDING-151), bd-q188 (FINDING-150). Lens 1. **MAJOR**. **Action**: add bd-wwia to §19.4 REWRITE list (4 → 5 worst-form Pattern E REWRITE items).
+- [FINDING-193] bd-wwia: no labels (`br label list bd-wwia` returns "No labels"). Phase-4b verification work per §17.3. Lens 1 + §17.3. MAJOR.
+- [FINDING-194] bd-wwia: work NOT yet done. `ferratomic-verify/kani/error_exhaustiveness.rs:15` still has `kani::unwind(4)` — bead's title target value (8) not yet applied. (**Pattern I negative**: bd-wwia is real outstanding work, not a phantom-fix.)
+- [FINDING-195] bd-wwia: title's "(format expansion)" rationale is unresolved. The harness has 12 variants but title says unwind=8 (not 12). REWRITE must clarify: is 8 sufficient for format expansion depth or is it an off-by-N error that should be 12+? Cross-link to FINDING-192.
+
+**Pattern E expansion**: §19.4 REWRITE list grows from 4 → 5 (bd-wwia added). The Phase 3 estimated effort for Pattern E REWRITEs (audit doc §19.7) increases from 2-3 hours → ~2.5-3.5 hours.
+
+#### bd-8rvz — Two functions exceed 50 LOC limit: serialize_v3_live_first (63), transact (53)
+
+**Phase 1**:
+- Code refs: bead body acknowledges Pattern B in advance ("File paths will change after crate decomposition (bd-cly9). serialize_v3_live_first moves to ferratomic-checkpoint, transact moves to ferratomic-store."). Both functions verified at the new locations:
+  - `serialize_v3_live_first` at `ferratomic-checkpoint/src/v3.rs:307` — **body span lines 314-358 = 45 lines** (was 63 per bead, refactored to 45)
+  - `transact` at `ferratomic-store/src/apply.rs:106` — **body span lines 111-155 = 45 lines** (was 53 per bead, refactored to 45)
+  - **Both functions are NOW UNDER the 50-LOC limit** by clippy's `too_many_lines` measurement (which counts function body lines from after the opening `{` to before the closing `}`).
+- Spec refs: GOALS.md §6 Gate 8 (50 LOC limit) — verified canonical. AGENTS.md complexity limits — verified.
+- Deps: No deps stated (correct for a quality-fix bead).
+- Duplicate: UNIQUE.
+
+**Clippy gate evidence**:
+- `clippy.toml`: `too-many-lines-threshold = 50` — confirmed at clippy.toml:7
+- `#![warn(clippy::pedantic)]` enabled in BOTH crates: `ferratomic-checkpoint/src/lib.rs:90`, `ferratomic-store/src/lib.rs:32`. Plus all other 9 crate roots.
+- **Zero `#[allow(clippy::too_many_lines)]` annotations remain in source** (verified via grep — only doc/review/jsonl historical references)
+- Phase 4a closure (`v0.4.0-gate`, A+ 9.57) confirms `cargo clippy --workspace --all-targets -- -D warnings` passes — meaning these functions DO pass the lint at threshold 50
+
+**Conclusion**: The functions were refactored from 63→45 and 53→45 lines between bd-8rvz creation (2026-04-06) and Phase 4a closure (2026-04-08), but the bead was never closed.
+
+**Structured field state**:
+```
+{ "id": "bd-8rvz", "status": "open", "issue_type": "bug", "priority": 3 }
+$ br label list bd-8rvz
+No labels for bd-8rvz.
+```
+
+**Phase 2** (8 lenses): NOT APPLICABLE — Phase 1 verdict is CLOSE (completed work).
+
+**Verdict**: **CLOSE** — completed work. The 50-LOC limit is satisfied for both functions in current code. Phase 4a Gate 2/3 (`cargo clippy --workspace --all-targets -- -D warnings`) passing is the cross-evidence.
+
+**Findings raised**:
+- [FINDING-196] bd-8rvz is COMPLETED — both functions refactored to 45 body lines (under 50 limit). Phase 1 Check 1 (CONFIRMED→COMPLETED). **MAJOR** (unclosed bead representing completed work). Action: `br close bd-8rvz --reason "Already fixed in Phase 4a refactoring sweep. serialize_v3_live_first body 45 LOC (was 63), transact body 45 LOC (was 53). Both under clippy too_many_lines threshold of 50. Verified by audit doc §5.6 in session 022 — clippy gate green at v0.4.0-gate."`
+- [FINDING-197] bd-8rvz: §17.3 listed bd-8rvz as a Pattern E candidate ("Substantive lab-grade body") — same meta-finding as bd-fcta (FINDING-185). The lifecycle/14 sequential audit catches what taxonomy passes miss. MINOR, informational.
+
+**Pattern I CONFIRMED — STOP CONDITION TRIGGERED**:
+
+bd-8rvz is the **second** Session 015 cleanroom-finding orphan to verify as already-completed. Combined with bd-fcta, the pattern is now established:
+
+| Bead | Session 015 cleanroom finding? | Status | Completion evidence |
+|------|--------------------------------|--------|---------------------|
+| bd-fcta | YES | **COMPLETED** | Commit `d14f47c` "fix: close 24 Phase 4a gate blockers" — diff shows visibility change + new constructor |
+| bd-l64y | YES | **REAL UNFIXED BUG** | Three-path tie-breaking still present at line precision |
+| bd-uyy9 | YES | **REAL OUTSTANDING WORK** | Self-merge fast path not yet implemented (perf optimization, not yet started) |
+| bd-8rvz | YES | **COMPLETED** | Both functions refactored from 63→45 and 53→45 LOC; clippy gate passing at v0.4.0-gate |
+
+**2 of 4 audited Session 015 cleanroom findings are completed-but-unclosed (50%).** This is a structurally significant pattern: it means the Phase 4a remediation sweep fixed cleanroom-flagged bugs but never closed the corresponding beads. The audit graph carried "open bug" beads that were actually green for the entire Phase 4a closure period — distorting `bv --robot-*` priority signals.
+
+**This satisfies the audit doc STOP CONDITION** (per session 022 continuation prompt §"Stop Conditions"):
+> "You discover a NEW pattern beyond A-H. The 8 patterns in §17/§18 cover everything found so far. A 9th pattern means the audit missed something structurally significant — flag for strategic discussion."
+
+**Provisional Pattern I description**: **Session 015 cleanroom-finding orphans whose work was completed during Phase 4a remediation sweeps but the beads were never closed.** Hits so far: bd-fcta (commit d14f47c, 4-postcondition match), bd-8rvz (refactor sweep, line-count match). Likely additional victims among the wider P2/P3 cleanroom-finding bead set (NOT just the 7 hidden orphans — Pattern I may apply to LABELED Phase 4b cleanroom findings as well).
+
+**Next steps deferred to user direction**:
+1. Should bd-0wn5 audit complete first (would strengthen pattern data with 5/7 sample) before escalation?
+2. Should the orphan audit pause and a broader Pattern I sweep happen across all P2/P3 Session 015-attributed beads in the labeled phase-4a/4b cluster?
+3. Should the closure-without-bead-update workflow be added as a discipline reminder in `feedback_*.md` or AGENTS.md to prevent future Pattern I instances?
+
+---
+
 ## 6. Spec Audit — `spec/05 §23.8.5` (Phase 4a.5 Federation Foundations)
 
 _Phases 1-6 of lifecycle/17 to be filled in during execution._
