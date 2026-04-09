@@ -2912,18 +2912,10 @@ The handoff section below identifies the next pickup point.
 - **Pattern G — gvil family minimal-body**: 9 hits (gvil.1 through gvil.9), all skeletal single-paragraph beads. gvil.10 and gvil.11 break the pattern.
 - Continued **Pattern F**: bd-4vwk identified as the perf-side authoring source for ADR-FERR-031 in spec/09, completing the picture of how the triple ADR collision arose.
 
-### Next pickup point — Session 2
+### Next pickup point — see Section 16: True North Roadmap
 
-**Phase 1 bead audit COMPLETE** (112/112 beads). All sub-clusters done.
-
-**Next phase**: **Spec audit** (Sections 6, 7, 8 of this doc) per `lifecycle/17-spec-audit.md`.
-
-**Recommended order**:
-1. **Section 6** — `spec/05 §23.8.5` (Phase 4a.5 federation invariants — INV-FERR-060..063, 025b, 086, ADR-FERR-021..029, 031, 032, 033). Resolve **Pattern F** (triple/quadruple ADR collision) and **Pattern D** (INV-029/032 mismatch) here.
-2. **Section 7** — `spec/06` (prolly tree, INV-FERR-045..050). Resolve **Pattern H** (fabricated INV-FERR-045a / S23.9.x citations) here.
-3. **Section 8** — `spec/09` (perf architecture, INV-FERR-070..085). Resolve duplicate ADRs in spec/09 (Pattern F continued).
-
-**After spec audits**: **Phase 3 reconciliation** (apply all 170 findings via `br update`/`br dep`/etc.). Then **Phase 4 graph integrity verification** (re-run `bv --robot-*` and confirm all alerts cleared).
+The detailed multi-session plan from this point forward is codified in
+**Section 16: True North Roadmap (Audit → Implementation)** below.
 
 **Recommended P0 order for 4b** (~20 beads):
 1. bd-y1rs (EPIC) — context first
@@ -2952,3 +2944,554 @@ Phase 3 reconciliation (Section 11).
 
 **Discipline**: Continue per-bead lab-grade depth. NO subagent delegation. NO
 batch updates. NO rush. The user explicitly authorized multi-session pacing.
+
+---
+
+## 16. True North Roadmap (Audit → Implementation)
+
+> **Codified 2026-04-08 in session 021 with explicit user authorization.**
+> This roadmap is the canonical execution sequence for the entire path
+> from "bead audit complete" to "Phase 4a.5 + Phase 4b implementation begins
+> in parallel under the diamond topology." It supersedes any informal
+> session-pickup notes elsewhere in this document.
+
+### 16.1 Goal hierarchy
+
+| Goal | Why |
+|------|-----|
+| Phase 4a.5 + Phase 4b implementation is **lab-grade by default** | The codebase IS the training signal — toxic patterns propagate, clean patterns propagate too |
+| Iterate in **planning space**, not implementation space | Planning iteration is 10-1000× cheaper than implementation iteration (see cost ratios in §16.2) |
+| Catch CRITICAL defects at the **cheapest layer** | Patterns F + H + worst-form E + C8 partial-rename bugs are concentrated in spec/bead and unblock the entire downstream tree |
+| Preserve the **diamond topology** (4a.5 ∥ 4b parallel) | Two independent gates close independently; both must close before Phase 4c |
+
+### 16.2 Defect-cost ladder (first principles)
+
+| Layer | Relative cost to fix one defect | Why |
+|-------|--------------------------------|-----|
+| Spec | 1× | Edit a markdown file, re-parse |
+| Bead | 3-5× | `br update` + dependency rewiring |
+| Implementation code | 10-30× | Code review + test rewrite + CI |
+| Lean proof / test | 30-100× | Vacuous proofs hide indefinitely |
+| Downstream code after defect propagates | 100-1000× | Architectural cleanup, possibly rewrite |
+
+Every defect we catch at the spec/bead layer saves a multiple of work later.
+The audit's *real* job is to maximize defect catch rate at the cheapest layer.
+
+### 16.3 The 6-session execution plan
+
+| # | Session | Phase | Focus | Key outputs |
+|---|---------|-------|-------|------------|
+| 1 | **021** (current) | Strategic | Roadmap codification + bead topology + Pattern F+H resolution scoping + Phase 3 pre-computation | This roadmap (§16) + topology (§17) + Pattern resolution proposals (§18) + Phase 3 batch script (§19) |
+| 2 | **022** | Spec audit | Section 6: `spec/05 §23.8.5` (lifecycle/17 deep mode) | Resolves Pattern F federation side, Pattern D INV-029/032 mismatch, INV-FERR-08x placeholders. Updates spec/05. |
+| 3 | **023** | Spec audit | Section 7: `spec/06` (prolly tree, INV-FERR-045..050) | **Resolves Pattern H** (fabricated INV-FERR-045a + S23.9.x). Either authors missing content OR rewrites 8 affected beads. Most critical of all spec audits. |
+| 4 | **024** | Spec audit | Section 8: `spec/09` (perf architecture, INV-FERR-070..085) | Resolves Pattern F perf side + ADR-FERR-020 collision. Updates spec/09. |
+| 5 | **025** | Phase 3 reconciliation | Apply ~150 of 170 findings via `br update`/`br dep`. REWRITE 4 empty-body beads + 9 gvil sub-beads (Option Y per user choice) + fix C8 partial-rename in bd-mklv + bd-3t63. | All bead-level findings closed. |
+| 6 | **026** | Phase 4 verification + audit closure | Re-run `bv --robot-*`, compare to BEFORE metrics (§2). Author final closure document. Tag the audit. | Audit phase ends. |
+| 7+ | **027+** | **Implementation** | Parallel diamond execution: Phase 4a.5 track + Phase 4b track via multi-agent swarm with file-disjoint coordination | Implementation begins. |
+
+### 16.4 Implementation phase (sessions 027+)
+
+**Diamond topology**: Phase 4a.5 + Phase 4b execute as **two parallel tracks** with disjoint file ownership where possible. The tracks meet only at:
+- `bd-r7ht` (B17 bootstrap test) — multi-parent integration point (Phase 4a.5 capstone AND Phase 4b spine starting point)
+- `ferratomic-store/{store.rs, apply.rs}` — the only file collision (Phase 4a.5 bd-3t63 transact metadata vs Phase 4b bd-qgxjl Roaring LIVE + bd-51zo mmap wiring)
+
+**Track A — Phase 4a.5 implementation** (27 beads → bd-r3um gate):
+- Federation primitives: signing (bd-6j0r, bd-8f4r, bd-37za), identity (bd-mklv, bd-1zxn), transport (bd-1rcm, bd-lifv), selective merge (bd-sup6, bd-7dkk, bd-h51f, bd-tck2), provenance (bd-hcns)
+- Verification: bd-u5vi, bd-u2tx, bd-4pna, bd-hlxr
+- Bootstrap: bd-r7ht (B17)
+- Gate: bd-r3um closes when all children + bootstrap test pass
+
+**Track B — Phase 4b implementation** (85 beads → bd-7ij gate):
+- Wavelet matrix: gvil.1-11 (bd-obo8 → bd-no6b), bd-jolx, bd-bmu2 contingency
+- Canonical spec store: bd-m8ym, bd-d6dl, bd-p8n3, bd-ipzu, bd-e58u (R16), bd-j1mp (gate cert datoms)
+- Performance: bd-qgxjl (Roaring), bd-51zo (mmap wiring), bd-pg85 (V4 checkpoint), bd-xk2je/j7akd/wo07o (perf optimizations)
+- Spec hygiene: bd-s56i, bd-iwz3, bd-hq78, bd-dmqv
+- Defects: bd-9be8, bd-fw31, bd-pdns, bd-a7i0, bd-q188 (after REWRITE)
+- Gate: bd-7ij closes when all 85 children pass + scale validation evidence
+
+**Both gates must close** before bd-fzn (Phase 4c gate) becomes actionable.
+
+### 16.5 Multi-agent execution model (sessions 027+)
+
+Per `feedback_no_worktrees.md` and `feedback_subagent_orchestration.md`:
+- **Worktrees FORBIDDEN** (corrupts .beads/ and .cass/)
+- **Agents don't run cargo** (orchestrator compiles once after all agents complete)
+- **Disjoint file sets** — two agents never edit the same file
+- **Coordination via agent-mail** for file reservations + thread communication
+- **One bead per agent** at lab-grade depth
+
+The post-audit clean bead graph enables aggressive parallelism:
+- ~50 ferratom-leaf beads can run in parallel (no inter-dependencies)
+- ~30 store/wal/checkpoint beads run after leaf beads
+- ~20 verification beads run after implementation
+- ~10 integration/bootstrap beads run last
+
+### 16.6 Discipline preservation across sessions
+
+These rules apply to every session 022-026+:
+
+1. **NO subagent delegation for bead/spec auditing** (per `feedback_no_batch_bead_audit.md`)
+2. **NO batch updates** — sequential, one bead/INV at a time, by orchestrator
+3. **NO rush** — multi-session pacing is intentional; quality > throughput
+4. **Read primary sources every time** — every spec citation grep-verified, every file path ls-verified, every dep edge traced
+5. **Cross-reference patterns** — when encountering a new pattern instance, cite the pattern in the finding, don't re-derive
+6. **Preserve cleanroom standard** — every change is justified by an audit finding; no editorial discretion
+
+### 16.7 Success criterion for the entire roadmap
+
+The roadmap succeeds when **session 027 begins with**:
+
+- ✅ All 170 audit findings resolved (closed in br state OR explicitly deferred with rationale)
+- ✅ All 4 CRITICAL spec patterns (F, H, D, worst-form E) resolved at the spec layer
+- ✅ The dependency graph passes `bv --robot-*` with zero alerts
+- ✅ Both Phase 4a.5 (bd-r3um) and Phase 4b (bd-7ij) gates have **0 stale-form blockers**
+- ✅ Every Phase 4a.5 + Phase 4b bead is at lab-grade quality (passes all 8 lenses from `lifecycle/14`)
+- ✅ Every Phase 4a.5 + Phase 4b spec invariant is at lab-grade quality (passes all 7 lenses from `lifecycle/17`)
+
+When all six conditions hold, the implementation phase begins **with provable confidence** that downstream work won't be poisoned by upstream defects.
+
+---
+
+## 17. Bead Topology + Orphan Taxonomy
+
+> **Codified 2026-04-08 in session 021 with explicit user authorization.**
+> The bead audit (Sections 4-5) was scoped by `phase-4a5` and `phase-4b` labels.
+> This section maps the FULL open-bead topology to find any orphan beads that
+> may belong to the current bodies of work but escaped the audit scope.
+
+### 17.1 Open bead totals (2026-04-08T22:30Z baseline)
+
+| Category | Count | Notes |
+|----------|-------|-------|
+| **Total open beads** | 177 | Down from 179 at session start |
+| Phase-4a5 labeled | 27 | ✅ Audited (Section 4) |
+| Phase-4b labeled | 85 | ✅ Audited (Section 5) |
+| Phase-4c labeled | 31 | Future work (audited indirectly via dep edges) |
+| Phase-4d labeled | 15 | Future work |
+| Phase-5 labeled | 1 | Future work |
+| **Audited (4a5+4b)** | **112** | **Section 4 + Section 5** |
+| **Total labeled** | 159 | (27+85+31+15+1) |
+| **Unlabeled / orphan** | **18** | **23 with no phase label minus 5 backlog/research** |
+
+### 17.2 Multi-phase labeled beads (5)
+
+These beads correctly carry multiple phase labels because their work spans phases:
+
+| Bead | Phases | Why multi-phase |
+|------|--------|-----------------|
+| bd-lzy2 | phase-4b, phase-4c | Storage cost model spans implementation + federation |
+| bd-imwb | phase-4b, phase-4d | Cascade simulation runs in 4b but rule library is 4d |
+| bd-59dc | phase-4b, phase-4d | Projection calculus cost model |
+| bd-lfgv | phase-4b, phase-4d | Reflective rule library hand-build |
+| bd-0lk8 | phase-4a5, phase-4c | Ed25519 throughput (signing primitive lands in 4a.5, federation transport in 4c) |
+
+These were correctly audited under their phase-4a5 / phase-4b primary labels.
+
+### 17.3 Hidden Phase 4b orphans (CRITICAL FINDING — 6 beads)
+
+These beads have **no phase label** but are clearly Phase 4b work that should
+have been audited in Section 5. They were missed because the audit scope was
+defined by label, not by content. **These need lab-grade audit before
+implementation.**
+
+| Bead | Title (truncated) | Why Phase 4b | Severity | Notes |
+|------|-------------------|--------------|----------|-------|
+| **bd-gvil** | Wavelet matrix compressed store... (Phase 4c+) | **MASTER EPIC of gvil.1-11 sub-beads, all phase-4b**. Title says "Phase 4c+" — STALE per bd-4vwk reframe (Phase 4b primary backend). | **CRITICAL** | Needs immediate relabel + title update |
+| bd-uyy9 | Self-merge fast path for INV-FERR-003 idempotency | Session 015 cleanroom finding. Performance optimization for 100M scale (INV-FERR-028). P2 task. | MAJOR | Substantive lab-grade body |
+| bd-fcta | WireEntityId pub inner field bypasses trust boundary (ADR-FERR-010) | Session 015 cleanroom finding. Phase 4a.5/4c federation security. P2 bug. | MAJOR | Substantive lab-grade body |
+| **bd-l64y** | merge_causal homomorphism inexact for same-TxId cross-Op (INV-FERR-029) | Session 015 cleanroom finding. **3rd Pattern D hit on INV-FERR-029 area**. P2 bug. | **MAJOR** | Pattern D expansion — see §17.7 |
+| bd-wwia | Increase --unwind to 8 for error_display_non_empty Kani harness | Session 020 finding. Phase 4b verification. P2 task. | MINOR | Body is title-only (Pattern E candidate) |
+| bd-8rvz | Two functions exceed 50 LOC limit: serialize_v3_live_first (63), transact (53) | Session 015 cleanroom finding. GOALS.md §6 Gate 8 violation. P3 bug. | MINOR | Substantive lab-grade body |
+| bd-0wn5 | INV-FERR-057: Implement soak test framework and mini-soak proptest | Phase 4b verification work. P3 task. References INV-FERR-057 in spec/08. | MAJOR | Substantive lab-grade body |
+
+**Total hidden Phase 4b orphans: 7** (including bd-gvil EPIC).
+
+### 17.4 Mislabeled beads (2)
+
+These beads have wrong or missing phase labels and need correction:
+
+| Bead | Current label | Correct label | Why |
+|------|---------------|---------------|-----|
+| bd-bpsj | (none) | phase-4c | "ADR-FERR-014: Implement release certificate generator" — ADR-FERR-014 is Phase 4c per spec/08 §23.12.7 chain |
+| bd-9g7p | (none) | phase-4d | "INV-FERR-058: Design metamorphic testing framework for ferratomic-datalog" — datalog is Phase 4d |
+
+### 17.5 Test/cleanup beads (2)
+
+| Bead | Title | Action |
+|------|-------|--------|
+| bd-xclc | "Test bead one" | **CLOSE** as test artifact during Phase 3 reconciliation |
+| bd-pnn0 | "Test bead two" | **CLOSE** as test artifact during Phase 3 reconciliation |
+
+### 17.6 Correctly-labeled non-current research (8)
+
+These beads have explicit non-phase labels and are correctly excluded from
+current Phase 4a.5/4b audit scope:
+
+| Bead | Label | Notes |
+|------|-------|-------|
+| bd-03ev3 (EPIC) | speculative-research | Alien Artifact Catalog — perf research brainstorm preserved |
+| bd-isp1k | speculative-research | Git history mirrored as datoms |
+| bd-bzd4y | speculative-research | Bead state as datoms |
+| bd-7yn9h | speculative-research | Lean theorem statements as datoms |
+| bd-4nkvd | speculative-research | Read-only AST mirror of src/ |
+| bd-3wcqj | speculative-research | Proc-macro #[invariant] annotations |
+| bd-vztx | speculative-research | Full implementation-as-datoms |
+| bd-8o8t (EPIC) | speculative-research | Monocanonical Source Model EPIC |
+| bd-7gl4 | backlog | Classify invariants using 9-pattern taxonomy |
+| bd-zve0 | backlog | Coherence density matrix for federation health |
+| bd-12fa | backlog | Bilateral Y-combinator implementation |
+| bd-s3jq | (none) | TigerBeetle VOPR research — research bead, P4. Could add `research` label for consistency. |
+
+### 17.7 Pattern D expansion (NEW)
+
+**Original Pattern D**: 2 hits (bd-u5vi, bd-u2tx) — both cite "INV-FERR-029 (LIVE Resolution Correctness)" but the title belongs to INV-FERR-032.
+
+**Expanded Pattern D**: Now **3 hits** with the discovery of bd-l64y. The third hit is different in kind:
+- bd-u5vi, bd-u2tx: number-title mismatch (citation defect)
+- **bd-l64y**: identifies a real INV-FERR-029 semantic ambiguity — three code paths use different tie-breaking logic for same-TxId cross-Op edge case
+
+**Implication**: spec/03 INV-FERR-029 (and possibly INV-FERR-032) has BOTH a citation/title issue AND a semantic ambiguity issue. The spec audit (session 022 — even though spec/03 is outside the original mandate) should address both. Recommend expanding spec audit Section 6 to include spec/03 INV-FERR-029/032 as a cross-reference resolution.
+
+### 17.8 Remediation plan for orphans
+
+**Immediate (Phase 3 reconciliation, session 025)**:
+1. **Relabel bd-gvil**: `br update bd-gvil --label phase-4b` (and update the title to remove "Phase 4c+" — currently lies about its scope per bd-4vwk reframe)
+2. **Add labels to mislabeled beads**: `br update bd-bpsj --label phase-4c`, `br update bd-9g7p --label phase-4d`
+3. **Close test beads**: `br close bd-xclc --reason "Test artifact, not real work"`, `br close bd-pnn0 --reason "Test artifact, not real work"`
+4. **Add `research` label to bd-s3jq** for consistency with other research beads
+
+**Audit scope expansion (sessions 022-025)**:
+The 7 hidden Phase 4b orphans (bd-gvil, bd-uyy9, bd-fcta, bd-l64y, bd-wwia, bd-8rvz, bd-0wn5) need lab-grade audits per `lifecycle/14`. Two options:
+
+- **Option X**: Audit them in session 022 *before* the spec audit work begins. Adds ~1-2 hours but ensures the spec audit knows the full bead surface.
+- **Option Y**: Audit them in session 025 as part of Phase 3 reconciliation. Treats them as "found defects discovered during reconciliation prep."
+
+**Recommendation**: **Option X** (audit in session 022). Reasoning: bd-l64y identifies a real INV-FERR-029 ambiguity that affects spec/03. The spec audit benefits from knowing this *before* it begins.
+
+### 17.9 Updated audit total
+
+After session 022 audits the 7 hidden orphans:
+- Phase 4a.5: 27 beads ✅
+- Phase 4b: **92 beads** (85 labeled + 7 hidden orphans)
+- **Total bead audit**: **119 beads**
+
+Plus orphans of other categories (total 18 unlabeled — 6 corrected to other phases or research, 12 confirmed correctly excluded).
+
+### 17.10 Open-bead taxonomy verification (Phase 4 cleanup)
+
+After Phase 3 reconciliation, the verification step should confirm:
+- ✅ Zero unlabeled open beads (all categorized)
+- ✅ Zero "test bead" artifacts (all closed)
+- ✅ bd-gvil has phase-4b label and updated title
+- ✅ All multi-phase beads have justification documented
+- ✅ Pattern D expanded analysis applied to spec/03 INV-FERR-029/032
+
+---
+
+## 18. Pattern F + Pattern H Resolution Proposals (Session 021 Pre-Work)
+
+> **Codified 2026-04-08 in session 021** to lock in resolution paths for the
+> two CRITICAL spec patterns. This pre-work makes the spec audit sessions
+> (022-024) faster and more deterministic — they execute the proposals
+> rather than re-discovering them.
+
+### 18.1 Pattern H — DEFINITIVELY RESOLVED
+
+**Investigation results**:
+
+```bash
+$ grep -r "INV-FERR-045a" /data/projects/ddis/ferratomic/spec/ /data/projects/ddis/ferratomic/docs/ /data/projects/ddis/ferratomic/ferratomic-verify/lean/
+(zero hits — only my own audit doc references it)
+
+$ grep -rE "S?23\.9\.0|Canonical Datom Key Encoding" spec/ docs/
+(zero hits in primary spec content)
+
+$ git log --all --oneline --grep="INV-FERR-045a"
+(only audit commits mention it; no commit ever introduced INV-FERR-045a content)
+```
+
+**Conclusion**: `INV-FERR-045a` and `S23.9.0 "Canonical Datom Key Encoding"` were **planned but never authored**. The 8 affected beads (bd-3gk, bd-t9h, bd-r2u, bd-f74, bd-14b, bd-132, bd-400, bd-85j.13) cite content the bead author intended to land in a spec amendment that was never committed.
+
+**Recommendation for spec audit Section 7 (session 023)**: **AUTHOR THE MISSING CONTENT**.
+
+Reasoning:
+1. The spec content was clearly planned (8 beads cite it consistently)
+2. The 8 beads' Bug Analysis sections describe what the spec should say — the design source is already documented
+3. INV-FERR-045a "Deterministic Chunk Serialization" naturally extends INV-FERR-045 (Chunk Content Addressing)
+4. §23.9.0 "Canonical Datom Key Encoding" is a foundational sub-section the prolly tree spec needs anyway
+5. Bead-side rewrites (option B) would weaken the audit trail by replacing precise sub-INV citations with vague "see INV-FERR-045 prose" references
+
+**Authoring scope** (for session 023):
+
+| New section | Source material | Estimated effort |
+|-------------|-----------------|------------------|
+| §23.9.0 "Canonical Datom Key Encoding" (~50-100 lines in spec/06) | bd-t9h, bd-r2u Bug Analysis sections describe the encoding, key vs value decode semantics, RootSet serialization | 30-45 min |
+| INV-FERR-045a "Deterministic Chunk Serialization" (~100-150 lines in spec/06) | bd-f74 (chunk canonicality at type boundary), bd-14b (decode_child_addrs), bd-132 (DiffIterator), bd-85j.13 (prolly tree block store) Bug Analysis describe the serialization contract | 60-90 min |
+
+**Total estimated effort for Pattern H resolution**: 90-135 minutes within session 023.
+
+After authoring, all 8 affected bead citations become valid. No bead rewrites needed.
+
+### 18.2 Pattern F — Renumbering Proposal
+
+**Map of confirmed collisions**:
+
+| ADR Number | spec/04 | spec/05 (federation) | spec/09 (perf) |
+|------------|---------|----------------------|----------------|
+| 020 | "Localized Unsafe for Performance-Critical Cold Start" (line 507) | — | "Localized Unsafe for Performance-Critical Cold Start" (line 48) — **identical title, content duplication** |
+| 031 | — | "Database-Layer Signing" (line 5341) — Phase 4a.5 federation | "Wavelet Matrix Phase 4a Prerequisites — Rank/Select and Attribute Interning" (line 2838) — Phase 4a perf |
+| 032 | — | "TxId-Based Transaction Entity" (line 5390) — Phase 4a.5 federation | "Lean-Verified Functor Composition for Representation Changes" (line 2870) — Phase 4a perf |
+| 033 | — | "Store Fingerprint in Signing Message" (line 5437) — Phase 4a.5 federation | "Primitive vs. Injectable Index Taxonomy" (line 2753) — Phase 4a perf |
+
+**Chronology** (from git log):
+
+| Event | Approximate session | Evidence |
+|-------|---------------------|----------|
+| spec/09 ADR-FERR-020 (Localized Unsafe) authored | Phase 4a perf work (sessions 011-013) | Predates the spec/04 copy |
+| spec/04 ADR-FERR-020 (Localized Unsafe) authored | Phase 4a constraint formalization | Same content — likely a deliberate cross-reference that became literal duplication during a prior consolidation |
+| spec/09 ADR-FERR-031/032/033 (perf) authored | Phase 4a perf architecture sessions (011-018) | Existing spec content predates the federation ADRs |
+| spec/05 ADR-FERR-031/032/033 (federation) authored | Sessions 015-020 by bd-3t63 + related federation work | bd-3t63 created 2026-04-04, before session 020. The bead author did not realize the numbers were already taken in spec/09. |
+| bd-4vwk filed | Session 020 (2026-04-08) | Wants to AMEND spec/09 ADR-FERR-031 (Wavelet Matrix Phase 4a Prerequisites) to add Phase 4b primary-backend content. The amendment may need a new ADR number entirely. |
+
+**Resolution proposal**:
+
+**ADR-FERR-020 (content duplication)**:
+- **Keep**: `spec/09:48` (the original location — perf architecture work)
+- **Replace**: `spec/04:507` with a one-line cross-reference: `### ADR-FERR-020: Localized Unsafe for Performance-Critical Cold Start → see spec/09 §23.13.1`
+- **Rationale**: spec/04 is the constraint registry; cross-referencing maintains discoverability without duplication.
+
+**ADR-FERR-031/032/033 (number collisions, different content)**:
+
+The spec/09 versions are the originals (older). The spec/05 versions are the duplicates that need renumbering.
+
+| Current (spec/05) | Proposed renumber | New title (unchanged) |
+|-------------------|-------------------|-----------------------|
+| ADR-FERR-031 | **ADR-FERR-034** | Database-Layer Signing |
+| ADR-FERR-032 | **ADR-FERR-035** | TxId-Based Transaction Entity |
+| ADR-FERR-033 | **ADR-FERR-036** | Store Fingerprint in Signing Message |
+
+**Affected bead citations** (must update after renumbering):
+
+| Bead | Current citation | New citation |
+|------|------------------|--------------|
+| bd-qguw | ADR-FERR-031 (Database-Layer Signing) | ADR-FERR-034 |
+| bd-mklv | ADR-FERR-031 (Database-Layer Signing) | ADR-FERR-034 |
+| bd-6j0r | ADR-FERR-031 + ADR-FERR-033 | ADR-FERR-034 + ADR-FERR-036 |
+| bd-3t63 | "authors ADR-FERR-031/032/033" | Update to "authors ADR-FERR-034/035/036" |
+| bd-wo07o | ADR-FERR-020 (in spec/09:48) | No change (canonical location preserved) |
+| bd-mklv (separately cites ADR-FERR-027) | ADR-FERR-027 (Store Identity via Self-Signed Tx) | No change (not a collision) |
+
+**bd-4vwk special case**: bd-4vwk wants to author ADR-FERR-031 (Wavelet Matrix as Phase 4b Primary Backend) in spec/09. Since the existing spec/09 ADR-FERR-031 ("Wavelet Matrix Phase 4a Prerequisites") is a different ADR, bd-4vwk should:
+- **Option α**: Author a NEW ADR-FERR-037 in spec/09 (after the renumbering) with the Phase 4b primary backend content. spec/09 ADR-FERR-031 stays as the Phase 4a prerequisites ADR.
+- **Option β**: AMEND the existing spec/09 ADR-FERR-031 to add the Phase 4b primary backend content as a continuation. Single ADR carries both Phase 4a prerequisite + Phase 4b primary commitment.
+
+**Recommendation for spec audit Section 8**: **Option α** (new ADR-FERR-037). Reasoning:
+1. ADRs are immutable historical records — amending an existing ADR violates the "decisions are append-only" discipline
+2. Phase 4a prerequisites and Phase 4b primary backend are distinct decisions made at different times with different evidence
+3. The spec stays cleaner with one ADR per decision
+
+**Total estimated effort for Pattern F resolution**: 60-90 minutes within session 022 (federation side) + 60-90 minutes within session 024 (perf side) = ~2-3 hours total across two sessions.
+
+### 18.3 Combined effort estimate
+
+| Resolution | Session | Effort |
+|------------|---------|--------|
+| Pattern H authoring (INV-FERR-045a + §23.9.0) | 023 | 90-135 min |
+| Pattern F federation renumber + bead citation updates | 022 | 60-90 min |
+| Pattern F perf side (ADR-FERR-020 cross-ref + new ADR-FERR-037) | 024 | 60-90 min |
+| **Total CRITICAL pattern resolution** | 022-024 | **3.5-5.5 hours** |
+
+This is well within the 3-session budget allocated for spec audits.
+
+---
+
+## 19. Phase 3 Reconciliation Pre-Computation (Session 025 Executable Script)
+
+> **Codified 2026-04-08 in session 021**. The commands below are the
+> executable batch script for session 025 Phase 3 reconciliation. Each
+> command is justified by a specific audit finding (cited in comments).
+> Sessions 022-024 (spec audits) may add to this script as new findings
+> emerge during spec resolution.
+
+### 19.1 Pattern A — bd-add phantom edge removal (24 beads)
+
+bd-add closed 2026-04-08 (PHASE 4A GATE CLOSED, commit 732c3aa, tag v0.4.0-gate).
+All edges from open beads → bd-add are PHANTOM and must be removed.
+
+```bash
+# Pattern A: 24 phantom edges to bd-add
+br dep rm bd-oiqr bd-add    # FINDING-007 — Phase 4a.5 EPIC
+br dep rm bd-bdvf bd-add    # FINDING-009 — Spec amendment task
+br dep rm bd-r3um bd-add    # FINDING-016 — Phase 4a.5 gate
+br dep rm bd-y1rs bd-add    # FINDING-073 — Phase 4b spine EPIC
+br dep rm bd-3gk bd-add     # FINDING-100b — Phase 4b spec EPIC
+br dep rm bd-7ij bd-add     # FINDING-103 — Phase 4b gate
+br dep rm bd-kt98 bd-add    # FINDING-125 — Value pool storage
+br dep rm bd-t9h bd-add     # FINDING-128 — Prolly value encoding
+br dep rm bd-2rq bd-add     # FINDING-129 — V1 remote query boundary
+br dep rm bd-26x bd-add     # FINDING-131 — TransportResult contract
+br dep rm bd-r2u bd-add     # FINDING-133 — Manifest snapshot
+br dep rm bd-f74 bd-add     # FINDING-136 — Chunk canonicality
+br dep rm bd-14b bd-add     # FINDING-138 — INV-FERR-048 Level 2
+br dep rm bd-132 bd-add     # FINDING-140 — INV-FERR-047 Level 2
+br dep rm bd-400 bd-add     # FINDING-142 — INV-FERR-046a authoring
+br dep rm bd-o0suq bd-add   # FINDING-145 — Kani --unwind 2
+br dep rm bd-keyt bd-add    # FINDING-157 — Deferred INV-FERR-025
+br dep rm bd-nhui bd-add    # FINDING-158 — Deferred INV-FERR-017
+br dep rm bd-2ac bd-add     # FINDING-159 — Transport overflow
+br dep rm bd-xsr1 bd-add    # FINDING-161 — DatomAccumulator
+br dep rm bd-39qx bd-add    # FINDING-163 — SnapshotView
+br dep rm bd-l2v6 bd-add    # FINDING-168 — Observer catchup
+br dep rm bd-sg59 bd-add    # FINDING-170 — Ghost retraction warning
+br dep rm bd-z6yo bd-add    # bd-z6yo audit — Coherence gate
+
+# Pattern A variant: bd-snnh phantom edge (closed 2026-04-08 with HOLD verdict)
+br dep rm bd-7ij bd-snnh    # FINDING-104 — Phase 4b gate / Index scaling experiment
+```
+
+**Total**: 24 phantom edges removed. Verify with `bv --robot-alerts` post-execution — should show fewer alerts.
+
+### 19.2 Pattern B — Stale path remediation (cross-references bd-0n9k)
+
+Per FINDING-032, **bd-0n9k must be elevated to P1** (currently P2 but blocks multiple P1 stale-path beads). Then bd-0n9k's scope owns the Pattern B remediation.
+
+```bash
+# Step 1: Elevate bd-0n9k priority
+br update bd-0n9k --priority 1    # FINDING-032
+
+# Step 2: Add explicit dependency edges from stale-path beads to bd-0n9k
+# (so br ready surfaces them only after bd-0n9k closes)
+br dep add bd-k5bv bd-0n9k       # FINDING-020 — bd-k5bv stale paths
+br dep add bd-4pna bd-0n9k       # FINDING-022 — bd-4pna stale paths
+br dep add bd-u5vi bd-0n9k       # FINDING-024 — bd-u5vi stale paths
+br dep add bd-1zxn bd-0n9k       # FINDING-040 — bd-1zxn stale paths
+br dep add bd-3t63 bd-0n9k       # FINDING-050 — bd-3t63 stale paths
+br dep add bd-sup6 bd-0n9k       # FINDING-061 — bd-sup6 stale paths
+br dep add bd-u2tx bd-0n9k       # FINDING-064 — bd-u2tx stale paths
+br dep add bd-kt98 bd-0n9k       # FINDING-126 — bd-kt98 stale paths
+br dep add bd-f5hl bd-0n9k       # FINDING-156 — bd-f5hl stale paths
+br dep add bd-39qx bd-0n9k       # FINDING-163 — bd-39qx stale paths
+br dep add bd-3p2x bd-0n9k       # FINDING-164 — bd-3p2x stale paths
+br dep add bd-z6yo bd-0n9k       # FINDING-165 — bd-z6yo stale paths
+br dep add bd-12d2 bd-0n9k       # FINDING-166 — bd-12d2 stale paths
+br dep add bd-sg59 bd-0n9k       # FINDING-169 — bd-sg59 stale paths
+
+# Step 3: bd-0n9k itself needs lab-grade body update (FINDING-030/031/033)
+# This is a manual edit, NOT a batch command — see Section 11 remediation log
+```
+
+**Total**: 1 priority update + 14 dependency edges added.
+
+### 19.3 Section 17 orphan remediation
+
+```bash
+# bd-gvil: relabel + title update (CRITICAL — wavelet matrix EPIC)
+br update bd-gvil --label phase-4b
+# (The title "(Phase 4c+)" needs manual edit to "Phase 4b primary backend"
+#  per bd-4vwk reframe — separate br update --description command)
+
+# bd-bpsj: add phase-4c label
+br update bd-bpsj --label phase-4c
+
+# bd-9g7p: add phase-4d label
+br update bd-9g7p --label phase-4d
+
+# bd-s3jq: add research label for consistency
+br update bd-s3jq --label research
+
+# Test artifact cleanup
+br close bd-xclc --reason "Test artifact, not real work"
+br close bd-pnn0 --reason "Test artifact, not real work"
+```
+
+**Total**: 4 label updates + 2 closures.
+
+### 19.4 Pattern E — REWRITE empty-body beads (manual, not batch)
+
+These 4 beads have empty bodies and need full lab-grade rewrites. **Cannot be batched** — each requires manual authoring per `lifecycle/14` template:
+
+| Bead | Source material for rewrite |
+|------|------------------------------|
+| **bd-bdvf.13** (FINDING-012) | FINDING-012 in Section 10 has the proposed full body content |
+| **bd-pdns** (FINDING-152) | DEFECT-010 title implies the defect; needs Bug Analysis from Stateright crash_recovery_model investigation |
+| **bd-a7i0** (FINDING-151) | DEFECT-011 title implies the defect; needs harness expansion design for non-trivial DatomFilter |
+| **bd-q188** (FINDING-150) | DEFECT-012 title implies the defect; needs harness expansion design for multi-backend |
+
+### 19.5 Pattern G — REWRITE gvil.1-9 sub-beads (Option Y per user choice)
+
+User chose Option Y in session 021. Each gvil.1-9 sub-bead gets a full lab-grade rewrite using the existing skeletal form as the seed:
+
+| Bead | Sub | Rewrite source |
+|------|-----|----------------|
+| bd-obo8 | gvil.1 | Wavelet matrix research + spec authoring (FINDING-078) |
+| bd-lkdh | gvil.2 | Value pool design (FINDING-079) |
+| bd-vhgn | gvil.3 | rank/select primitive (FINDING-080) |
+| bd-q630 | gvil.5 | Construction algorithm (FINDING-081) |
+| bd-8uck | gvil.4 | Symbol encoding (FINDING-082) |
+| bd-hfzx | gvil.6 | Query operations (FINDING-083) |
+| bd-chu0 | gvil.7 | Lean equivalence proof (FINDING-084) |
+| bd-g1nd | gvil.8 | Kani harnesses + proptest (FINDING-085) |
+| bd-o6io | gvil.9 | WaveletStore Rust impl (FINDING-086 + FINDING-087) |
+
+**Effort**: 9 beads × ~30-60 min = 5-9 hours. This is the largest Phase 3 work item.
+
+### 19.6 C8 partial-rename bug fix (manual)
+
+Two beads share the same `agent_bytes` after `node_bytes` partial-rename bug:
+
+| Bead | Finding | Fix location |
+|------|---------|--------------|
+| bd-mklv | FINDING-042 | Pseudocode Contract `genesis_with_identity` body — change `agent_bytes.copy_from_slice` to `node_bytes.copy_from_slice` |
+| bd-3t63 | FINDING-049 | Pseudocode Contract `transact_test` body — change `agent_seed` to `node_seed` |
+
+### 19.7 Estimated Phase 3 reconciliation effort
+
+| Work item | Time | Type |
+|-----------|------|------|
+| Pattern A batch (24 commands) | 5 min | Mechanical |
+| Pattern B remediation (15 commands) | 10 min | Mechanical |
+| Section 17 orphan remediation (6 commands + 1 manual edit) | 15 min | Mostly mechanical |
+| Pattern E REWRITE (4 beads) | 2-3 hours | Manual lab-grade authoring |
+| Pattern G REWRITE (9 beads, Option Y) | 5-9 hours | Manual lab-grade authoring |
+| C8 bug fix (2 beads) | 15 min | Manual edit |
+| Pattern F bead citation updates (~6 beads) | 30 min | Manual edit (after spec audit) |
+| Pattern H bead citation updates (8 beads) | 30 min | Manual edit (after spec audit) |
+| Per-bead minor finding fixes (~50 beads) | 4-6 hours | Manual edit |
+| **Total Phase 3 effort** | **13-19 hours** | **Spans 2-3 sessions** |
+
+This is significantly larger than the original 1-session estimate. Session 025 may need to split into 025a (mechanical batches) + 025b (REWRITE + manual edits).
+
+### 19.8 Verification after Phase 3
+
+```bash
+# After all Phase 3 commands run, verify graph integrity
+bv --robot-triage    # Compare to BEFORE metrics in §2
+bv --robot-insights  # Should show: 0 cycles, healthier metrics
+bv --robot-alerts    # Should show: significantly fewer alerts
+bv --robot-priority  # Should show: 0 priority inversions
+br ready             # Should show: clean ready queue with no stale-path beads
+
+# Then proceed to Phase 4 verification (session 026)
+```
+
+---
+
+## 20. Session 021 closeout summary
+
+This session completed:
+
+| Move | Output | Status |
+|------|--------|--------|
+| 1. Codify True North Roadmap | Section 16 added | ✅ |
+| 2. Bead topology + orphan taxonomy | Section 17 added; 7 hidden Phase 4b orphans + Pattern D expansion + bd-gvil critical relabel | ✅ |
+| 3. Pattern H deep investigation | Section 18.1 added; **DEFINITIVELY RESOLVED** — author missing content in session 023 | ✅ |
+| 4. Pattern F chronology research | Section 18.2 added; renumbering proposal locked in (spec/05 ADRs 031/032/033 → 034/035/036) | ✅ |
+| 5. Phase 3 batch pre-computation | Section 19 added; 24 + 15 + 6 mechanical commands ready for session 025 | ✅ |
+
+**Sessions 022-027+ now have a deterministic execution path**:
+- Session 022: Spec audit Section 6 + ADD 7 hidden orphans to audit + Pattern F federation renumber
+- Session 023: Spec audit Section 7 + AUTHOR INV-FERR-045a + §23.9.0 (Pattern H resolution)
+- Session 024: Spec audit Section 8 + Pattern F perf side resolution (ADR-FERR-020 cross-ref + new ADR-FERR-037 for bd-4vwk)
+- Session 025: Phase 3 reconciliation per Section 19 batch script
+- Session 026: Phase 4 graph integrity verification + final closure document
+- Session 027+: Phase 4a.5 + Phase 4b implementation begins in parallel (diamond topology)
