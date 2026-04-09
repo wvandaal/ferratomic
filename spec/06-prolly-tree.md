@@ -580,6 +580,808 @@ theorem chunk_store_dedup
 
 ---
 
+### INV-FERR-045c: Leaf Chunk Codec Conformance
+
+**Traces to**: INV-FERR-005 (Index Bijection), INV-FERR-025 (Index Backend
+Interchangeability), INV-FERR-045 (Chunk Content Addressing), INV-FERR-046
+(Prolly Tree History Independence), INV-FERR-074 (Homomorphic Store Fingerprint),
+INV-FERR-086 (Canonical Datom Format Determinism), ADR-FERR-032 (Lean-Verified
+Functor Composition for Representation Changes)
+**Referenced by**: INV-FERR-045a (DatomPair reference codec implementation),
+INV-FERR-047 (DiffIterator iterates leaf chunks via the codec interface),
+INV-FERR-048 (ChunkTransfer materializes leaf chunks via the codec interface),
+INV-FERR-049 (Snapshot resolution decodes leaf chunks via the codec interface),
+spec/09 gvil.1 (WaveletMatrixCodec implements this trait)
+**Verification**: `V:PROP`, `V:KANI`, `V:TYPE`, `V:LEAN`
+**Stage**: 1
+
+> INV-FERR-045 establishes that the chunk address is BLAKE3 of the chunk content;
+> INV-FERR-045a establishes a specific V1 byte format for that content.
+> INV-FERR-045c generalizes one step further: the on-disk leaf format is *one* of
+> an open-ended family of conforming codecs, all of which preserve the algebraic
+> properties on which the prolly tree depends. The trait `LeafChunkCodec` is the
+> dock; INV-FERR-045a (DatomPair) is the reference implementation; spec/09 gvil.1
+> (WaveletMatrixCodec) and bd-VERKLE (VerkleCodec) are future variants that plug
+> in via spec evolution. Without INV-FERR-045c, every future codec is a one-off
+> bolt-on. With it, every future codec is a one-line enum variant addition that
+> compounds with all previous work — the load-bearing accretive lever (GOALS.md
+> §7.2) for every alien artifact in `docs/ideas/014`. The five conformance
+> theorems are non-negotiable: any codec that fails any one of them breaks
+> history independence (INV-FERR-046), content addressing (INV-FERR-045), or
+> homomorphic fingerprinting (INV-FERR-074).
+
+#### Level 0 (Algebraic Law)
+```
+Let LeafChunkCodec be the abstract type of leaf chunk encoders, equipped with:
+
+  encode       : Set(Datom)            → Bytes
+  decode       : Bytes                 → Result<Set(Datom), FerraError>
+  CODEC_TAG    : Byte                  -- registered in §23.9.8
+  boundary_key : Bytes                 → Result<DatomKey, FerraError>   -- default
+
+The trait deliberately omits a fingerprint method: chunk fingerprints are
+computed by the framework at the datom level via INV-FERR-074 (XOR homomorphism)
+and INV-FERR-086 (canonical_bytes), independent of the codec.
+
+A codec C is CONFORMING iff it satisfies all five theorems below.
+
+Theorem T1 (Round-trip):
+  ∀ codec C : LeafChunkCodec, ∀ D : Set(Datom):
+    C.decode(C.encode(D)) = Ok(D)
+
+  Proof: encode is total on its domain (Set(Datom)) and decode is its structural
+  inverse on the codec's codomain (canonical byte sequences). This is a
+  precondition of trait conformance — codecs that fail round-trip do not
+  conform. The conformance test harness in Level 2 drives this property
+  exhaustively for every registered codec via the per-codec proptest expansion
+  of `codec_conformance_tests!`.
+
+Theorem T2 (Determinism):
+  ∀ codec C : LeafChunkCodec, ∀ D : Set(Datom):
+    let bytes₁ = C.encode(D)
+    let bytes₂ = C.encode(D)
+    bytes₁ = bytes₂                              -- intra-process determinism
+
+  AND
+
+  ∀ implementations I₁, I₂ conforming to C, ∀ D : Set(Datom):
+    encode_I₁(D) = encode_I₂(D)                  -- cross-implementation determinism
+
+  Proof: encode is required to be a pure function — no hidden mutable state,
+  no time-of-day intrinsics, no random number generation, no platform-dependent
+  SIMD reduction trees that produce architecture-specific results. Cross-
+  implementation determinism follows from each codec's spec entry specifying
+  the exact byte layout precisely (e.g., INV-FERR-045a §Level 2 specifies the
+  DatomPair V1 format down to the byte; spec/09 gvil.1 specifies the wavelet
+  matrix layout the same way). Two conforming implementations therefore emit
+  byte-identical output for byte-identical input by construction.
+
+Theorem T3 (Injectivity):
+  ∀ codec C : LeafChunkCodec, ∀ D₁ D₂ : Set(Datom):
+    D₁ ≠ D₂  →  C.encode(D₁) ≠ C.encode(D₂)
+
+  Proof: Injectivity is the contrapositive of: encode is a function on
+  Set(Datom) AND decode is a function on Bytes that recovers the original (T1).
+  Suppose for contradiction D₁ ≠ D₂ but C.encode(D₁) = C.encode(D₂). Then by
+  T1:
+    C.decode(C.encode(D₁)) = Ok(D₁)
+    C.decode(C.encode(D₂)) = Ok(D₂)
+  But the two encode results are equal, so decode receives the same input and
+  must produce the same output (decode is a function), so Ok(D₁) = Ok(D₂),
+  hence D₁ = D₂, contradicting D₁ ≠ D₂. Therefore encode is injective. ∎
+
+  Note: T3 is structurally a CONSEQUENCE of T1, but it is listed explicitly
+  in the conformance suite as defense in depth and as a faster-failing oracle
+  during fuzzing — an injectivity counterexample is often easier to find than
+  a round-trip counterexample for the same defect.
+
+Theorem T4 (Fingerprint Homomorphism Compatibility):
+  ∀ codec C : LeafChunkCodec, ∀ D : Set(Datom):
+    chunk_fingerprint(D) = ⊕_{d ∈ D} BLAKE3(canonical_bytes(d))   -- INV-FERR-086
+
+  AND
+
+  ∀ codecs C₁ C₂ : LeafChunkCodec, ∀ D : Set(Datom):
+    chunk_fingerprint_via(C₁, D) = chunk_fingerprint_via(C₂, D)   -- codec invariance
+
+  where chunk_fingerprint_via(C, D) = chunk_fingerprint(C.decode(C.encode(D))).
+
+  Consequence (the load-bearing one):
+    The store fingerprint H : DatomStore → G defined by INV-FERR-074 satisfies
+      H(merge(A, B)) = H(A) ⊕ H(B)        (for disjoint A, B)
+    for ANY mix of codecs across the chunks of A and B. Replacing one chunk's
+    codec with another does not change the store fingerprint, because the
+    fingerprint is computed at the datom level (INV-FERR-074) and depends only
+    on the LOGICAL DATOM SET, not on the codec's chosen byte representation.
+    This is what makes session 023.5's "mixed-codec stores" property
+    operationally well-defined.
+
+  Proof: The trait deliberately excludes a `fingerprint` method that could
+  depend on encoded bytes. Chunk fingerprints are computed by the framework
+  (not the codec) as the XOR-sum of per-datom canonical-byte hashes per
+  INV-FERR-086. By T1, the codec's encode/decode pair preserves the datom
+  set exactly, so the framework can recover D from the encoded bytes and
+  compute the canonical fingerprint independently of the codec. Mixed-codec
+  stores compose because XOR is commutative and associative on the chunk
+  multiset, regardless of which codec produced each chunk's on-disk bytes.
+  Codec choice is a pure storage-layer decision; it never crosses into the
+  fingerprint algebra.
+
+Theorem T5 (Order Independence):
+  ∀ codec C : LeafChunkCodec, ∀ list₁ list₂ : List(Datom):
+    set(list₁) = set(list₂)  →  C.encode(set(list₁)) = C.encode(set(list₂))
+
+  Equivalently: encode is a function on Set(Datom), not on List(Datom). Any
+  codec that depends on insertion order, internal hash bucket layout,
+  allocator state, or any other property not derivable from the set itself
+  is non-conforming.
+
+  Proof: encode's signature accepts Set(Datom). By the definition of a
+  function, equal inputs produce equal outputs. Set equality is structural
+  (two Set(Datom) values are equal iff they contain the same elements), not
+  derivational (it does not matter how the set was constructed). Therefore
+  C.encode(s) is uniquely determined by s as a set. Implementations using
+  `BTreeSet<Datom>` iterate in canonical (sorted) order, making the
+  order-independence operationally automatic; codecs using internal
+  structures with non-deterministic iteration must canonicalize before
+  encoding. The proptest strategy below verifies this by constructing the
+  same logical set via two different insertion orders and asserting encode
+  equality.
+```
+
+#### Level 1 (State Invariant)
+
+For all leaf chunks reachable from any prolly tree root, the on-disk byte
+representation is produced by SOME conforming codec C, and the chunk's logical
+datom payload is recoverable via `C::decode`. The codec used for a particular
+chunk is identified by its `CODEC_TAG` byte (the first byte on disk per
+§23.9.8); the framework dispatches to the appropriate codec via pattern match
+on the `LeafChunk` enum variant.
+
+The trait `LeafChunkCodec` is **closed-world**: adding a new codec requires
+spec evolution — a new INV-FERR-NNN authoring the codec's exact byte layout, a
+`CODEC_TAG` reservation in §23.9.8, and discharge of all five conformance
+theorems via the trait test harness. It is NOT a third-party plugin interface.
+Ferratomic does not aim to be a codec marketplace, and the algebraic guarantees
+depend on every codec being verified end-to-end before admission to the
+`LeafChunk` enum.
+
+**Why enum dispatch, not trait objects** (per ADR-FERR-032 and the precedent
+set by the Phase 4a `AdaptiveIndexes` enum from INV-FERR-025): pattern-match
+dispatch on the `LeafChunk` enum is monomorphized inside each variant,
+producing zero vtable overhead and eliminating the type-erasure barrier that
+would otherwise prevent Lean's static verification of per-codec properties.
+**Mixed-codec stores are supported by construction** — each leaf chunk in the
+prolly tree may use any registered codec independently, enabling gradual
+migration (e.g., compacting old `DatomPair` chunks into `Wavelet` chunks) and
+A/B benchmarking on the same data without forking the store. A trait object
+alternative (`Box<dyn LeafChunkCodec>`) was rejected because (a) the vtable
+indirection costs ~1-2 ns per call in the hot path, (b) `dyn` is incompatible
+with `const CODEC_TAG`, (c) conformance testing cannot enumerate an open world
+of codec implementations, and (d) ferratomic is not a plugin platform — codec
+choice is a spec-level decision, not a runtime configuration. Static generic
+dispatch (`Store<C: LeafChunkCodec>`) was also rejected: it would lock each
+store to one codec at compile time, preventing mixed-codec stores entirely.
+
+**Codec discriminator registry**: see §23.9.8 (Codec Discriminator Registry).
+Spec-registered codecs occupy `CODEC_TAG` values `0x01..=0x7F`; experimental
+codecs use `0x80..=0xFF`. The DatomPair reference codec (INV-FERR-045a) uses
+`CODEC_TAG = 0x01`. Future allocations: wavelet matrix `0x02`, Verkle/KZG
+`0x03`, BP+RMM internal chunks `0x04` (per future INV-FERR-045d).
+
+**Failure mode without this invariant**: if the leaf chunk format were
+hard-coded to a single representation, every future optimization that touches
+leaf encoding (wavelet matrix density, prolly tree compaction, columnar
+reorganization, learned indexes per column, post-quantum signature inclusion)
+would require a one-off API surface, would break INV-FERR-046 (history
+independence) for that codec, and would force a global re-shard of the store
+to migrate. With the trait in place, each new codec is a one-line enum variant
+addition plus a per-codec invariant authoring, and the conformance test
+harness mechanically validates the algebraic properties before admission. This
+is the structural reason `docs/ideas/014`'s 30 alien artifacts can be added
+incrementally rather than requiring a from-scratch rewrite per technique.
+
+#### Level 2 (Implementation Contract)
+```rust
+use std::collections::BTreeSet;
+use ferratom::{Datom, DatomKey, FerraError, Hash};
+
+// ==========================================================================
+// LeafChunkCodec: the trait that every leaf encoding must satisfy
+// ==========================================================================
+
+/// A codec for leaf chunk payloads. Conforming codecs satisfy the five
+/// conformance theorems of INV-FERR-045c (round-trip, determinism,
+/// injectivity, fingerprint homomorphism compatibility, order independence).
+///
+/// The trait surface is intentionally narrow: `encode`, `decode`, and an
+/// optional `boundary_key` fast path. The chunk fingerprint is computed at
+/// the framework level via INV-FERR-074 + INV-FERR-086 (XOR of per-datom
+/// canonical-byte hashes); the codec deliberately does NOT have a
+/// `fingerprint` method that could depend on its encoded bytes. This is the
+/// structural reason mixed-codec stores compose without breaking the
+/// homomorphism (T4).
+pub trait LeafChunkCodec {
+    /// Codec discriminator byte (registered in §23.9.8 — Codec Discriminator
+    /// Registry). Spec-registered codecs use `0x01..=0x7F`; experimental
+    /// codecs use `0x80..=0xFF`. The discriminator is the FIRST byte on
+    /// disk; all remaining bytes are the codec's payload.
+    const CODEC_TAG: u8;
+
+    /// Encode a finite set of datoms into the codec's canonical byte payload.
+    /// The output does NOT include the `CODEC_TAG` byte (the framework
+    /// prepends it via `LeafChunk::encode`).
+    ///
+    /// Must satisfy:
+    /// - **T2 (determinism)**: same input → same bytes, intra- and
+    ///   cross-implementation
+    /// - **T3 (injectivity)**: distinct sets → distinct bytes
+    /// - **T5 (order independence)**: output depends only on the set, not on
+    ///   how it was constructed
+    fn encode(datoms: &BTreeSet<Datom>) -> Vec<u8>;
+
+    /// Decode a payload byte sequence (without the `CODEC_TAG` prefix) back
+    /// into the datom set.
+    ///
+    /// Must satisfy:
+    /// - **T1 (round-trip)**: `decode(encode(D)) == Ok(D)` for every
+    ///   `D ∈ Set(Datom)`
+    ///
+    /// Returns `FerraError` on malformed input, on bytes that do not parse
+    /// against the codec's grammar, or on bytes that decode to a non-canonical
+    /// internal representation. **Defense in depth**: the codec must reject
+    /// ALL non-canonical inputs at the deserialization boundary, not only at
+    /// the type-level construction barrier.
+    fn decode(bytes: &[u8]) -> Result<BTreeSet<Datom>, FerraError>;
+
+    /// Return the smallest datom-key in this chunk (used by internal nodes to
+    /// compute separator keys for routing). Default implementation: decode
+    /// then take min. Codecs MAY override for efficiency, but the override
+    /// must agree byte-for-byte with the default on every input.
+    ///
+    /// Returns `FerraError::EmptyChunk` for empty payloads (empty leaves are
+    /// syntactically valid but never appear in well-formed prolly trees).
+    fn boundary_key(bytes: &[u8]) -> Result<DatomKey, FerraError> {
+        let datoms = Self::decode(bytes)?;
+        datoms
+            .iter()
+            .next()
+            .map(|d| d.canonical_key())
+            .ok_or(FerraError::EmptyChunk)
+    }
+}
+
+// ==========================================================================
+// LeafChunk: closed-world enum dispatch over registered codecs
+// ==========================================================================
+
+/// The closed-world enumeration of leaf chunk encodings. Adding a variant
+/// requires:
+///
+///   1. Authoring a new `INV-FERR-NNN` that defines the codec's exact byte
+///      layout, all six verification layers populated.
+///   2. Reserving a `CODEC_TAG` value in §23.9.8.
+///   3. Discharging all five conformance theorems of INV-FERR-045c via the
+///      `codec_conformance_tests!` macro.
+///
+/// Mixed-codec stores are explicitly supported: each leaf chunk in a prolly
+/// tree may use any registered codec independently. Dispatch is via pattern
+/// match on the variant — zero vtable overhead, full monomorphization inside
+/// each match arm.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LeafChunk {
+    /// Reference codec: tagged length-value encoding (the V1 format authored
+    /// in INV-FERR-045a, refactored in session 023.5 Phase 2 as the
+    /// `DatomPairCodec` implementation of `LeafChunkCodec`).
+    /// `CODEC_TAG = 0x01`.
+    DatomPair(DatomPairChunk),
+    // Future variants reserved by spec evolution. Each variant traces to its
+    // authoring invariant and `CODEC_TAG` reservation in §23.9.8:
+    //   Wavelet(WaveletMatrixChunk),  -- spec/09 gvil.1, CODEC_TAG = 0x02
+    //   Verkle(VerkleChunk),          -- bd-VERKLE,      CODEC_TAG = 0x03
+    //   ... etc.
+}
+
+impl LeafChunk {
+    /// Encode this chunk to its on-disk byte representation, including the
+    /// leading `CODEC_TAG` discriminator. The result is the input to BLAKE3
+    /// for the chunk's content address (INV-FERR-045).
+    pub fn encode(&self) -> Vec<u8> {
+        match self {
+            LeafChunk::DatomPair(chunk) => {
+                let payload = DatomPairCodec::encode(chunk.datoms());
+                let mut bytes = Vec::with_capacity(1 + payload.len());
+                bytes.push(DatomPairCodec::CODEC_TAG);
+                bytes.extend(payload);
+                bytes
+            }
+        }
+    }
+
+    /// Decode an on-disk byte sequence by dispatching on the leading
+    /// `CODEC_TAG`. Returns `FerraError::UnknownCodec` if the tag does not
+    /// match any registered codec, or the codec's specific error on payload
+    /// failure.
+    pub fn decode(bytes: &[u8]) -> Result<Self, FerraError> {
+        let (tag, payload) = bytes
+            .split_first()
+            .ok_or(FerraError::TruncatedChunk { needed: 1, got: 0 })?;
+        match *tag {
+            t if t == DatomPairCodec::CODEC_TAG => {
+                let datoms = DatomPairCodec::decode(payload)?;
+                Ok(LeafChunk::DatomPair(DatomPairChunk::new(datoms)?))
+            }
+            tag => Err(FerraError::UnknownCodec { tag }),
+        }
+    }
+
+    /// Compute the chunk fingerprint per INV-FERR-074 + INV-FERR-086.
+    ///
+    /// The fingerprint depends ONLY on the logical datom set, NOT on the
+    /// codec's encoded bytes. This is what makes mixed-codec stores
+    /// composable under the XOR homomorphism (T4). The framework computes
+    /// `⊕_{d ∈ datoms} BLAKE3(canonical_bytes(d))`, NEVER `BLAKE3(encoded
+    /// bytes)`.
+    pub fn fingerprint(&self) -> Hash {
+        let datoms = match self {
+            LeafChunk::DatomPair(chunk) => chunk.datoms(),
+        };
+        codec_conformance::framework_fingerprint(datoms)
+    }
+}
+
+// ==========================================================================
+// Conformance test harness — drives all five theorems for any codec
+// ==========================================================================
+
+/// Trait conformance test harness. Each `assert_*` function corresponds to
+/// one of the five conformance theorems of INV-FERR-045c. The functions are
+/// generic over the codec type so they can be invoked from per-codec test
+/// modules via the `codec_conformance_tests!` macro.
+pub mod codec_conformance {
+    use super::*;
+
+    /// **T1**: Round-trip. `decode(encode(D)) == Ok(D)` for every `D`.
+    pub fn assert_round_trip<C: LeafChunkCodec>(d: &BTreeSet<Datom>) {
+        let bytes = C::encode(d);
+        let decoded = C::decode(&bytes)
+            .expect("INV-FERR-045c T1: conforming codecs must decode their own output");
+        assert_eq!(&decoded, d, "INV-FERR-045c T1: round-trip preserves the datom set");
+    }
+
+    /// **T2**: Determinism. `encode(D)` is a pure function.
+    pub fn assert_deterministic<C: LeafChunkCodec>(d: &BTreeSet<Datom>) {
+        let b1 = C::encode(d);
+        let b2 = C::encode(d);
+        assert_eq!(b1, b2, "INV-FERR-045c T2: encode must be deterministic");
+    }
+
+    /// **T3**: Injectivity. Different sets → different bytes.
+    pub fn assert_injective<C: LeafChunkCodec>(
+        d1: &BTreeSet<Datom>,
+        d2: &BTreeSet<Datom>,
+    ) {
+        if d1 != d2 {
+            assert_ne!(
+                C::encode(d1),
+                C::encode(d2),
+                "INV-FERR-045c T3: distinct datom sets must encode to distinct bytes"
+            );
+        }
+    }
+
+    /// **T4**: Fingerprint homomorphism compatibility. The chunk fingerprint
+    /// computed via the framework (per INV-FERR-074 + INV-FERR-086) does not
+    /// depend on the codec's encoded bytes — only on the logical datom set
+    /// recovered by `decode(encode(d))`.
+    pub fn assert_fingerprint_codec_invariant<C: LeafChunkCodec>(d: &BTreeSet<Datom>) {
+        let bytes = C::encode(d);
+        let recovered = C::decode(&bytes)
+            .expect("INV-FERR-045c T4: round-trip is a precondition of fingerprint compat");
+        let fp_direct = framework_fingerprint(d);
+        let fp_via_codec = framework_fingerprint(&recovered);
+        assert_eq!(
+            fp_direct, fp_via_codec,
+            "INV-FERR-045c T4: fingerprint must depend only on the logical datom set"
+        );
+    }
+
+    /// **T5**: Order independence. `encode` is a function on `Set(Datom)`,
+    /// not on `List(Datom)`. Building the same logical set via different
+    /// insertion orders must produce equal bytes.
+    pub fn assert_order_independent<C: LeafChunkCodec>(d: &BTreeSet<Datom>) {
+        // Build an equivalent set via reversed iteration order, then re-collect
+        // into BTreeSet (which canonicalizes to sorted order). The two
+        // BTreeSets are structurally equal; encode must agree.
+        let v: Vec<Datom> = d.iter().cloned().collect();
+        let shuffled: BTreeSet<Datom> = v.into_iter().rev().collect();
+        assert_eq!(d, &shuffled, "BTreeSet collect must canonicalize order");
+        assert_eq!(
+            C::encode(d),
+            C::encode(&shuffled),
+            "INV-FERR-045c T5: encode must depend only on the set, not on construction order"
+        );
+    }
+
+    /// Per-chunk canonical fingerprint, computed at the framework level via
+    /// INV-FERR-074 (XOR homomorphism) and INV-FERR-086 (`canonical_bytes`).
+    /// Codecs do NOT call this — it is the framework's authoritative
+    /// definition of chunk fingerprint, deliberately kept outside the
+    /// `LeafChunkCodec` trait surface so codecs cannot override it.
+    pub fn framework_fingerprint(datoms: &BTreeSet<Datom>) -> Hash {
+        let mut acc = [0u8; 32];
+        for d in datoms.iter() {
+            let h = blake3::hash(&d.canonical_bytes());
+            for (a, b) in acc.iter_mut().zip(h.as_bytes().iter()) {
+                *a ^= b;
+            }
+        }
+        Hash::from_bytes(acc)
+    }
+}
+
+/// Generates conformance test modules for a given codec type. Each codec
+/// crate invokes this macro once with the codec's identifier; the macro
+/// expands to a `proptest!` block that drives all five conformance theorems.
+///
+/// Per **D3** (decisions, session 023.5): codecs MAY add codec-specific
+/// tests on top of the trait-level conformance suite, but the trait-level
+/// suite is the MINIMUM required surface for admission to the `LeafChunk`
+/// enum. This mirrors the INV-FERR-025 `IndexBackend` test pattern.
+#[macro_export]
+macro_rules! codec_conformance_tests {
+    ($mod_name:ident, $codec:ty) => {
+        #[cfg(test)]
+        mod $mod_name {
+            use super::*;
+            use $crate::codec_conformance::*;
+            use ferratomic_verify::generators::arb_datom_set;
+            use proptest::prelude::*;
+
+            proptest! {
+                #[test]
+                fn t1_round_trip(d in arb_datom_set(0..256)) {
+                    assert_round_trip::<$codec>(&d);
+                }
+
+                #[test]
+                fn t2_deterministic(d in arb_datom_set(0..256)) {
+                    assert_deterministic::<$codec>(&d);
+                }
+
+                #[test]
+                fn t3_injective(
+                    d1 in arb_datom_set(1..128),
+                    d2 in arb_datom_set(1..128),
+                ) {
+                    assert_injective::<$codec>(&d1, &d2);
+                }
+
+                #[test]
+                fn t4_fingerprint_codec_invariant(d in arb_datom_set(0..256)) {
+                    assert_fingerprint_codec_invariant::<$codec>(&d);
+                }
+
+                #[test]
+                fn t5_order_independent(d in arb_datom_set(0..256)) {
+                    assert_order_independent::<$codec>(&d);
+                }
+            }
+        }
+    };
+}
+
+// ==========================================================================
+// Kani harness — bounded conformance for the reference codec
+// ==========================================================================
+
+/// Bounded conformance check: drive T1, T2, T3 against the DatomPair
+/// reference codec on a 2-datom input. Per-codec Kani harnesses live in
+/// each codec's spec entry; this top-level harness exists to assert that
+/// AT LEAST ONE registered codec satisfies the trait under bounded model
+/// checking.
+#[kani::proof]
+#[kani::unwind(4)]
+fn datom_pair_codec_conformance_bounded() {
+    let d1: Datom = kani::any();
+    let d2: Datom = kani::any();
+    kani::assume(d1 != d2);
+
+    let mut set = BTreeSet::new();
+    set.insert(d1.clone());
+    set.insert(d2.clone());
+
+    // T1: round-trip
+    let bytes = DatomPairCodec::encode(&set);
+    let decoded = DatomPairCodec::decode(&bytes)
+        .expect("INV-FERR-045c T1: round-trip");
+    assert_eq!(decoded, set);
+
+    // T2: determinism (intra-process)
+    let bytes2 = DatomPairCodec::encode(&set);
+    assert_eq!(bytes, bytes2);
+
+    // T3: injectivity (with a one-element set as the contrast witness)
+    let mut singleton = BTreeSet::new();
+    singleton.insert(d1.clone());
+    assert_ne!(
+        DatomPairCodec::encode(&set),
+        DatomPairCodec::encode(&singleton)
+    );
+}
+```
+
+**Falsification**: Any one of the following witnesses falsifies INV-FERR-045c.
+A conforming codec must rule out all five.
+
+1. **T1 (round-trip) witness**: A codec `C` and datom set `D ∈ Set(Datom)`
+   such that `C::decode(C::encode(D))` returns `Err(_)` or `Ok(D')` with
+   `D' != D`. This indicates either (a) `encode` loses information (e.g.,
+   truncating large values, dropping the `Op` field), or (b) `decode` is
+   the wrong inverse (e.g., a length field is mis-parsed). Either makes the
+   codec unusable for the prolly tree because INV-FERR-045 (content
+   addressing) and INV-FERR-046 (history independence) both depend on
+   recovering the exact logical content from the on-disk bytes.
+
+2. **T2 (determinism) witness**: A codec `C` and datom set `D` such that two
+   sequential invocations of `C::encode(&D)` produce different byte
+   sequences. Sources include: hidden mutable state (a global counter, a
+   per-instance sequence number), time-of-day intrinsics, ASLR-dependent
+   ordering of an internal `HashMap`, non-deterministic SIMD reduction
+   trees that produce architecture-dependent results, or thread-local
+   random number generators used as a "compression seed." A second
+   falsification class: two implementations conforming to the same spec
+   entry that produce different bytes for the same input. This breaks
+   cross-implementation chunk addresses and turns federated stores into
+   per-implementation isolates.
+
+3. **T3 (injectivity) witness**: A codec `C` and distinct datom sets
+   `D₁ != D₂` such that `C::encode(&D₁) == C::encode(&D₂)`. Sources
+   include: lossy compressors that map multiple inputs to the same
+   compressed form, or internal hash-based representations whose collision
+   rate exceeds zero on real datom inputs. Note that injectivity is a
+   CONSEQUENCE of round-trip (T1) plus the pigeonhole principle on
+   functions, so any T3 falsification is also a T1 falsification — the
+   test is included separately as defense in depth and as a faster-failing
+   oracle during fuzzing.
+
+4. **T4 (fingerprint homomorphism compatibility) witness**: A codec `C`
+   and datom set `D` such that, after slotting `C` into `LeafChunk`, the
+   framework fingerprint computed via `LeafChunk::fingerprint()` (which
+   goes through INV-FERR-074 + INV-FERR-086) does NOT equal the canonical
+   fingerprint computed directly from `D`. Since the trait deliberately
+   omits a `fingerprint` method, this witness type is structurally
+   impossible — but the test harness asserts it explicitly to catch
+   type-system violations (e.g., a refactor that introduces a codec-level
+   fingerprint override). The deeper falsification class: a multi-codec
+   store where replacing one chunk's codec changes the store fingerprint.
+   This would indicate either T1 (round-trip) is broken or that the
+   framework is calling a per-codec fingerprint instead of the canonical
+   one.
+
+5. **T5 (order independence) witness**: A codec `C` and two
+   `BTreeSet<Datom>` instances `s1` and `s2` such that `s1 == s2`
+   (structurally equal as sets) but `C::encode(&s1) != C::encode(&s2)`.
+   Since `BTreeSet` iteration is canonical (sorted), this can only happen
+   if the codec internally reconstructs the input via a non-deterministic
+   structure (e.g., a `HashSet` with random hash seed, an
+   allocator-dependent linked list). The witness is constructed by
+   building two `BTreeSet`s from the same source `Vec<Datom>` via different
+   insertion sequences (forward and reverse), then asserting `encode`
+   produces equal bytes.
+
+**proptest strategy**:
+```rust
+// All five properties are exercised by the conformance test harness macro
+// defined in Level 2. Per-codec tests are generated via:
+//
+//     codec_conformance_tests!(datom_pair, DatomPairCodec);
+//
+// which expands to a `proptest!` block with one #[test] per conformance
+// theorem. The standalone strategies below illustrate each property in
+// isolation against the DatomPair reference codec; the macro is the
+// production test mechanism for ALL registered codecs.
+
+proptest! {
+    /// T1: Round-trip — driven against the DatomPair reference codec.
+    #[test]
+    fn datom_pair_round_trip(
+        datoms in arb_datom_set(0..256),
+    ) {
+        let bytes = DatomPairCodec::encode(&datoms);
+        let decoded = DatomPairCodec::decode(&bytes)
+            .expect("INV-FERR-045c T1: decode must succeed on valid input");
+        prop_assert_eq!(decoded, datoms);
+    }
+
+    /// T2: Determinism — same input → same output bytes.
+    #[test]
+    fn datom_pair_deterministic(
+        datoms in arb_datom_set(0..256),
+    ) {
+        let b1 = DatomPairCodec::encode(&datoms);
+        let b2 = DatomPairCodec::encode(&datoms);
+        prop_assert_eq!(b1, b2,
+            "INV-FERR-045c T2: encode must be a pure function");
+    }
+
+    /// T3: Injectivity — distinct sets must encode to distinct bytes.
+    #[test]
+    fn datom_pair_injective(
+        d1 in arb_datom_set(1..128),
+        d2 in arb_datom_set(1..128),
+    ) {
+        prop_assume!(d1 != d2);
+        prop_assert_ne!(
+            DatomPairCodec::encode(&d1),
+            DatomPairCodec::encode(&d2),
+            "INV-FERR-045c T3: distinct sets must encode differently"
+        );
+    }
+
+    /// T4: Fingerprint homomorphism compatibility — the chunk fingerprint
+    /// computed by the framework depends only on the logical datom set,
+    /// not on the codec's encoded bytes.
+    #[test]
+    fn datom_pair_fingerprint_codec_invariant(
+        datoms in arb_datom_set(0..256),
+    ) {
+        let bytes = DatomPairCodec::encode(&datoms);
+        let recovered = DatomPairCodec::decode(&bytes).unwrap();
+        let fp_direct = codec_conformance::framework_fingerprint(&datoms);
+        let fp_recovered = codec_conformance::framework_fingerprint(&recovered);
+        prop_assert_eq!(fp_direct, fp_recovered,
+            "INV-FERR-045c T4: fingerprint must depend only on the logical datom set");
+    }
+
+    /// T5: Order independence — equal sets via different insertion orders
+    /// must encode equally.
+    #[test]
+    fn datom_pair_order_independent(
+        raw in prop::collection::vec(arb_datom(), 0..200),
+    ) {
+        let s1: BTreeSet<Datom> = raw.iter().cloned().collect();
+        let s2: BTreeSet<Datom> = raw.into_iter().rev().collect();
+        prop_assert_eq!(&s1, &s2, "BTreeSet collect must canonicalize");
+        prop_assert_eq!(
+            DatomPairCodec::encode(&s1),
+            DatomPairCodec::encode(&s2),
+            "INV-FERR-045c T5: encode must not depend on construction order"
+        );
+    }
+}
+```
+
+**Lean theorem**:
+```lean
+/-- INV-FERR-045c: Leaf chunk codec conformance theorems.
+
+    Modeled at the trait level: a codec is a structure (encode, decode,
+    boundary_key, codec_tag) where encode : Finset Datom → List UInt8 and
+    decode : List UInt8 → Option (Finset Datom). The five conformance
+    theorems formalize what it means for a codec to be well-behaved; any
+    concrete codec slotted into LeafChunk must discharge them in its own
+    Lean file (see INV-FERR-045a's Lean section for the DatomPair reference
+    discharge). The byte-level concretization for specific codecs is
+    deferred per the same pattern as INV-FERR-086 and INV-FERR-045a;
+    tracked via the existing bd-aqg9h (045a Lean concretization) and the
+    new follow-up bead filed during session 023.5 Phase 7. -/
+
+structure LeafChunkCodec where
+  encode      : Finset Datom → List UInt8
+  decode      : List UInt8 → Option (Finset Datom)
+  codecTag    : UInt8
+  boundaryKey : List UInt8 → Option DatomKey
+
+/-- T1: Round-trip — decode is the structural inverse of encode on every
+    finite datom set in the codec's domain. This is a precondition of
+    trait conformance; codecs that fail it do not conform. -/
+def isRoundTrip (C : LeafChunkCodec) : Prop :=
+  ∀ d : Finset Datom, C.decode (C.encode d) = some d
+
+/-- T2: Determinism — encode is a pure function. In Lean's pure-functional
+    model this is automatic (Lean has no notion of state or impure effects),
+    so the theorem is `rfl`. The cross-implementation determinism clause is
+    discharged at the per-codec spec entry level: each codec's spec defines
+    the exact byte layout, and any conforming implementation produces those
+    exact bytes by construction. -/
+theorem encode_deterministic (C : LeafChunkCodec) (d : Finset Datom) :
+    C.encode d = C.encode d := rfl
+
+/-- T3: Injectivity — different inputs produce different outputs. -/
+def isInjective (C : LeafChunkCodec) : Prop :=
+  ∀ d₁ d₂ : Finset Datom, d₁ ≠ d₂ → C.encode d₁ ≠ C.encode d₂
+
+/-- The structural theorem: round-trip implies injectivity. This is the
+    proof referenced in the Level 0 algebraic law for T3. -/
+theorem roundtrip_implies_injective (C : LeafChunkCodec)
+    (h : isRoundTrip C) : isInjective C := by
+  intro d₁ d₂ h_neq h_eq
+  have r₁ : C.decode (C.encode d₁) = some d₁ := h d₁
+  have r₂ : C.decode (C.encode d₂) = some d₂ := h d₂
+  rw [h_eq] at r₁
+  -- r₁ : C.decode (C.encode d₂) = some d₁
+  -- r₂ : C.decode (C.encode d₂) = some d₂
+  -- Functional equality of decode forces the somethings to agree.
+  have h_some : some d₁ = some d₂ := by rw [← r₁, r₂]
+  exact h_neq (Option.some.inj h_some)
+
+/-- T4 part 1: framework fingerprint, computed at the datom level via
+    INV-FERR-086's canonical_bytes XORed per INV-FERR-074. The actual
+    byte-level XOR is axiomatized here; the per-bit reasoning lives in
+    INV-FERR-074's Lean section. -/
+axiom canonicalDatomBytes : Datom → List UInt8
+axiom blake3Bytes         : List UInt8 → ByteVec 32
+axiom xorByteVecs         : ByteVec 32 → ByteVec 32 → ByteVec 32
+
+def frameworkFingerprint (d : Finset Datom) : ByteVec 32 :=
+  d.fold
+    (fun acc dt => xorByteVecs acc (blake3Bytes (canonicalDatomBytes dt)))
+    (ByteVec.zero 32)
+
+/-- T4 part 2: For a round-trip codec, the framework fingerprint computed
+    directly from D and the framework fingerprint computed from
+    `decode(encode(D))` are equal. This is what makes mixed-codec stores
+    compose under INV-FERR-074's XOR homomorphism. -/
+theorem fingerprint_codec_invariant
+    (C : LeafChunkCodec) (h : isRoundTrip C) (d : Finset Datom) :
+    ∃ d', C.decode (C.encode d) = some d' ∧
+          frameworkFingerprint d = frameworkFingerprint d' := by
+  refine ⟨d, h d, ?_⟩
+  rfl
+
+/-- T5: Order independence — encode is a function on Finset, not on List.
+    By Lean's type system, Finset has no notion of order, so encode applied
+    to two equal Finsets returns equal results by definitional equality.
+    Stated explicitly so the property is documented at the trait level. -/
+theorem encode_order_independent (C : LeafChunkCodec)
+    (l₁ l₂ : List Datom) (h : l₁.toFinset = l₂.toFinset) :
+    C.encode l₁.toFinset = C.encode l₂.toFinset := by
+  rw [h]
+
+/-- Conformance bundle: a codec is conforming iff it satisfies T1 (the only
+    propositional obligation requiring per-codec proof). T2 is `rfl`, T3
+    follows from T1 via `roundtrip_implies_injective`, T4 follows from T1
+    via `fingerprint_codec_invariant`, and T5 follows from Lean's
+    Finset-equality being structural rather than derivational. -/
+def isConforming (C : LeafChunkCodec) : Prop :=
+  isRoundTrip C
+
+/-- Conformance implies all five theorem statements. The structure of the
+    proof makes the dependence visible: T1 is the only independent
+    obligation; everything else is derived. This is why the trait is
+    structurally minimal — the codec's only Lean discharge obligation is
+    `isRoundTrip`. -/
+theorem conforming_implies_all_five
+    (C : LeafChunkCodec) (h : isConforming C) :
+    isRoundTrip C ∧
+    (∀ d, C.encode d = C.encode d) ∧                              -- T2
+    isInjective C ∧                                               -- T3
+    (∀ d, ∃ d', C.decode (C.encode d) = some d' ∧                 -- T4
+                frameworkFingerprint d = frameworkFingerprint d') ∧
+    (∀ l₁ l₂ : List Datom, l₁.toFinset = l₂.toFinset →            -- T5
+              C.encode l₁.toFinset = C.encode l₂.toFinset) := by
+  refine ⟨h, ?_, ?_, ?_, ?_⟩
+  · intro d; rfl
+  · exact roundtrip_implies_injective C h
+  · intro d; exact fingerprint_codec_invariant C h d
+  · intro l₁ l₂ h_eq; rw [h_eq]
+
+-- Per-codec discharges: each registered codec proves `isConforming` for
+-- its own LeafChunkCodec instance in its dedicated Lean file. INV-FERR-045a
+-- (DatomPair) is the reference discharge — see its Lean section for the
+-- structural proof against the V1 byte format.
+--
+-- The byte-level concretization (proving `isRoundTrip` on the actual V1
+-- bytes, not just abstract `Finset Datom → List UInt8`) is tracked for
+-- each codec under the same Lean concretization beads as INV-FERR-086 and
+-- INV-FERR-045a: bd-aqg9h (045a Lean concretization, already filed). A new
+-- follow-up bead for the trait-level Lean concretization at the byte
+-- boundary will be filed during session 023.5 Phase 7.
+```
+
+---
+
 ### INV-FERR-045a: Deterministic Chunk Serialization
 
 **Traces to**: INV-FERR-045 (Chunk Content Addressing), INV-FERR-086 (Canonical Datom
