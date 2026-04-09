@@ -77,7 +77,7 @@ ms load spec-first-design -m --full
 cat spec/<target-section>.md
 
 # Cross-reference: what implementation exists for these invariants
-grep -r "INV-FERR" --include="*.rs" ferratomic-core/src/ ferratom/src/
+grep -r "INV-FERR" --include="*.rs" ferratomic-*/src/ ferratom/src/ ferratom-clock/src/
 ```
 
 **Checkpoint**: Before auditing, you must know:

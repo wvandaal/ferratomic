@@ -7,14 +7,14 @@
 
 use std::io::Write;
 
-use ferratom::{AgentId, Attribute, EntityId, Value};
+use ferratom::{Attribute, EntityId, NodeId, Value};
 use ferratomic_db::{db::Database, wal::Wal, writer::Transaction};
 use tempfile::TempDir;
 
 /// Write a single test datom into a new WAL at the given path.
-fn write_single_wal_entry(wal_path: &std::path::Path, agent: AgentId) {
+fn write_single_wal_entry(wal_path: &std::path::Path, node: NodeId) {
     let mut wal = Wal::create(wal_path).expect("create WAL");
-    let tx = Transaction::new(agent)
+    let tx = Transaction::new(node)
         .assert_datom(
             EntityId::from_content(b"e1"),
             Attribute::from("user/name"),
@@ -49,9 +49,9 @@ fn recover_and_deserialize_datoms(wal_path: &std::path::Path) -> Vec<ferratom::D
 fn inv_ferr_008_wal_write_and_recover() {
     let dir = TempDir::new().expect("failed to create temp dir");
     let wal_path = dir.path().join("test.wal");
-    let agent = AgentId::from_bytes([1u8; 16]);
+    let node = NodeId::from_bytes([1u8; 16]);
 
-    write_single_wal_entry(&wal_path, agent);
+    write_single_wal_entry(&wal_path, node);
 
     let datoms = recover_and_deserialize_datoms(&wal_path);
     assert_eq!(
@@ -86,9 +86,9 @@ fn inv_ferr_008_wal_write_and_recover() {
 fn test_bug_bd_32t_payload_content_roundtrip() {
     let dir = TempDir::new().expect("failed to create temp dir");
     let wal_path = dir.path().join("test.wal");
-    let agent = AgentId::from_bytes([1u8; 16]);
+    let node = NodeId::from_bytes([1u8; 16]);
 
-    write_single_wal_entry(&wal_path, agent);
+    write_single_wal_entry(&wal_path, node);
     let datoms = recover_and_deserialize_datoms(&wal_path);
 
     assert!(!datoms.is_empty(), "bd-32t: payload must contain datoms");
@@ -105,13 +105,13 @@ fn inv_ferr_008_crash_mid_write_recovery() {
     let dir = TempDir::new().expect("failed to create temp dir");
     let wal_path = dir.path().join("test.wal");
 
-    let agent = AgentId::from_bytes([1u8; 16]);
+    let node = NodeId::from_bytes([1u8; 16]);
 
     // Write 3 complete entries
     {
         let mut wal = Wal::create(&wal_path).expect("create WAL");
         for i in 1u64..=3 {
-            let tx = Transaction::new(agent)
+            let tx = Transaction::new(node)
                 .assert_datom(
                     EntityId::from_content(format!("e{}", i).as_bytes()),
                     Attribute::from("test/data"),
@@ -149,9 +149,9 @@ fn inv_ferr_008_crash_mid_write_recovery() {
 
 /// Transact N unchecked user-name datoms into a database, using the given
 /// entity prefix and index range.
-fn transact_user_datoms(db: &Database, agent: AgentId, range: std::ops::Range<i64>) {
+fn transact_user_datoms(db: &Database, node: NodeId, range: std::ops::Range<i64>) {
     for i in range {
-        let tx = Transaction::new(agent)
+        let tx = Transaction::new(node)
             .assert_datom(
                 EntityId::from_content(format!("user-{i}").as_bytes()),
                 Attribute::from("user/name"),
@@ -201,12 +201,12 @@ fn assert_entities_present(
 fn test_inv_ferr_014_crash_then_transact() {
     let dir = TempDir::new().expect("failed to create temp dir");
     let wal_path = dir.path().join("crash_roundtrip.wal");
-    let agent = AgentId::from_bytes([42u8; 16]);
+    let node = NodeId::from_bytes([42u8; 16]);
 
     // Phase 1: genesis + transact 3 user datoms, then crash (drop)
     let (pre_crash_datoms, pre_crash_epoch, pre_crash_schema) = {
         let db = Database::genesis_with_wal(&wal_path).expect("genesis_with_wal must succeed");
-        transact_user_datoms(&db, agent, 0..3);
+        transact_user_datoms(&db, node, 0..3);
         capture_db_state(&db)
         // db drops here -- simulates crash
     };
@@ -233,7 +233,7 @@ fn test_inv_ferr_014_crash_then_transact() {
     );
 
     // Phase 3: transact 2 more datoms on recovered database
-    transact_user_datoms(&recovered_db, agent, 3..5);
+    transact_user_datoms(&recovered_db, node, 3..5);
 
     // Phase 4: verify epoch advances and all datoms present
     let (final_datoms, final_epoch, _) = capture_db_state(&recovered_db);
@@ -253,13 +253,13 @@ fn test_inv_ferr_014_crash_then_transact() {
 /// and attribute.
 fn transact_validated_datoms(
     db: &Database,
-    agent: AgentId,
+    node: NodeId,
     prefix: &str,
     attribute: &str,
     count: i64,
 ) {
     for i in 0..count {
-        let tx = Transaction::new(agent)
+        let tx = Transaction::new(node)
             .assert_datom(
                 EntityId::from_content(format!("{prefix}{i}").as_bytes()),
                 Attribute::from(attribute),
@@ -298,9 +298,9 @@ fn inv_ferr_008_wal_entry_precedes_snapshot() {
     let dir = TempDir::new().expect("failed to create temp dir");
     let wal_path = dir.path().join("test.wal");
     let db = Database::genesis_with_wal(&wal_path).expect("failed to create store with WAL");
-    let agent = AgentId::from_bytes([1u8; 16]);
+    let node = NodeId::from_bytes([1u8; 16]);
 
-    transact_validated_datoms(&db, agent, "e", "tx/provenance", 5);
+    transact_validated_datoms(&db, node, "e", "tx/provenance", 5);
     let pre_crash = capture_db_state(&db);
 
     // Recover from WAL alone (simulating crash + restart)
@@ -311,10 +311,10 @@ fn inv_ferr_008_wal_entry_precedes_snapshot() {
 }
 
 /// Transact N schema-validated datoms with a "dc-entity-" prefix into a database.
-fn transact_dc_datoms(db: &Database, agent: AgentId, range: std::ops::Range<u64>) {
+fn transact_dc_datoms(db: &Database, node: NodeId, range: std::ops::Range<u64>) {
     let schema = db.schema();
     for i in range {
-        let tx = Transaction::new(agent)
+        let tx = Transaction::new(node)
             .assert_datom(
                 EntityId::from_content(format!("dc-entity-{i}").as_bytes()),
                 Attribute::from("db/doc"),
@@ -330,7 +330,7 @@ fn transact_dc_datoms(db: &Database, agent: AgentId, range: std::ops::Range<u64>
 /// Write a checkpoint from the current database state.
 ///
 /// INV-FERR-013: the checkpoint must faithfully preserve the store's epoch,
-/// schema, genesis_agent, datom set, and LIVE metadata. Uses
+/// schema, genesis_node, datom set, and LIVE metadata. Uses
 /// `Database::store_for_checkpoint()` which clones the actual Store,
 /// preserving all metadata. This ensures the checkpoint epoch matches the
 /// database epoch — cold start recovery uses the checkpoint epoch to
@@ -368,10 +368,10 @@ fn test_inv_ferr_014_double_crash() {
     std::fs::create_dir_all(&data_dir).expect("create data dir");
     let wal_path = data_dir.join("wal.log");
     let checkpoint_path = data_dir.join("checkpoint.chkp");
-    let agent = AgentId::from_bytes([77u8; 16]);
+    let node = NodeId::from_bytes([77u8; 16]);
 
     // Phase 1: genesis + 3 txns + checkpoint + 2 more txns, then crash
-    double_crash_phase1(&wal_path, &checkpoint_path, agent);
+    double_crash_phase1(&wal_path, &checkpoint_path, node);
 
     // Phase 2: first cold_start recovery
     let result1 = cold_start(&data_dir).expect("INV-FERR-014: first cold_start must succeed");
@@ -384,7 +384,7 @@ fn test_inv_ferr_014_double_crash() {
     );
 
     // Phase 3: transact 1 more, then crash 2
-    double_crash_phase3(&result1.database, agent);
+    double_crash_phase3(&result1.database, node);
 
     // Phase 4: second cold_start recovery
     let result2 = cold_start(&data_dir).expect("INV-FERR-014: second cold_start must succeed");
@@ -416,19 +416,19 @@ fn test_inv_ferr_014_double_crash() {
 fn double_crash_phase1(
     wal_path: &std::path::Path,
     checkpoint_path: &std::path::Path,
-    agent: AgentId,
+    node: NodeId,
 ) {
     let db = Database::genesis_with_wal(wal_path).expect("genesis_with_wal must succeed");
-    transact_dc_datoms(&db, agent, 0..3);
+    transact_dc_datoms(&db, node, 0..3);
     write_checkpoint_from_db(&db, checkpoint_path);
-    transact_dc_datoms(&db, agent, 3..5);
+    transact_dc_datoms(&db, node, 3..5);
     // db drops here -- simulates crash 1
 }
 
 /// Phase 3 of double-crash test: transact 1 more datom, then crash.
-fn double_crash_phase3(db: &Database, agent: AgentId) {
+fn double_crash_phase3(db: &Database, node: NodeId) {
     let schema = db.schema();
-    let tx = Transaction::new(agent)
+    let tx = Transaction::new(node)
         .assert_datom(
             EntityId::from_content(b"dc-entity-5"),
             Attribute::from("db/doc"),
@@ -446,7 +446,7 @@ fn write_test_checkpoint_to_backend(backend: &ferratomic_db::storage::InMemoryBa
     use ferratomic_db::storage::StorageBackend;
 
     let mut store = ferratomic_db::store::Store::genesis();
-    let tx = Transaction::new(AgentId::from_bytes([24u8; 16]))
+    let tx = Transaction::new(NodeId::from_bytes([24u8; 16]))
         .assert_datom(
             EntityId::from_content(b"in-mem-test-entity"),
             Attribute::from("db/doc"),
@@ -507,10 +507,10 @@ fn test_inv_ferr_024_in_memory_backend() {
 // =========================================================================
 
 /// Transact N schema-validated datoms with a "tc-entity-" prefix into a database.
-fn transact_tc_datoms(db: &Database, agent: AgentId, range: std::ops::Range<u64>) {
+fn transact_tc_datoms(db: &Database, node: NodeId, range: std::ops::Range<u64>) {
     let schema = db.schema();
     for i in range {
-        let tx = Transaction::new(agent)
+        let tx = Transaction::new(node)
             .assert_datom(
                 EntityId::from_content(format!("tc-entity-{i}").as_bytes()),
                 Attribute::from("db/doc"),
@@ -560,15 +560,15 @@ fn test_inv_ferr_014_triple_crash_wal_truncation() {
     std::fs::create_dir_all(&data_dir).expect("create data dir");
     let wal_path = data_dir.join("wal.log");
     let checkpoint_path = data_dir.join("checkpoint.chkp");
-    let agent = AgentId::from_bytes([0xAA; 16]);
+    let node = NodeId::from_bytes([0xAA; 16]);
 
     // Phase 1: genesis -> 3 txns -> checkpoint -> 2 more txns -> crash 1
     {
         let db = Database::genesis_with_wal(&wal_path)
             .expect("INV-FERR-014: genesis_with_wal must succeed");
-        transact_tc_datoms(&db, agent, 0..3);
+        transact_tc_datoms(&db, node, 0..3);
         write_checkpoint_from_db(&db, &checkpoint_path);
-        transact_tc_datoms(&db, agent, 3..5);
+        transact_tc_datoms(&db, node, 3..5);
         // db drops here -- simulates crash 1
     }
 
@@ -590,7 +590,7 @@ fn test_inv_ferr_014_triple_crash_wal_truncation() {
         );
 
         // Phase 3: transact 2 more -> WAL truncation -> crash 2
-        transact_tc_datoms(&result1.database, agent, 5..7);
+        transact_tc_datoms(&result1.database, node, 5..7);
         recovery1_datom_count = result1.database.snapshot().datoms().count();
         // db drops here -- simulates crash 2
     }
@@ -690,10 +690,10 @@ fn test_inv_ferr_014_triple_crash_wal_truncation() {
 // =========================================================================
 
 /// Transact N schema-validated datoms with a "pc-entity-" prefix into a database.
-fn transact_pc_datoms(db: &Database, agent: AgentId, range: std::ops::Range<u64>) {
+fn transact_pc_datoms(db: &Database, node: NodeId, range: std::ops::Range<u64>) {
     let schema = db.schema();
     for i in range {
-        let tx = Transaction::new(agent)
+        let tx = Transaction::new(node)
             .assert_datom(
                 EntityId::from_content(format!("pc-entity-{i}").as_bytes()),
                 Attribute::from("db/doc"),
@@ -744,14 +744,14 @@ fn test_inv_ferr_014_power_cut_atomic_rename() {
     let wal_path = data_dir.join("wal.log");
     let checkpoint_path = data_dir.join("checkpoint.chkp");
     let temp_checkpoint_path = data_dir.join("checkpoint.chkp.tmp");
-    let agent = AgentId::from_bytes([0xBB; 16]);
+    let node = NodeId::from_bytes([0xBB; 16]);
 
     // Phase 1: genesis -> 3 txns -> write checkpoint to canonical path
     let pre_second_checkpoint_datoms: std::collections::BTreeSet<ferratom::Datom>;
     {
         let db = Database::genesis_with_wal(&wal_path)
             .expect("INV-FERR-014: genesis_with_wal must succeed");
-        transact_pc_datoms(&db, agent, 0..3);
+        transact_pc_datoms(&db, node, 0..3);
         write_checkpoint_from_db(&db, &checkpoint_path);
 
         // Phase 2: verify checkpoint is valid by cold starting
@@ -765,7 +765,7 @@ fn test_inv_ferr_014_power_cut_atomic_rename() {
         pre_second_checkpoint_datoms = db.snapshot().datoms().cloned().collect();
 
         // Phase 3: transact 2 more -> write second checkpoint to TEMP file only
-        transact_pc_datoms(&db, agent, 3..5);
+        transact_pc_datoms(&db, node, 3..5);
 
         // Write the checkpoint to the temp path using write_checkpoint_to_writer.
         // This simulates a checkpoint write that completes data write but the
@@ -871,14 +871,14 @@ fn test_inv_ferr_014_power_cut_atomic_rename() {
 fn test_inv_ferr_014_enospc_wal_truncation() {
     let dir = TempDir::new().expect("failed to create temp dir");
     let wal_path = dir.path().join("enospc.wal");
-    let agent = AgentId::from_bytes([0xCC; 16]);
+    let node = NodeId::from_bytes([0xCC; 16]);
 
     // Phase 1: genesis -> 3 txns via WAL -> fsync
     let pre_enospc_datoms: std::collections::BTreeSet<ferratom::Datom>;
     {
         let db = Database::genesis_with_wal(&wal_path)
             .expect("INV-FERR-014: genesis_with_wal must succeed");
-        transact_user_datoms(&db, agent, 0..3);
+        transact_user_datoms(&db, node, 0..3);
         pre_enospc_datoms = db.snapshot().datoms().cloned().collect();
         // db drops here -- WAL is fsynced by transact
     }
@@ -950,13 +950,13 @@ fn test_inv_ferr_014_enospc_wal_truncation() {
 fn test_inv_ferr_014_snapshot_survives_crash_recovery() {
     let dir = TempDir::new().expect("failed to create temp dir");
     let wal_path = dir.path().join("snap_crash.wal");
-    let agent = AgentId::from_bytes([0xDD; 16]);
+    let node = NodeId::from_bytes([0xDD; 16]);
 
     // Pre-crash: genesis -> 3 txns -> snapshot -> 2 more txns -> verify snapshot
     {
         let db = Database::genesis_with_wal(&wal_path)
             .expect("INV-FERR-014: genesis_with_wal must succeed");
-        transact_user_datoms(&db, agent, 0..3);
+        transact_user_datoms(&db, node, 0..3);
 
         // Step 2: take snapshot at epoch 3
         let snap1 = db.snapshot();
@@ -967,7 +967,7 @@ fn test_inv_ferr_014_snapshot_survives_crash_recovery() {
         );
 
         // Step 3: transact 2 more datoms (epoch advances to 5)
-        transact_user_datoms(&db, agent, 3..5);
+        transact_user_datoms(&db, node, 3..5);
         let current_epoch = db.epoch();
         assert_eq!(
             current_epoch, 5,

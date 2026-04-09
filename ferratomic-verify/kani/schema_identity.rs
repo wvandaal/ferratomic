@@ -2,7 +2,7 @@
 //!
 //! Covers INV-FERR-009 and INV-FERR-012.
 
-use ferratom::{AgentId, Attribute, EntityId, Value};
+use ferratom::{Attribute, EntityId, NodeId, Value};
 use ferratomic_db::{
     store::Store,
     writer::{Transaction, TxValidationError},
@@ -18,7 +18,7 @@ use super::kani;
 #[cfg_attr(not(kani), ignore = "requires Kani verifier")]
 fn schema_rejects_unknown_attr() {
     let store = Store::genesis();
-    let tx = Transaction::new(AgentId::from_bytes([0u8; 16])).assert_datom(
+    let tx = Transaction::new(NodeId::from_bytes([0u8; 16])).assert_datom(
         EntityId::from_content(b"kani-unknown-attr"),
         Attribute::from("nonexistent/attr"),
         Value::String("value".into()),

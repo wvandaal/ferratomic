@@ -7,7 +7,7 @@
 
 use std::collections::BTreeSet;
 
-use ferratom::{AgentId, Attribute, Datom, EntityId, Op, TxId, Value};
+use ferratom::{Attribute, Datom, EntityId, NodeId, Op, TxId, Value};
 use ferratomic_db::{merge::merge, store::Store};
 
 /// INV-FERR-001: Concrete merge commutativity with known stores.
@@ -146,7 +146,7 @@ fn inv_ferr_004_transact_grows_store() {
 
     // Use genesis-schema attribute (db/doc accepts String) instead of
     // user/name which is not in genesis schema.
-    let tx = ferratomic_db::writer::Transaction::new(AgentId::from_bytes([0u8; 16])).assert_datom(
+    let tx = ferratomic_db::writer::Transaction::new(NodeId::from_bytes([0u8; 16])).assert_datom(
         EntityId::from_content(b"new-entity"),
         Attribute::from("db/doc"),
         Value::String("Test".into()),
@@ -377,12 +377,12 @@ fn test_inv_ferr_004_monotonic_growth_database() {
     use ferratomic_db::{db::Database, writer::Transaction};
 
     let db = Database::genesis();
-    let agent = AgentId::from_bytes([4u8; 16]);
+    let node = NodeId::from_bytes([4u8; 16]);
 
     let mut prev_count = db.snapshot().datoms().count();
 
     for i in 0..3i64 {
-        let tx = Transaction::new(agent)
+        let tx = Transaction::new(node)
             .assert_datom(
                 EntityId::from_content(format!("growth-e{i}").as_bytes()),
                 Attribute::from("db/doc"),

@@ -76,8 +76,10 @@ Name the structure. If you can't name it, you don't understand it yet.
 Where does this problem sit in the crate/module dependency DAG?
 
 ```
-ferratom (types) -> ferratomic-core (engine) -> ferratomic-datalog (query)
-                                              -> ferratomic-verify (proofs+tests)
+ferratom-clock (HLC) -> ferratom (types) -> {ferratomic-tx, ferratomic-storage, ferratomic-wal}
+  -> ferratomic-index -> ferratomic-positional -> ferratomic-checkpoint
+  -> ferratomic-store (CRDT) -> ferratomic-core (MVCC facade)
+  -> ferratomic-datalog (query) / ferratomic-verify (proofs+tests)
 ```
 
 - Is the problem in the leaf (types wrong)?

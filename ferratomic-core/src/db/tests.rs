@@ -1,6 +1,6 @@
 use std::sync::{Arc as StdArc, Mutex as StdMutex};
 
-use ferratom::{AgentId, Attribute, EntityId, Value};
+use ferratom::{Attribute, EntityId, NodeId, Value};
 
 use super::*;
 use crate::{observer::DatomObserver, wal::Wal, writer::Transaction};
@@ -74,9 +74,9 @@ fn test_inv_ferr_006_snapshot_isolation() {
     let db = Database::genesis();
     let before = db.snapshot();
 
-    let agent = AgentId::from_bytes([1u8; 16]);
+    let node = NodeId::from_bytes([1u8; 16]);
     let schema = db.schema();
-    let tx = Transaction::new(agent)
+    let tx = Transaction::new(node)
         .assert_datom(
             EntityId::from_content(b"e1"),
             Attribute::from("db/doc"),
@@ -115,11 +115,11 @@ fn test_inv_ferr_007_epoch_monotonicity() {
     let db = Database::genesis();
     assert_eq!(db.epoch(), 0, "INV-FERR-031: genesis epoch is 0");
 
-    let agent = AgentId::from_bytes([2u8; 16]);
+    let node = NodeId::from_bytes([2u8; 16]);
     let schema = db.schema();
 
     for iteration in 1u64..=3 {
-        let tx = Transaction::new(agent)
+        let tx = Transaction::new(node)
             .assert_datom(
                 EntityId::from_content(format!("e{iteration}").as_bytes()),
                 Attribute::from("db/doc"),
@@ -166,11 +166,11 @@ fn test_inv_ferr_006_from_store() {
 #[test]
 fn test_inv_ferr_011_register_observer_delivers_catchup() {
     let db = Database::genesis();
-    let agent = AgentId::from_bytes([7u8; 16]);
+    let node = NodeId::from_bytes([7u8; 16]);
     let schema = db.schema();
 
     for index in 0..2i64 {
-        let tx = Transaction::new(agent)
+        let tx = Transaction::new(node)
             .assert_datom(
                 EntityId::from_content(format!("catchup-{index}").as_bytes()),
                 Attribute::from("db/doc"),
@@ -203,7 +203,7 @@ fn test_inv_ferr_011_transact_notifies_registered_observer() {
         .expect("observer registration succeeds");
 
     let schema = db.schema();
-    let tx = Transaction::new(AgentId::from_bytes([8u8; 16]))
+    let tx = Transaction::new(NodeId::from_bytes([8u8; 16]))
         .assert_datom(
             EntityId::from_content(b"observer-commit"),
             Attribute::from("db/doc"),
@@ -230,10 +230,10 @@ fn test_bug_bd_2w9_wal_written_on_transact() {
     let wal_path = dir.path().join("test.wal");
 
     let db = Database::genesis_with_wal(&wal_path).unwrap();
-    let agent = AgentId::from_bytes([1u8; 16]);
+    let node = NodeId::from_bytes([1u8; 16]);
     let schema = db.schema();
 
-    let tx = Transaction::new(agent)
+    let tx = Transaction::new(node)
         .assert_datom(
             EntityId::from_content(b"e1"),
             Attribute::from("db/doc"),
@@ -262,11 +262,11 @@ fn test_bug_bd_2w9_recover_from_wal() {
 
     {
         let db = Database::genesis_with_wal(&wal_path).unwrap();
-        let agent = AgentId::from_bytes([1u8; 16]);
+        let node = NodeId::from_bytes([1u8; 16]);
         let schema = db.schema();
 
         for index in 0..3i64 {
-            let tx = Transaction::new(agent)
+            let tx = Transaction::new(node)
                 .assert_datom(
                     EntityId::from_content(format!("e{index}").as_bytes()),
                     Attribute::from("db/doc"),
@@ -298,10 +298,10 @@ fn test_bug_bd_85v1_bijection_canary_returns_invariant_violation() {
     use crate::indexes::Indexes;
 
     let db = Database::genesis();
-    let agent = AgentId::from_bytes([9u8; 16]);
+    let node = NodeId::from_bytes([9u8; 16]);
     let schema = db.schema();
 
-    let seed_tx = Transaction::new(agent)
+    let seed_tx = Transaction::new(node)
         .assert_datom(
             EntityId::from_content(b"seed"),
             Attribute::from("db/doc"),
@@ -317,7 +317,7 @@ fn test_bug_bd_85v1_bijection_canary_returns_invariant_violation() {
     db.current.store(StdArc::new(corrupted));
     db.transaction_count.store(99, Ordering::Release);
 
-    let tx = Transaction::new(agent)
+    let tx = Transaction::new(node)
         .assert_datom(
             EntityId::from_content(b"trigger"),
             Attribute::from("db/doc"),

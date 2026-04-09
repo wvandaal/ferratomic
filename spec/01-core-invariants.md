@@ -1347,7 +1347,7 @@ new datom, not as the absence of the old one).
 ```rust
 /// Observer tracks the last epoch it observed, ensuring monotonicity.
 pub struct Observer {
-    agent: AgentId,
+    node: NodeId,
     last_epoch: AtomicU64,
 }
 

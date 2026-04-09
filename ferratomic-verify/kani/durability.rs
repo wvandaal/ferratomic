@@ -8,7 +8,7 @@
 
 use std::{collections::BTreeSet, sync::Arc};
 
-use ferratom::{AgentId, Attribute, Datom, EntityId, Value};
+use ferratom::{Attribute, Datom, EntityId, NodeId, Value};
 use ferratomic_db::{store::Store, writer::Transaction};
 
 use super::helpers::concrete_datom_set;
@@ -56,13 +56,13 @@ fn checkpoint_roundtrip() {
 #[cfg_attr(not(kani), ignore = "requires Kani verifier")]
 fn checkpoint_superset_014_stub() {
     let mut store = Store::genesis();
-    let agent = AgentId::from_bytes([1u8; 16]);
+    let node = NodeId::from_bytes([1u8; 16]);
 
     let count_committed: u8 = kani::any();
     kani::assume(count_committed > 0 && count_committed <= 3);
 
     for i in 0..count_committed {
-        let tx = Transaction::new(agent)
+        let tx = Transaction::new(node)
             .assert_datom(
                 EntityId::from_content(&[i]),
                 Attribute::from("db/doc"),
@@ -110,7 +110,7 @@ fn checkpoint_superset_014_stub() {
 #[cfg_attr(not(kani), ignore = "requires Kani verifier")]
 fn append_only() {
     let mut store = Store::genesis();
-    let agent = AgentId::from_bytes([1u8; 16]);
+    let node = NodeId::from_bytes([1u8; 16]);
 
     // Capture initial datom set (genesis schema datoms).
     let initial: BTreeSet<Datom> = store.datoms().cloned().collect();
@@ -123,7 +123,7 @@ fn append_only() {
     let entity = EntityId::from_content(&[id_byte]);
 
     // Transact a new datom.
-    let tx = Transaction::new(agent)
+    let tx = Transaction::new(node)
         .assert_datom(
             entity,
             Attribute::from("db/doc"),
@@ -158,7 +158,7 @@ fn transaction_atomicity() {
     let n_datoms: u8 = kani::any();
     kani::assume(n_datoms > 0 && n_datoms <= 4);
 
-    let tx = (0..n_datoms).fold(Transaction::new(AgentId::from_bytes([0u8; 16])), |tx, i| {
+    let tx = (0..n_datoms).fold(Transaction::new(NodeId::from_bytes([0u8; 16])), |tx, i| {
         tx.assert_datom(
             EntityId::from_content(&[i]),
             Attribute::from("test/counter"),
@@ -367,7 +367,7 @@ fn substrate_agnosticism_in_memory() {
     use ferratomic_db::storage::{InMemoryBackend, StorageBackend};
 
     let mut store = Store::genesis();
-    let tx = Transaction::new(AgentId::from_bytes([1u8; 16]))
+    let tx = Transaction::new(NodeId::from_bytes([1u8; 16]))
         .assert_datom(
             EntityId::from_content(b"substrate-test"),
             Attribute::from("db/doc"),
@@ -477,12 +477,12 @@ fn write_amplification_bound() {
 #[cfg_attr(not(kani), ignore = "requires Kani verifier")]
 fn cold_start_checkpoint_roundtrip() {
     let mut store = Store::genesis();
-    let agent = AgentId::from_bytes([2u8; 16]);
+    let node = NodeId::from_bytes([2u8; 16]);
     let n_txns: u8 = kani::any();
     kani::assume(n_txns > 0 && n_txns <= 3);
 
     for i in 0..n_txns {
-        let tx = Transaction::new(agent)
+        let tx = Transaction::new(node)
             .assert_datom(
                 EntityId::from_content(&[i, 0xC5]),
                 Attribute::from("db/doc"),

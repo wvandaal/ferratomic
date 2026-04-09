@@ -313,7 +313,7 @@ proptest! {
     /// INV-FERR-031: Two independent genesis() calls produce identical stores.
     ///
     /// Genesis determinism: the 19 axiomatic meta-schema attributes, empty
-    /// datom set, epoch 0, and genesis agent are all fixed. Any deviation
+    /// datom set, epoch 0, and genesis node are all fixed. Any deviation
     /// between two calls indicates non-determinism in schema construction.
     ///
     /// The proptest input is a dummy seed — we want 10,000 repetitions to
@@ -321,7 +321,7 @@ proptest! {
     /// thread-local state, etc.).
     ///
     /// Falsification: two genesis() calls produce stores that differ in
-    /// schema, epoch, datom set, or genesis agent.
+    /// schema, epoch, datom set, or genesis node.
     #[test]
     fn inv_ferr_031_genesis_determinism(
         _seed in any::<u64>(),
@@ -364,10 +364,10 @@ proptest! {
             );
         }
 
-        // Genesis agent must be identical.
+        // Genesis node must be identical.
         prop_assert_eq!(
-            g1.genesis_agent(), g2.genesis_agent(),
-            "INV-FERR-031 violated: genesis agents differ"
+            g1.genesis_node(), g2.genesis_node(),
+            "INV-FERR-031 violated: genesis nodes differ"
         );
     }
 }
@@ -490,14 +490,14 @@ proptest! {
         seed in any::<u64>(),
     ) {
 
-        use ferratom::{AgentId, Attribute, Value};
+        use ferratom::{NodeId, Attribute, Value};
 
         // Build two genesis stores with divergent schema definitions.
         let mut a = Store::genesis();
         let mut b = Store::genesis();
 
         // Store A: define "user/email" as String
-        let tx_a = ferratomic_db::writer::Transaction::new(AgentId::from_bytes([1u8; 16]))
+        let tx_a = ferratomic_db::writer::Transaction::new(NodeId::from_bytes([1u8; 16]))
             .assert_datom(
                 EntityId::from_content(format!("attr-email-{seed}").as_bytes()),
                 Attribute::from("db/ident"),
@@ -518,7 +518,7 @@ proptest! {
         a.transact_test(tx_a).expect("transact a ok");
 
         // Store B: define "user/email" as Keyword (conflicting type!)
-        let tx_b = ferratomic_db::writer::Transaction::new(AgentId::from_bytes([2u8; 16]))
+        let tx_b = ferratomic_db::writer::Transaction::new(NodeId::from_bytes([2u8; 16]))
             .assert_datom(
                 EntityId::from_content(format!("attr-email-b-{seed}").as_bytes()),
                 Attribute::from("db/ident"),

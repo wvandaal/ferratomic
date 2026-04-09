@@ -128,7 +128,7 @@ SEED.md 10 (The Bootstrap)
 
 ```
 ferratomic/                          -- workspace root
-├── ferratom-clock/                  -- HLC, TxId, AgentId, Frontier
+├── ferratom-clock/                  -- HLC, TxId, NodeId, Frontier
 │   └── src/lib.rs                   -- Zero project-internal dependencies
 ├── ferratom/                        -- Primitive datom/schema/value/wire types
 │   ├── src/lib.rs                   -- Re-export facade for clock/datom/schema types

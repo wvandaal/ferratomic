@@ -14,7 +14,7 @@
 
 use std::io::Write as IoWrite;
 
-use ferratom::{AgentId, Attribute, EntityId, Value};
+use ferratom::{Attribute, EntityId, NodeId, Value};
 use ferratomic_db::{
     checkpoint::{load_checkpoint, write_checkpoint, write_checkpoint_to_writer},
     storage::{cold_start_with_backend, InMemoryBackend, RecoveryLevel, StorageBackend},
@@ -31,9 +31,9 @@ use proptest::prelude::*;
 /// Build a store with `n` user datoms (each tx also adds 2 metadata datoms).
 fn store_with_datoms(n: usize) -> Store {
     let mut store = Store::genesis();
-    let agent = AgentId::from_bytes([1u8; 16]);
+    let node = NodeId::from_bytes([1u8; 16]);
     for i in 0..n {
-        let tx = Transaction::new(agent)
+        let tx = Transaction::new(node)
             .assert_datom(
                 EntityId::from_content(format!("e-{i}").as_bytes()),
                 Attribute::from("db/doc"),

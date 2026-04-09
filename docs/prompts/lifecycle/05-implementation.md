@@ -1,6 +1,6 @@
 # 05 — Implementation (Programs ARE Proofs)
 
-> **Purpose**: Implement `ferratomic-core` modules. Make the red tests green.
+> **Purpose**: Implement workspace crate modules. Make the red tests green.
 > The tests define the contract. The Lean proofs define the algebra.
 > Your job is to write the program that satisfies both.
 >
@@ -73,7 +73,7 @@ identical regardless of argument order.
 ### Step 4: Write the implementation
 
 ```rust
-// ferratomic-core/src/merge.rs
+// ferratomic-store/src/merge.rs
 
 use ferratom::{Datom, FerraError};
 use crate::store::Store;

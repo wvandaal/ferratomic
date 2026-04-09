@@ -59,7 +59,7 @@ br list --status=open
 - The core algebraic identity: `Store = (P(D), ∪)` — G-Set CRDT semilattice
 - The phase ordering and current phase
 - The hard constraints (C1, C2, C4, INV-FERR-023, NEG-FERR-001)
-- The crate dependency DAG: `ferratom → ferratomic-core → ferratomic-datalog`
+- The crate dependency DAG: `ferratom-clock → ferratom → {tx, storage, wal} → index → positional → checkpoint → store → core → datalog`
 
 If you cannot, re-read until you can. The review is meaningless without this grounding.
 
@@ -110,15 +110,24 @@ cargo doc --workspace --no-deps -- -D warnings
 
 ```bash
 # Per-crate LOC (excluding tests)
+find ferratom-clock/src -name '*.rs' | xargs wc -l
 find ferratom/src -name '*.rs' | xargs wc -l
+find ferratomic-tx/src -name '*.rs' | xargs wc -l
+find ferratomic-storage/src -name '*.rs' | xargs wc -l
+find ferratomic-wal/src -name '*.rs' | xargs wc -l
+find ferratomic-index/src -name '*.rs' | xargs wc -l
+find ferratomic-positional/src -name '*.rs' | xargs wc -l
+find ferratomic-checkpoint/src -name '*.rs' | xargs wc -l
+find ferratomic-store/src -name '*.rs' | xargs wc -l
 find ferratomic-core/src -name '*.rs' | xargs wc -l
 find ferratomic-datalog/src -name '*.rs' | xargs wc -l
 find ferratomic-verify/src -name '*.rs' | xargs wc -l
 ```
 
 Compare against budgets from AGENTS.md:
+- `ferratom-clock`: < 1,000 LOC
 - `ferratom`: < 2,000 LOC
-- `ferratomic-core`: < 10,000 LOC
+- `ferratomic-core` (MVCC facade): < 2,000 LOC
 - `ferratomic-datalog`: < 5,000 LOC
 
 ### 1.5 Proof Health
@@ -326,6 +335,10 @@ Weights: Correctness=3, Completeness=2, Verification=2, Quality=1.5,
 ```
 
 Convert composite to letter grade using the same scale.
+
+### GOALS.md §7 Composite Scoring
+
+For phase gate decisions, also score against GOALS.md §7 (six dimensions, 1-10 each, composite = average). The §7 composite supplements the 10-vector GPA above — it travels with the gate verdict in beads and handoff documents.
 
 ### Output: SCORECARD Artifact
 

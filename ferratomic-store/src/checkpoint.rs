@@ -52,7 +52,7 @@ impl Store {
 
 /// Extract raw data from a Store into `CheckpointData` for serialization.
 ///
-/// Collects datoms, schema, epoch, genesis agent, and LIVE bitvector
+/// Collects datoms, schema, epoch, genesis node, and LIVE bitvector
 /// into a `CheckpointData` for the ferratomic-checkpoint crate.
 #[must_use]
 pub fn extract_checkpoint_data(store: &Store) -> ferratomic_checkpoint::CheckpointData {
@@ -73,7 +73,7 @@ pub fn extract_checkpoint_data(store: &Store) -> ferratomic_checkpoint::Checkpoi
 
     ferratomic_checkpoint::CheckpointData {
         epoch: store.epoch(),
-        genesis_agent: store.genesis_agent(),
+        genesis_node: store.genesis_node(),
         schema_pairs,
         datoms,
         live_bits: Some(live_bits),
@@ -95,14 +95,14 @@ pub fn store_from_checkpoint_data(
     match data.live_bits {
         Some(live_bits) => Store::from_checkpoint_v3(
             data.epoch,
-            data.genesis_agent,
+            data.genesis_node,
             data.schema_pairs,
             data.datoms,
             live_bits,
         ),
         None => Ok(Store::from_checkpoint(
             data.epoch,
-            data.genesis_agent,
+            data.genesis_node,
             data.schema_pairs,
             data.datoms,
         )),
@@ -160,7 +160,7 @@ mod tests {
     #[test]
     fn test_inv_ferr_013_store_bytes_roundtrip() {
         let mut store = Store::genesis();
-        let tx = Transaction::new(store.genesis_agent())
+        let tx = Transaction::new(store.genesis_node())
             .assert_datom(
                 EntityId::from_content(b"entity-bytes-1"),
                 Attribute::from("db/doc"),

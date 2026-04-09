@@ -35,7 +35,7 @@ mod v3;
 /// Serialize a store to checkpoint bytes (in-memory) using V3 format.
 ///
 /// INV-FERR-013: The returned bytes contain the full store state (epoch,
-/// schema, genesis agent, all datoms, LIVE bitvector) in the V3 checkpoint
+/// schema, genesis node, all datoms, LIVE bitvector) in the V3 checkpoint
 /// wire format. A trailing BLAKE3 hash covers all preceding bytes for
 /// tamper detection. `deserialize_checkpoint_bytes` can reconstruct the
 /// store exactly.
@@ -80,7 +80,7 @@ pub fn deserialize_live_first_partial(data: &[u8]) -> Result<PartialStore, Ferra
     let live_bits = bitvec::prelude::BitVec::repeat(true, partial_data.live_datoms.len());
     let store = Store::from_checkpoint_v3(
         partial_data.epoch,
-        partial_data.genesis_agent,
+        partial_data.genesis_node,
         partial_data.schema_pairs.clone(),
         partial_data.live_datoms,
         live_bits,
@@ -135,7 +135,7 @@ impl PartialStore {
         let live_bits = crate::positional::build_live_bitvector_pub(&merged);
         Store::from_checkpoint_v3(
             self.store.epoch(),
-            self.store.genesis_agent(),
+            self.store.genesis_node(),
             self.schema_pairs,
             merged,
             live_bits,
@@ -162,7 +162,7 @@ pub fn deserialize_checkpoint_bytes(data: &[u8]) -> Result<Store, FerraError> {
 /// Serialize a store to a checkpoint file.
 ///
 /// INV-FERR-013: The checkpoint contains the full store state (epoch,
-/// schema, genesis agent, all datoms) in a format that `load_checkpoint`
+/// schema, genesis node, all datoms) in a format that `load_checkpoint`
 /// can reconstruct exactly. A trailing BLAKE3 hash covers all preceding
 /// bytes for tamper detection.
 ///
@@ -230,7 +230,7 @@ pub(crate) fn load_checkpoint_from_reader<R: std::io::Read>(
 ///
 /// Backend-agnostic checkpoint writing for [`StorageBackend`](crate::storage::StorageBackend)
 /// implementations. The checkpoint contains the full store state (epoch,
-/// schema, genesis agent, all datoms, LIVE bitvector) in V3 format with
+/// schema, genesis node, all datoms, LIVE bitvector) in V3 format with
 /// a trailing BLAKE3 integrity hash.
 ///
 /// INV-FERR-013: `load(checkpoint(S)) = S` -- round-trip identity.

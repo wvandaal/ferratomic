@@ -468,7 +468,7 @@ pub const CATALOG: &[Invariant] = &[
         stateright_model: None,
         integration_test: Some("test_inv_ferr_031_genesis_determinism"),
         type_level: Some(
-            "Store::genesis() fixes empty datoms, epoch 0, zero genesis agent, and a 19-attribute schema",
+            "Store::genesis() fixes empty datoms, epoch 0, zero genesis node, and a 19-attribute schema",
         ),
     },
     Invariant {
@@ -915,7 +915,7 @@ pub const CATALOG: &[Invariant] = &[
         name: "Type-Level Refinement (Curry-Howard Encoding)",
         stage: Stage::Stage0,
         lean_theorem: Some("cm_replay_epoch"),
-        proptest_fn: Some("ci_ferr_002_entity_id_cardinality, ci_ferr_002_value_variant_count, ci_ferr_002_op_cardinality, ci_ferr_002_agent_id_fixed_size, ci_ferr_002_entity_id_from_content_always_32_bytes, ci_ferr_002_datom_5_tuple_structure, ci_ferr_002_attribute_interning, ci_ferr_002_tx_id_ordering"),
+        proptest_fn: Some("ci_ferr_002_entity_id_cardinality, ci_ferr_002_value_variant_count, ci_ferr_002_op_cardinality, ci_ferr_002_node_id_fixed_size, ci_ferr_002_entity_id_from_content_always_32_bytes, ci_ferr_002_datom_5_tuple_structure, ci_ferr_002_attribute_interning, ci_ferr_002_tx_id_ordering"),
         kani_harness: None,
         stateright_model: None,
         integration_test: None,

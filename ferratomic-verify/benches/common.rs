@@ -5,7 +5,7 @@
 use std::{collections::BTreeSet, path::Path, sync::Arc};
 
 use ferratom::{
-    AgentId, Attribute, AttributeDef, Datom, EntityId, FerraError, Op, Schema, TxId, Value,
+    Attribute, AttributeDef, Datom, EntityId, FerraError, NodeId, Op, Schema, TxId, Value,
 };
 use ferratomic_db::{
     checkpoint::write_checkpoint,
@@ -20,11 +20,11 @@ use tempfile::TempDir;
 pub const SCALE_INPUT_SIZES: [usize; 3] = [1_000, 10_000, 100_000];
 pub const WRITE_TRANSACTION_COUNTS: [usize; 2] = [1_000, 10_000];
 
-const BENCH_AGENT_BYTES: [u8; 16] = [7u8; 16];
+const BENCH_NODE_BYTES: [u8; 16] = [7u8; 16];
 const DOC_ATTRIBUTE: &str = "db/doc";
 
-pub fn bench_agent() -> AgentId {
-    AgentId::from_bytes(BENCH_AGENT_BYTES)
+pub fn bench_node() -> NodeId {
+    NodeId::from_bytes(BENCH_NODE_BYTES)
 }
 
 pub fn doc_entity(index: usize) -> EntityId {
@@ -109,7 +109,7 @@ fn checkpoint_store(db: &Database) -> Store {
     let datoms = db.snapshot().datoms().cloned().collect::<Vec<_>>();
     Store::from_checkpoint(
         db.epoch(),
-        Store::genesis().genesis_agent(),
+        Store::genesis().genesis_node(),
         schema_attrs,
         datoms,
     )
@@ -130,11 +130,11 @@ fn split_checkpoint_and_wal(total_datoms: usize) -> (usize, usize) {
 
 fn build_committed_batch(
     schema: &Schema,
-    agent: AgentId,
+    node: NodeId,
     start: usize,
     count: usize,
 ) -> Result<Transaction<Committed>, FerraError> {
-    let mut tx = Transaction::new(agent);
+    let mut tx = Transaction::new(node);
     for index in start..start + count {
         tx = tx.assert_datom(
             doc_entity(index),
@@ -152,14 +152,14 @@ fn transact_batched(
     batch_size: usize,
 ) -> Result<(), FerraError> {
     let schema = db.schema();
-    let agent = bench_agent();
+    let node = bench_node();
     let end = start + total_datoms;
     let chunk_size = batch_size.max(1);
     let mut next = start;
 
     while next < end {
         let chunk_len = (end - next).min(chunk_size);
-        let tx = build_committed_batch(&schema, agent, next, chunk_len)?;
+        let tx = build_committed_batch(&schema, node, next, chunk_len)?;
         db.transact(tx)?;
         next += chunk_len;
     }

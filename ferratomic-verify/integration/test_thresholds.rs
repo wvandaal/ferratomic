@@ -28,7 +28,7 @@
 
 use std::{collections::BTreeSet, time::Instant};
 
-use ferratom::{AgentId, Attribute, Datom, EntityId, Op, TxId, Value};
+use ferratom::{Attribute, Datom, EntityId, NodeId, Op, TxId, Value};
 use ferratomic_db::{
     checkpoint::write_checkpoint,
     db::Database,
@@ -94,7 +94,7 @@ fn measure_write_amplification(count: usize) -> f64 {
 
     let db =
         Database::genesis_with_wal(&wal_path).expect("INV-FERR-026: genesis_with_wal must succeed");
-    let agent = AgentId::from_bytes([2u8; 16]);
+    let node = NodeId::from_bytes([2u8; 16]);
 
     let mut logical_bytes: u64 = 0;
 
@@ -115,7 +115,7 @@ fn measure_write_amplification(count: usize) -> f64 {
         let serialized = bincode::serialize(&datom).expect("serialize datom for logical size");
         logical_bytes += serialized.len() as u64;
 
-        let tx = Transaction::new(agent)
+        let tx = Transaction::new(node)
             .assert_datom(entity, attr, val)
             .commit_unchecked();
         db.transact(tx)
@@ -250,7 +250,7 @@ fn build_store_batch(count: usize) -> Store {
 ///
 /// Write amplification = (physical WAL bytes) / (logical datom payload bytes).
 /// The WAL adds per-frame overhead (magic, version, epoch, length, CRC = 22 bytes)
-/// plus transaction metadata datoms (tx/time, tx/agent). With small datoms
+/// plus transaction metadata datoms (tx/time, tx/origin). With small datoms
 /// (~65 bytes logical), the overhead is significant but must stay below 10x.
 #[test]
 fn threshold_inv_ferr_026_write_amplification() {

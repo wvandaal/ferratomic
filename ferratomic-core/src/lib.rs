@@ -130,7 +130,7 @@
 //! # Quick Start
 //!
 //! ```rust
-//! use ferratom::{AgentId, Attribute, EntityId, Value};
+//! use ferratom::{NodeId, Attribute, EntityId, Value};
 //! use ferratomic_db::db::Database;
 //! use ferratomic_db::writer::Transaction;
 //!
@@ -138,9 +138,9 @@
 //! let db = Database::genesis();
 //!
 //! // Build a transaction (typestate: Building -> Committed)
-//! let agent = AgentId::from_bytes([1u8; 16]);
+//! let node = NodeId::from_bytes([1u8; 16]);
 //! let schema = db.schema();
-//! let tx = Transaction::new(agent)
+//! let tx = Transaction::new(node)
 //!     .assert_datom(
 //!         EntityId::from_content(b"alice"),
 //!         Attribute::from("db/doc"),
@@ -164,7 +164,7 @@
 //!
 //! ```rust,no_run
 //! use std::sync::Arc;
-//! use ferratom::{AgentId, Attribute, EntityId, Value};
+//! use ferratom::{NodeId, Attribute, EntityId, Value};
 //! use ferratomic_db::db::Database;
 //! use ferratomic_db::writer::Transaction;
 //!
@@ -172,8 +172,8 @@
 //! let db = Database::genesis();
 //!
 //! // 2. Build and commit a transaction
-//! let agent = AgentId::from_bytes([1u8; 16]);
-//! let tx = Transaction::new(agent)
+//! let node = NodeId::from_bytes([1u8; 16]);
+//! let tx = Transaction::new(node)
 //!     .assert_datom(
 //!         EntityId::from_content(b"sensor-42"),
 //!         Attribute::from("db/doc"),
@@ -194,7 +194,7 @@
 //!
 //! // Snapshot is frozen: new writes do not affect it
 //! let snap_count = snap.datoms().count();
-//! let tx2 = Transaction::new(agent)
+//! let tx2 = Transaction::new(node)
 //!     .assert_datom(
 //!         EntityId::from_content(b"sensor-43"),
 //!         Attribute::from("db/doc"),

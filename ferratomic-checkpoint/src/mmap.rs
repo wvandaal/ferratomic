@@ -121,8 +121,8 @@ mod mmap_impl {
         pub live_bits_len: u64,
         /// Store epoch at checkpoint time.
         pub epoch: u64,
-        /// Genesis agent identity bytes.
-        pub genesis_agent: [u8; 16],
+        /// Genesis node identity bytes.
+        pub genesis_node: [u8; 16],
         /// Bincode-serialized `Vec<(String, AttributeDef)>` schema.
         pub schema_bytes: Vec<u8>,
     }
@@ -289,7 +289,7 @@ mod mmap_impl {
         datoms: &[Datom],
         live_bits: &BitVec<u64, Lsb0>,
         epoch: u64,
-        genesis_agent: [u8; 16],
+        genesis_node: [u8; 16],
         schema_bytes: &[u8],
     ) -> Result<Vec<u8>, FerraError> {
         // Serialize datoms as bincode Vec<WireDatom> — ADR-FERR-010 boundary
@@ -312,7 +312,7 @@ mod mmap_impl {
                 ))
             })?,
             epoch,
-            genesis_agent,
+            genesis_node,
             schema_bytes: schema_bytes.to_vec(),
         };
 
@@ -435,7 +435,7 @@ mod tests {
             positional.datoms(),
             &live_bits,
             42,        // epoch
-            [7u8; 16], // genesis_agent
+            [7u8; 16], // genesis_node
             &schema_bytes,
         )
         .expect("INV-FERR-070: mmap serialize must succeed");

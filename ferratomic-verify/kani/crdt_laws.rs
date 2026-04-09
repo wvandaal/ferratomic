@@ -5,7 +5,7 @@
 
 use std::collections::BTreeSet;
 
-use ferratom::{AgentId, Attribute, Datom, EntityId, Value};
+use ferratom::{Attribute, Datom, EntityId, NodeId, Value};
 use ferratomic_db::{merge::merge, store::Store, writer::Transaction};
 
 use super::helpers::{concrete_datom, concrete_datom_set};
@@ -148,12 +148,12 @@ fn convergence_under_merge() {
 #[cfg_attr(not(kani), ignore = "requires Kani verifier")]
 fn store_transact_monotonic_growth() {
     let mut store = Store::genesis();
-    let agent = AgentId::from_bytes([1u8; 16]);
+    let node = NodeId::from_bytes([1u8; 16]);
 
     let len_0 = store.len();
 
     // First transaction
-    let tx1 = Transaction::new(agent)
+    let tx1 = Transaction::new(node)
         .assert_datom(
             EntityId::from_content(b"kani-mono-1"),
             Attribute::from("db/doc"),
@@ -169,7 +169,7 @@ fn store_transact_monotonic_growth() {
     );
 
     // Second transaction
-    let tx2 = Transaction::new(agent)
+    let tx2 = Transaction::new(node)
         .assert_datom(
             EntityId::from_content(b"kani-mono-2"),
             Attribute::from("db/doc"),

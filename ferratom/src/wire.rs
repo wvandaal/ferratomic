@@ -7,7 +7,7 @@
 //! cross the trust boundary via `into_trusted()` (local integrity-verified
 //! storage) or `into_verified()` (Phase 4c: cryptographic proof).
 //!
-//! Provenance-independent types (`Op`, `Attribute`, `TxId`, `AgentId`,
+//! Provenance-independent types (`Op`, `Attribute`, `TxId`, `NodeId`,
 //! schema types) derive `Deserialize` directly because they contain no
 //! content-addressed identity and cannot smuggle unverified `EntityId`s.
 //!
@@ -24,7 +24,7 @@ use crate::{
     clock::TxId,
     datom::{Attribute, EntityId, NonNanFloat, Op, Value},
     schema::AttributeDef,
-    AgentId, Datom,
+    Datom, NodeId,
 };
 
 // ---------------------------------------------------------------------------
@@ -133,7 +133,7 @@ pub struct WireDatom {
     attribute: Attribute,
     /// Value (may contain unverified `WireEntityId` via `Ref`).
     value: WireValue,
-    /// Transaction ID (safe — just integers + agent bytes).
+    /// Transaction ID (safe — just integers + node bytes).
     tx: TxId,
     /// Assert or Retract (safe — enum).
     op: Op,
@@ -191,8 +191,8 @@ impl WireDatom {
 pub struct WireCheckpointPayload {
     /// Schema attributes (sorted by name for determinism).
     schema: Vec<(String, AttributeDef)>,
-    /// Genesis agent identity.
-    genesis_agent: AgentId,
+    /// Genesis node identity.
+    genesis_node: NodeId,
     /// All datoms in wire format.
     datoms: Vec<WireDatom>,
 }
@@ -202,12 +202,12 @@ impl WireCheckpointPayload {
     #[must_use]
     pub fn new(
         schema: Vec<(String, AttributeDef)>,
-        genesis_agent: AgentId,
+        genesis_node: NodeId,
         datoms: Vec<WireDatom>,
     ) -> Self {
         Self {
             schema,
-            genesis_agent,
+            genesis_node,
             datoms,
         }
     }
@@ -218,10 +218,10 @@ impl WireCheckpointPayload {
         &self.schema
     }
 
-    /// Genesis agent identity.
+    /// Genesis node identity.
     #[must_use]
-    pub fn genesis_agent(&self) -> AgentId {
-        self.genesis_agent
+    pub fn genesis_node(&self) -> NodeId {
+        self.genesis_node
     }
 
     /// All datoms in wire format.
@@ -233,10 +233,10 @@ impl WireCheckpointPayload {
     /// Consume and return owned components for checkpoint reconstruction.
     ///
     /// ADR-FERR-010: Used by checkpoint deserialization to take ownership
-    /// of the schema, genesis agent, and datoms without cloning.
+    /// of the schema, genesis node, and datoms without cloning.
     #[must_use]
-    pub fn into_parts(self) -> (Vec<(String, AttributeDef)>, AgentId, Vec<WireDatom>) {
-        (self.schema, self.genesis_agent, self.datoms)
+    pub fn into_parts(self) -> (Vec<(String, AttributeDef)>, NodeId, Vec<WireDatom>) {
+        (self.schema, self.genesis_node, self.datoms)
     }
 }
 

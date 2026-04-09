@@ -10,7 +10,7 @@ description = "Core types for Ferratomic: Datom, EntityId, Attribute, Value, TxI
 # Algebraic role: FREE objects (no imposed structure).
 
 [features]
-# Enables EntityId::from_bytes() and AgentId::from_seed() for testing.
+# Enables EntityId::from_bytes() and NodeId::from_seed() for testing.
 # Production code must use EntityId::from_content() (INV-FERR-012).
 test-utils = ["ferratom-clock/test-utils"]
 

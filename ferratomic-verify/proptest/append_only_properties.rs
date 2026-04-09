@@ -5,7 +5,7 @@
 
 use std::{collections::BTreeSet, sync::Arc};
 
-use ferratom::{AgentId, Attribute, Datom, EntityId, Op, TxId, Value};
+use ferratom::{Attribute, Datom, EntityId, NodeId, Op, TxId, Value};
 use ferratomic_db::{store::Store, writer::Transaction};
 use proptest::prelude::*;
 
@@ -27,13 +27,13 @@ proptest! {
         triples in prop::collection::vec(arb_genesis_triple(), 1..5),
     ) {
         let mut store = Store::genesis();
-        let agent = AgentId::from_bytes([1u8; 16]);
+        let node = NodeId::from_bytes([1u8; 16]);
         let mut prev_len = store.len();
 
         for i in 0..tx_count {
             let idx = i % triples.len();
             let (entity, attr, val) = &triples[idx];
-            let tx = Transaction::new(agent)
+            let tx = Transaction::new(node)
                 .assert_datom(*entity, attr.clone(), val.clone())
                 .commit_unchecked();
 
@@ -112,18 +112,18 @@ proptest! {
         entity_seed in any::<[u8; 32]>(),
     ) {
         let mut store = Store::genesis();
-        let agent = AgentId::from_bytes([5u8; 16]);
+        let node = NodeId::from_bytes([5u8; 16]);
         let entity = EntityId::from_bytes(entity_seed);
 
         // Assert a fact.
-        let tx1 = Transaction::new(agent)
+        let tx1 = Transaction::new(node)
             .assert_datom(entity, Attribute::from("db/doc"), Value::String(Arc::from("hello")))
             .commit_unchecked();
         store.transact_test(tx1).unwrap();
         let len_after_assert = store.len();
 
         // Retract the same fact.
-        let tx2 = Transaction::new(agent)
+        let tx2 = Transaction::new(node)
             .retract_datom(entity, Attribute::from("db/doc"), Value::String(Arc::from("hello")))
             .commit_unchecked();
         store.transact_test(tx2).unwrap();

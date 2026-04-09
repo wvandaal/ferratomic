@@ -130,7 +130,7 @@ Phase N+1 CANNOT begin until Phase N passes isomorphism check. Gaps between spec
 ### Crate Map
 
 ```
-ferratom-clock/     Leaf: HLC, TxId, AgentId, Frontier (ZERO project deps)
+ferratom-clock/     Leaf: HLC, TxId, NodeId, Frontier (ZERO project deps)
 ferratom/           Leaf: Datom, EntityId, Value, Schema, Wire types
 ferratomic-tx/      Leaf: Transaction typestate builder (depends on ferratom)
 ferratomic-storage/ Leaf: StorageBackend trait, FsBackend, InMemoryBackend (depends on ferratom)

@@ -8,7 +8,7 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use ferratom::{AgentId, Datom};
+use ferratom::{Datom, NodeId};
 
 use crate::store::{Snapshot, Store};
 
@@ -200,7 +200,7 @@ fn full_store_catchup(store: &Store) -> Vec<Datom> {
 /// last observed epoch. Epochs never regress. This is enforced by
 /// `AtomicU64::fetch_max` on every observation.
 ///
-/// `Observer` is `Send + Sync` by construction: `AgentId` is `Copy`
+/// `Observer` is `Send + Sync` by construction: `NodeId` is `Copy`
 /// and `AtomicU64` is the standard thread-safe counter.
 ///
 /// # Visibility
@@ -208,22 +208,22 @@ fn full_store_catchup(store: &Store) -> Vec<Datom> {
 /// `pub` because verification tests in `ferratomic-verify` exercise
 /// observer monotonicity properties (INV-FERR-011 conformance testing).
 pub struct Observer {
-    /// The agent identity of this observer.
-    agent: AgentId,
+    /// The node identity of this observer.
+    node: NodeId,
     /// The highest epoch this observer has seen.
     /// Uses `AtomicU64` for thread-safe monotonic tracking.
     last_epoch: AtomicU64,
 }
 
 impl Observer {
-    /// Create a new observer for the given agent.
+    /// Create a new observer for the given node.
     ///
     /// INV-FERR-011: The observer starts at epoch 0. The first
     /// `observe()` call will advance to the store's current epoch.
     #[must_use]
-    pub fn new(agent: AgentId) -> Self {
+    pub fn new(node: NodeId) -> Self {
         Self {
-            agent,
+            node,
             last_epoch: AtomicU64::new(0),
         }
     }
@@ -258,13 +258,13 @@ impl Observer {
         snap
     }
 
-    /// The agent identity of this observer.
+    /// The node identity of this observer.
     ///
     /// INV-FERR-011: identity is fixed at construction time and
     /// never changes over the observer's lifetime.
     #[must_use]
-    pub fn agent(&self) -> AgentId {
-        self.agent
+    pub fn node(&self) -> NodeId {
+        self.node
     }
 
     /// The highest epoch this observer has seen.
@@ -329,7 +329,7 @@ mod tests {
     }
 
     fn transact_doc(store: &mut Store, seed: u8) {
-        let tx = Transaction::new(AgentId::from_bytes([seed; 16]))
+        let tx = Transaction::new(NodeId::from_bytes([seed; 16]))
             .assert_datom(
                 EntityId::from_content(&[seed]),
                 Attribute::from("db/doc"),
@@ -391,7 +391,7 @@ mod tests {
     #[test]
     fn test_observer_observe_tracks_monotonic_epoch() {
         let mut store = Store::genesis();
-        let observer = Observer::new(AgentId::from_bytes([9u8; 16]));
+        let observer = Observer::new(NodeId::from_bytes([9u8; 16]));
 
         assert_eq!(observer.last_epoch(), 0);
         transact_doc(&mut store, 1);

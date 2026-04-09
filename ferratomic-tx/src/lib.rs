@@ -7,7 +7,7 @@
 //! ## Dependency DAG
 //!
 //! Leaf crate. Depends only on `ferratom` (for `Datom`, `EntityId`,
-//! `Attribute`, `Value`, `AgentId`, `Schema`). Consumed by
+//! `Attribute`, `Value`, `NodeId`, `Schema`). Consumed by
 //! `ferratomic-store` to feed validated datom batches into the CRDT.
 //!
 //! ## Key Types
@@ -37,11 +37,11 @@
 //! # Example
 //!
 //! ```rust
-//! use ferratom::{AgentId, Attribute, EntityId, Value};
+//! use ferratom::{NodeId, Attribute, EntityId, Value};
 //! use ferratomic_tx::Transaction;
 //!
-//! let agent = AgentId::from_bytes([0u8; 16]);
-//! let tx = Transaction::new(agent)
+//! let node = NodeId::from_bytes([0u8; 16]);
+//! let tx = Transaction::new(node)
 //!     .assert_datom(
 //!         EntityId::from_content(b"e1"),
 //!         Attribute::from("db/doc"),
@@ -60,7 +60,7 @@ mod validate;
 use std::marker::PhantomData;
 
 pub use commit::TxValidationError;
-use ferratom::{AgentId, Attribute, Datom, EntityId, Op, TxId, Value};
+use ferratom::{Attribute, Datom, EntityId, NodeId, Op, TxId, Value};
 
 #[cfg(test)]
 mod tests;
@@ -106,8 +106,8 @@ pub struct Committed;
 /// [`Committed`] (sealed). The phantom data ensures zero runtime cost.
 #[derive(Debug)]
 pub struct Transaction<S> {
-    /// The agent that authored this transaction.
-    agent: AgentId,
+    /// The node that authored this transaction.
+    node: NodeId,
     /// The datoms accumulated in this transaction.
     datoms: Vec<Datom>,
     /// Zero-size typestate marker.
@@ -119,14 +119,14 @@ pub struct Transaction<S> {
 // ---------------------------------------------------------------------------
 
 impl Transaction<Building> {
-    /// Create a new transaction for the given agent.
+    /// Create a new transaction for the given node.
     ///
     /// The transaction starts empty. Add datoms via [`assert_datom`](Self::assert_datom),
     /// then seal with [`commit`](Self::commit) or `commit_unchecked` (requires `test-utils`).
     #[must_use]
-    pub fn new(agent: AgentId) -> Self {
+    pub fn new(node: NodeId) -> Self {
         Self {
-            agent,
+            node,
             datoms: Vec::new(),
             _state: PhantomData,
         }
@@ -141,7 +141,7 @@ impl Transaction<Building> {
     /// Consumes and returns `self` for builder-style chaining.
     #[must_use]
     pub fn assert_datom(mut self, entity: EntityId, attribute: Attribute, value: Value) -> Self {
-        let placeholder_tx = TxId::with_agent(0, 0, AgentId::from_bytes([0u8; 16]));
+        let placeholder_tx = TxId::with_node(0, 0, NodeId::from_bytes([0u8; 16]));
         let datom = Datom::new(entity, attribute, value, placeholder_tx, Op::Assert);
         self.datoms.push(datom);
         self
@@ -159,7 +159,7 @@ impl Transaction<Building> {
     /// Consumes and returns `self` for builder-style chaining.
     #[must_use]
     pub fn retract_datom(mut self, entity: EntityId, attribute: Attribute, value: Value) -> Self {
-        let placeholder_tx = TxId::with_agent(0, 0, AgentId::from_bytes([0u8; 16]));
+        let placeholder_tx = TxId::with_node(0, 0, NodeId::from_bytes([0u8; 16]));
         let datom = Datom::new(entity, attribute, value, placeholder_tx, Op::Retract);
         self.datoms.push(datom);
         self

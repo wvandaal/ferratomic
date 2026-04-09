@@ -127,6 +127,10 @@ Compile all findings into a defect register. Every finding gets a record.
   safe API, mission-critical, and ADR-documented per GOALS.md §6.2?
 - **Regression discipline**: Does every fixed bug have a regression test?
   Does every fuzz crash have a seed corpus entry?
+- **Decision Quality (GOALS.md §7)**: Non-trivial design decisions must have
+  a six-dimension score. Missing score = finding. Verify Accretiveness is
+  forward-looking
+  (merely avoiding breakage). See GOALS.md §7 for the full framework.
 
 ---
 
@@ -155,7 +159,7 @@ Severity levels:
 
 ### [CRITICAL] DEFECT-001: merge drops datoms when stores share entity IDs
 
-**Location**: `ferratomic-core/src/merge.rs:38`
+**Location**: `ferratomic-store/src/merge.rs:38`
 **Traces to**: INV-FERR-001
 **Evidence**: When both stores contain datoms for entity `e1` but with
 different attributes, the merge deduplicates by entity ID instead of
@@ -167,7 +171,7 @@ store B has `[e1, "age", ...]`. After merge, only one survives.
 
 ### [MAJOR] DEFECT-002: WAL fsync ordering not enforced on ext4
 
-**Location**: `ferratomic-core/src/wal.rs:91`
+**Location**: `ferratomic-wal/src/wal.rs:91`
 **Traces to**: INV-FERR-008
 **Evidence**: The code calls `file.sync_all()` but does not fsync the
 parent directory. On ext4 with `data=writeback`, the WAL entry may not
@@ -177,7 +181,7 @@ be durable before the snapshot references it.
 
 ### [MINOR] DEFECT-003: Clone in merge loop where borrow suffices
 
-**Location**: `ferratomic-core/src/merge.rs:45`
+**Location**: `ferratomic-store/src/merge.rs:45`
 **Traces to**: INV-FERR-025 (performance)
 **Evidence**: `datom.clone()` inside the merge loop allocates for every
 datom in the smaller store. BTreeSet::insert takes ownership, but we

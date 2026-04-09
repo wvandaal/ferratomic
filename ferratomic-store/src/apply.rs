@@ -22,7 +22,7 @@
 
 use std::sync::Arc;
 
-use ferratom::{AgentId, Attribute, Datom, FerraError};
+use ferratom::{Attribute, Datom, FerraError, NodeId};
 use ferratomic_positional::{merge_sort_dedup, PositionalStore};
 use ferratomic_tx::{Committed, Transaction};
 
@@ -101,16 +101,16 @@ impl Store {
     /// transactions, but defended against per NEG-FERR-001).
     /// HI-011: `tx_id` is provided by the caller (`Database::transact` ticks
     /// the `HybridClock` under the write lock). This replaces the previous
-    /// `TxId::with_agent(epoch, 0, agent)` which used epoch-as-physical --
+    /// `TxId::with_node(epoch, 0, node)` which used epoch-as-physical --
     /// breaking INV-FERR-015 (HLC monotonicity) and INV-FERR-016 (causality).
     pub fn transact(
         &mut self,
         transaction: Transaction<Committed>,
         tx_id: ferratom::TxId,
     ) -> Result<TxReceipt, FerraError> {
-        // INV-FERR-020: read agent FIRST, then consume the transaction via
+        // INV-FERR-020: read node FIRST, then consume the transaction via
         // into_datoms(). Ownership transfer enforces single-application.
-        let agent = transaction.agent();
+        let node = transaction.node();
         let datoms = transaction.into_datoms();
         if datoms.is_empty() {
             return Err(FerraError::EmptyTransaction);
@@ -127,7 +127,7 @@ impl Store {
 
         // INV-FERR-015: stamp datoms with HLC-derived TxId + append tx metadata.
         let mut all_datoms = stamp_datoms(datoms, tx_id);
-        all_datoms.extend(create_tx_metadata(self.epoch, agent, tx_id));
+        all_datoms.extend(create_tx_metadata(self.epoch, node, tx_id));
 
         // INV-FERR-009: evolve schema from schema-defining datoms.
         crate::schema_evolution::evolve_schema(&mut self.schema, &all_datoms)?;
@@ -206,7 +206,7 @@ impl Store {
         &mut self,
         transaction: Transaction<Committed>,
     ) -> Result<TxReceipt, FerraError> {
-        let agent = transaction.agent();
+        let node = transaction.node();
         let next_epoch =
             self.epoch
                 .checked_add(1)
@@ -214,7 +214,7 @@ impl Store {
                     invariant: "INV-FERR-007".to_string(),
                     details: "epoch overflow in transact_test".to_string(),
                 })?;
-        let tx_id = ferratom::TxId::with_agent(next_epoch, 0, agent);
+        let tx_id = ferratom::TxId::with_node(next_epoch, 0, node);
         self.transact(transaction, tx_id)
     }
 
@@ -259,12 +259,12 @@ impl Store {
                         details: "epoch counter overflow in batch".to_string(),
                     })?;
 
-            // INV-FERR-020: read agent from TxId for metadata.
-            let agent = tx_id.agent();
+            // INV-FERR-020: read node from TxId for metadata.
+            let node = tx_id.node();
 
             // INV-FERR-015: stamp datoms with HLC-derived TxId.
             let mut tx_datoms = stamp_datoms(datoms, tx_id);
-            tx_datoms.extend(create_tx_metadata(self.epoch, agent, tx_id));
+            tx_datoms.extend(create_tx_metadata(self.epoch, node, tx_id));
 
             // INV-FERR-009: schema evolution per transaction boundary.
             crate::schema_evolution::evolve_schema(&mut self.schema, &tx_datoms)?;
@@ -369,14 +369,14 @@ fn stamp_datoms(datoms: Vec<Datom>, tx_id: ferratom::TxId) -> Vec<Datom> {
         .collect()
 }
 
-/// INV-FERR-004: Create :tx/time and :tx/agent metadata datoms that
+/// INV-FERR-004: Create :tx/time and :tx/origin metadata datoms that
 /// guarantee strict growth (every transaction adds at least 2 datoms).
-fn create_tx_metadata(epoch: u64, agent: AgentId, tx_id: ferratom::TxId) -> Vec<Datom> {
-    // P1-003: Use full agent bytes for tx_entity derivation, not just
-    // first byte. Prevents collision when two agents share the same
+fn create_tx_metadata(epoch: u64, node: NodeId, tx_id: ferratom::TxId) -> Vec<Datom> {
+    // P1-003: Use full node bytes for tx_entity derivation, not just
+    // first byte. Prevents collision when two nodes share the same
     // first byte but differ in subsequent bytes.
     let mut tx_content = format!("tx-{epoch}-").into_bytes();
-    tx_content.extend_from_slice(agent.as_bytes());
+    tx_content.extend_from_slice(node.as_bytes());
     let tx_entity = ferratom::EntityId::from_content(&tx_content);
     // Derive tx wall-clock from HLC physical component (deterministic,
     // no SystemTime dependency).  Overflow from u64->i64 is safe: the
@@ -393,8 +393,8 @@ fn create_tx_metadata(epoch: u64, agent: AgentId, tx_id: ferratom::TxId) -> Vec<
         ),
         Datom::new(
             tx_entity,
-            Attribute::from("tx/agent"),
-            ferratom::Value::Ref(ferratom::EntityId::from_content(agent.as_bytes())),
+            Attribute::from("tx/origin"),
+            ferratom::Value::Ref(ferratom::EntityId::from_content(node.as_bytes())),
             tx_id,
             ferratom::Op::Assert,
         ),
@@ -409,7 +409,7 @@ fn create_tx_metadata(epoch: u64, agent: AgentId, tx_id: ferratom::TxId) -> Vec<
 mod tests {
     use std::{collections::BTreeSet, sync::Arc};
 
-    use ferratom::{AgentId, Attribute, EntityId, Op, TxId, Value};
+    use ferratom::{Attribute, EntityId, NodeId, Op, TxId, Value};
     use ferratomic_tx::Transaction;
 
     use super::*;
@@ -498,7 +498,7 @@ mod tests {
 
         let mut a = Store::genesis();
         // Transact to advance epoch to 1
-        let tx = Transaction::new(AgentId::from_bytes([1u8; 16]))
+        let tx = Transaction::new(NodeId::from_bytes([1u8; 16]))
             .assert_datom(
                 EntityId::from_content(b"e1"),
                 Attribute::from("db/doc"),
@@ -523,8 +523,8 @@ mod tests {
     #[test]
     fn test_bug_bd_1n6_transact_stamps_real_tx_id() {
         let mut store = Store::genesis();
-        let agent = AgentId::from_bytes([42u8; 16]);
-        let tx = Transaction::new(agent)
+        let node = NodeId::from_bytes([42u8; 16]);
+        let tx = Transaction::new(node)
             .assert_datom(
                 EntityId::from_content(b"e1"),
                 Attribute::from("db/doc"),
@@ -546,12 +546,12 @@ mod tests {
             );
         }
 
-        // The tx should carry the agent we specified.
+        // The tx should carry the node we specified.
         let last_datom = store.datoms().last().expect("store not empty");
         assert_eq!(
-            last_datom.tx().agent(),
-            agent,
-            "bd-1n6: TxId agent must match transaction agent"
+            last_datom.tx().node(),
+            node,
+            "bd-1n6: TxId node must match transaction node"
         );
 
         // Epoch should be in the TxId physical component.
@@ -563,15 +563,15 @@ mod tests {
     }
 
     /// Helper: evolve a store's schema by adding a new attribute with the given
-    /// ident, value-type keyword, and agent byte.
+    /// ident, value-type keyword, and node byte.
     fn evolve_schema(
         store: &mut Store,
         content_seed: &[u8],
         ident: &str,
         value_type: &str,
-        agent_byte: u8,
+        node_byte: u8,
     ) {
-        let tx = Transaction::new(AgentId::from_bytes([agent_byte; 16]))
+        let tx = Transaction::new(NodeId::from_bytes([node_byte; 16]))
             .assert_datom(
                 EntityId::from_content(content_seed),
                 Attribute::from("db/ident"),

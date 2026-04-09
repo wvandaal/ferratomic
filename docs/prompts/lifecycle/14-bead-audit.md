@@ -551,8 +551,8 @@ listed in the Files section.
 If the bead creates a new module or type, it states: which module declares it,
 which modules import it, and whether it's re-exported from `lib.rs`.
 
-- PASS: "Declare `PositionalStore` in `ferratomic-core/src/positional.rs`.
-  Re-export from `ferratomic-core/src/lib.rs`. Import in `store/mod.rs`."
+- PASS: "Declare `PositionalStore` in `ferratomic-positional/src/lib.rs`.
+  Re-export from crate root. Import in `ferratomic-store/src/mod.rs`."
 - FAIL: "Add the PositionalStore type" — agent must decide where to put it
 
 For beads that do not touch Rust types (docs, Lean proofs, pure config changes),
@@ -569,6 +569,8 @@ Does this bead serve True North?
 - Does the work strengthen a named invariant?
 - Does the work directly advance the current phase?
 - Is there a credible path from this bead to a user-visible capability?
+
+**GOALS.md §7 check**: Design-decision beads must have a six-dimension score. Missing score = finding.
 
 A bead that passes all 8 lenses is lab-grade. Record the lens results.
 
@@ -983,7 +985,7 @@ None — leaf task, no structural prerequisites.
 
 ## Frame Conditions
 1. Test logic must not change — only the case count configuration.
-2. No changes to ferratomic-core or ferratom (this is verify-only).
+2. No changes to workspace crates (this is verify-only).
 3. Existing test assertions must remain identical.
 
 ## Refinement Sketch
@@ -1044,7 +1046,7 @@ to OrdMap when mutated."
 ```
 ## Pseudocode Contract
 
-// --- ferratomic-core/src/store/adaptive.rs (NEW) ---
+// --- ferratomic-store/src/adaptive.rs (NEW) ---
 
 /// Two-mode index storage: sorted arrays for cold start, OrdMap for mutation.
 /// INV-FERR-072: promotion preserves datom set and query results.
@@ -1083,7 +1085,7 @@ impl AdaptiveIndexes {
     }
 }
 
-// --- ferratomic-core/src/store/mod.rs (MODIFIED) ---
+// --- ferratomic-store/src/mod.rs (MODIFIED) ---
 
 impl Store {
     /// Was: pub fn indexes(&self) -> &Indexes

@@ -19,7 +19,7 @@
 //!
 //! ```rust,no_run
 //! use std::sync::Arc;
-//! use ferratom::{AgentId, Attribute, EntityId, Value};
+//! use ferratom::{NodeId, Attribute, EntityId, Value};
 //! use ferratomic_db::db::Database;
 //! use ferratomic_db::writer::Transaction;
 //! use ferratomic_db::store::Store;
@@ -28,10 +28,10 @@
 //! // Create two independent replicas from genesis.
 //! let db_a = Database::genesis();
 //! let db_b = Database::genesis();
-//! let agent = AgentId::from_bytes([1u8; 16]);
+//! let node = NodeId::from_bytes([1u8; 16]);
 //!
 //! // Replica A records a temperature reading.
-//! let tx_a = Transaction::new(agent)
+//! let tx_a = Transaction::new(node)
 //!     .assert_datom(
 //!         EntityId::from_content(b"sensor-1"),
 //!         Attribute::from("db/doc"),
@@ -42,7 +42,7 @@
 //! db_a.transact(tx_a).unwrap();
 //!
 //! // Replica B records a humidity reading.
-//! let tx_b = Transaction::new(agent)
+//! let tx_b = Transaction::new(node)
 //!     .assert_datom(
 //!         EntityId::from_content(b"sensor-2"),
 //!         Attribute::from("db/doc"),
@@ -112,7 +112,7 @@ struct SchemaMergeResult {
 ///
 /// INV-FERR-009: schemas are unioned (all attributes from both stores).
 /// INV-FERR-007: epoch is `max(a.epoch, b.epoch)`.
-/// HI-014: genesis agent is `min(a.genesis_agent, b.genesis_agent)`.
+/// HI-014: genesis node is `min(a.genesis_node, b.genesis_node)`.
 ///
 /// INV-FERR-043: conflicting schema definitions (same attribute, different
 /// type/cardinality) are resolved deterministically by keeping the
@@ -159,7 +159,7 @@ impl Store {
         let positional = merge_repr(&a.repr, &b.repr);
         let schema_merge = merge_schemas(&a.schema, &b.schema);
         let epoch = a.epoch.max(b.epoch);
-        let genesis_agent = std::cmp::min(a.genesis_agent, b.genesis_agent);
+        let genesis_node = std::cmp::min(a.genesis_node, b.genesis_node);
         // INV-FERR-029: merge causal LIVE lattices via per-key max(TxId).
         // O(min(|L_A|, |L_B|)) via im::OrdMap union -- replaces the O(N) full
         // rebuild through build_live_causal(datoms.iter()).
@@ -170,7 +170,7 @@ impl Store {
             repr: StoreRepr::Positional(Arc::new(positional)),
             schema: schema_merge.schema,
             epoch,
-            genesis_agent,
+            genesis_node,
             live_causal,
             live_set,
             schema_conflicts: schema_merge.conflicts,

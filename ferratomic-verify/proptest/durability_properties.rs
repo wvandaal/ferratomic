@@ -7,7 +7,7 @@
 
 use std::{collections::BTreeSet, sync::Arc};
 
-use ferratom::{AgentId, Attribute, EntityId, Value};
+use ferratom::{Attribute, EntityId, NodeId, Value};
 use ferratomic_db::{
     checkpoint::{load_checkpoint, write_checkpoint, write_checkpoint_to_writer},
     db::Database,
@@ -37,13 +37,13 @@ fn build_store_with_retractions(
     assert_batches: &[Vec<(EntityId, Attribute, Value)>],
     retract_fraction: f64,
 ) -> Store {
-    let agent = AgentId::from_bytes([75u8; 16]);
+    let node = NodeId::from_bytes([75u8; 16]);
     let mut store = Store::genesis();
 
     // Phase 1: assert datoms.
     let mut asserted: Vec<(EntityId, Attribute, Value)> = Vec::new();
     for batch in assert_batches {
-        let mut tx = Transaction::new(agent);
+        let mut tx = Transaction::new(node);
         for (entity, attr, val) in batch {
             tx = tx.assert_datom(*entity, attr.clone(), val.clone());
             asserted.push((*entity, attr.clone(), val.clone()));
@@ -55,7 +55,7 @@ fn build_store_with_retractions(
     // Phase 2: retract some datoms (deterministic selection based on fraction).
     let retract_count = (asserted.len() as f64 * retract_fraction) as usize;
     if retract_count > 0 {
-        let mut tx = Transaction::new(agent);
+        let mut tx = Transaction::new(node);
         for (entity, attr, val) in asserted.iter().take(retract_count) {
             tx = tx.retract_datom(*entity, attr.clone(), val.clone());
         }
@@ -75,10 +75,10 @@ proptest! {
         tx_batches in arb_transactions(10),
     ) {
         let mut store = Store::genesis();
-        let agent = AgentId::from_bytes([42u8; 16]);
+        let node = NodeId::from_bytes([42u8; 16]);
 
         for batch in &tx_batches {
-            let mut tx = Transaction::new(agent);
+            let mut tx = Transaction::new(node);
             for (entity, attr, val) in batch {
                 tx = tx.assert_datom(*entity, attr.clone(), val.clone());
             }
@@ -134,11 +134,11 @@ proptest! {
         // Write transactions via WAL-backed database.
         {
             let db = Database::genesis_with_wal(&wal_path).unwrap();
-            let agent = AgentId::from_bytes([99u8; 16]);
+            let node = NodeId::from_bytes([99u8; 16]);
             let schema = db.schema();
 
             for batch in &tx_batches {
-                let mut tx = Transaction::new(agent);
+                let mut tx = Transaction::new(node);
                 for (entity, attr, val) in batch {
                     tx = tx.assert_datom(*entity, attr.clone(), val.clone());
                 }
@@ -195,12 +195,12 @@ proptest! {
 
         {
             let db = Database::genesis_with_wal(&wal_path).unwrap();
-            let agent = AgentId::from_bytes([77u8; 16]);
+            let node = NodeId::from_bytes([77u8; 16]);
             let schema = db.schema();
 
             // Pre-checkpoint transactions.
             for batch in &pre_chkp {
-                let mut tx = Transaction::new(agent);
+                let mut tx = Transaction::new(node);
                 for (entity, attr, val) in batch {
                     tx = tx.assert_datom(*entity, attr.clone(), val.clone());
                 }
@@ -220,7 +220,7 @@ proptest! {
 
             // Post-checkpoint transactions.
             for batch in &post_chkp {
-                let mut tx = Transaction::new(agent);
+                let mut tx = Transaction::new(node);
                 for (entity, attr, val) in batch {
                     tx = tx.assert_datom(*entity, attr.clone(), val.clone());
                 }
@@ -278,12 +278,12 @@ proptest! {
         tx_batches in arb_transactions(5),
     ) {
         let backend = InMemoryBackend::new();
-        let agent = AgentId::from_bytes([24u8; 16]);
+        let node = NodeId::from_bytes([24u8; 16]);
 
         // Build a store with some transactions.
         let mut store = Store::genesis();
         for batch in &tx_batches {
-            let mut tx = Transaction::new(agent);
+            let mut tx = Transaction::new(node);
             for (entity, attr, val) in batch {
                 tx = tx.assert_datom(*entity, attr.clone(), val.clone());
             }
@@ -332,12 +332,12 @@ proptest! {
         tx_batches in arb_transactions(8),
     ) {
         let dir = tempfile::TempDir::new().expect("tempdir");
-        let agent = AgentId::from_bytes([28u8; 16]);
+        let node = NodeId::from_bytes([28u8; 16]);
 
         // Build a store with transactions.
         let mut store = Store::genesis();
         for batch in &tx_batches {
-            let mut tx = Transaction::new(agent);
+            let mut tx = Transaction::new(node);
             for (entity, attr, val) in batch {
                 tx = tx.assert_datom(*entity, attr.clone(), val.clone());
             }

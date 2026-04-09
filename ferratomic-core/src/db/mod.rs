@@ -155,7 +155,7 @@ impl Database<Opening> {
     /// enforces that `snapshot()` and `transact()` are unavailable until
     /// `finish()` is called, making invalid state transitions compile errors.
     fn build_opening(store: Store, wal: Option<crate::wal::Wal>) -> Self {
-        let agent = store.genesis_agent();
+        let node = store.genesis_node();
         Self {
             current: ArcSwap::from_pointee(store),
             write_lock: Mutex::new(()),
@@ -165,7 +165,7 @@ impl Database<Opening> {
                 &crate::backpressure::BackpressurePolicy::default(),
             ),
             transaction_count: AtomicU64::new(0),
-            clock: Mutex::new(HybridClock::new(agent)),
+            clock: Mutex::new(HybridClock::new(node)),
             _state: PhantomData,
         }
     }
@@ -265,21 +265,21 @@ impl Database<Ready> {
         store.epoch()
     }
 
-    /// Access the genesis agent identity.
+    /// Access the genesis node identity.
     ///
-    /// HI-014: the genesis agent is `min(a.genesis_agent, b.genesis_agent)`
+    /// HI-014: the genesis node is `min(a.genesis_node, b.genesis_node)`
     /// across all merge ancestors. For single-node databases, this is the
-    /// agent that created the genesis store.
+    /// node that created the genesis store.
     #[must_use]
-    pub fn genesis_agent(&self) -> ferratom::AgentId {
+    pub fn genesis_node(&self) -> ferratom::NodeId {
         let store = self.current.load();
-        store.genesis_agent()
+        store.genesis_node()
     }
 
     /// Obtain a clone of the current Store suitable for checkpoint serialization.
     ///
     /// INV-FERR-013: the returned `Store` faithfully represents the database's
-    /// current state — epoch, schema, `genesis_agent`, datom set, and LIVE
+    /// current state — epoch, schema, `genesis_node`, datom set, and LIVE
     /// metadata. Callers pass this to `write_checkpoint` for durable
     /// persistence. The clone is O(n) for both representations
     /// (`Positional` clones contiguous arrays; `OrdMap` uses structural

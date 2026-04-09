@@ -122,13 +122,22 @@ the proptest strategy, and the Lean theorem for every single invariant.
 ## Crate Map (for orientation)
 
 ```
-ferratom/           Core types. Datom, EntityId, Value, Schema. ZERO deps.
-ferratomic-core/    Engine. Store, indexes, WAL, snapshots, merge.
-ferratomic-datalog/ Query. Datalog parser + evaluator.
-ferratomic-verify/  Proofs + tests. Lean 4, proptest, Kani, Stateright.
+ferratom-clock/         Leaf: HLC, TxId, AgentId, Frontier (ZERO project deps)
+ferratom/               Leaf: Datom, EntityId, Value, Schema, Wire types
+ferratomic-tx/          Leaf: Transaction typestate builder
+ferratomic-storage/     Leaf: StorageBackend trait, FsBackend, InMemoryBackend
+ferratomic-wal/         Leaf: WAL frames, CRC32, fsync, recovery
+ferratomic-index/       Leaf: Index key types, IndexBackend trait, SortedVecBackend
+ferratomic-positional/  PositionalStore, Bloom, CHD, Eytzinger, LIVE bitvector
+ferratomic-checkpoint/  BLAKE3 snapshots, V3/LIVE-first format, mmap
+ferratomic-store/       CRDT algebra: Store = (P(D), union), merge, transact, LIVE
+ferratomic-core/        Database MVCC facade: db, observer, backpressure, checkpoint
+ferratomic-datalog/     Facade: Datalog parser, planner, evaluator (stubs)
+ferratomic-verify/      Proofs: Lean 4, Stateright, Kani, proptest, fault injection
 ```
 
-Dependency: `ferratom <-- ferratomic-core <-- ferratomic-datalog`. Acyclic.
+Dependency: clock -> ferratom -> {tx, storage, wal} -> index -> positional ->
+checkpoint -> store -> core -> datalog. Acyclic.
 
 ---
 

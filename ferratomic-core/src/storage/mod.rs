@@ -39,7 +39,7 @@
 //!
 //! ```rust,no_run
 //! use std::sync::Arc;
-//! use ferratom::{AgentId, Attribute, EntityId, Value};
+//! use ferratom::{NodeId, Attribute, EntityId, Value};
 //! use ferratomic_db::db::Database;
 //! use ferratomic_db::writer::Transaction;
 //! use ferratomic_db::storage::{cold_start, RecoveryLevel};
@@ -51,10 +51,10 @@
 //! {
 //!     let result = cold_start(data_dir).unwrap();
 //!     let db = result.database;
-//!     let agent = AgentId::from_bytes([1u8; 16]);
+//!     let node = NodeId::from_bytes([1u8; 16]);
 //!
 //!     // Transact two datoms — each is WAL-fsynced before becoming visible.
-//!     let tx1 = Transaction::new(agent)
+//!     let tx1 = Transaction::new(node)
 //!         .assert_datom(
 //!             EntityId::from_content(b"node-a"),
 //!             Attribute::from("db/doc"),
@@ -64,7 +64,7 @@
 //!         .unwrap();
 //!     db.transact(tx1).unwrap();
 //!
-//!     let tx2 = Transaction::new(agent)
+//!     let tx2 = Transaction::new(node)
 //!         .assert_datom(
 //!             EntityId::from_content(b"node-b"),
 //!             Attribute::from("db/doc"),
@@ -161,7 +161,7 @@ pub fn wal_path(data_dir: &Path) -> PathBuf {
 mod tests {
     use std::sync::Arc;
 
-    use ferratom::{AgentId, Attribute, EntityId, Value};
+    use ferratom::{Attribute, EntityId, NodeId, Value};
 
     use super::*;
     use crate::{checkpoint::write_checkpoint, writer::Transaction};
@@ -182,10 +182,10 @@ mod tests {
         // Create a WAL with some transactions.
         {
             let db = Database::genesis_with_wal(&dir.path().join(WAL_FILENAME)).unwrap();
-            let agent = AgentId::from_bytes([1u8; 16]);
+            let node = NodeId::from_bytes([1u8; 16]);
             let schema = db.schema();
 
-            let tx = Transaction::new(agent)
+            let tx = Transaction::new(node)
                 .assert_datom(
                     EntityId::from_content(b"cold-start-test"),
                     Attribute::from("db/doc"),
@@ -212,11 +212,11 @@ mod tests {
         let chkp_file = dir.join(CHECKPOINT_FILENAME);
 
         let db = Database::genesis_with_wal(&wal_file).unwrap();
-        let agent = AgentId::from_bytes([2u8; 16]);
+        let node = NodeId::from_bytes([2u8; 16]);
         let schema = db.schema();
 
         // Transaction 1 (will be in checkpoint).
-        let tx1 = Transaction::new(agent)
+        let tx1 = Transaction::new(node)
             .assert_datom(
                 EntityId::from_content(b"before-chkp"),
                 Attribute::from("db/doc"),
@@ -238,7 +238,7 @@ mod tests {
         write_checkpoint(&store, &chkp_file).unwrap();
 
         // Transaction 2 (will be WAL delta after checkpoint).
-        let tx2 = Transaction::new(agent)
+        let tx2 = Transaction::new(node)
             .assert_datom(
                 EntityId::from_content(b"after-chkp"),
                 Attribute::from("db/doc"),
@@ -297,7 +297,7 @@ mod tests {
         // Write a checkpoint into the backend.
         {
             let mut store = crate::store::Store::genesis();
-            let tx = Transaction::new(AgentId::from_bytes([3u8; 16]))
+            let tx = Transaction::new(NodeId::from_bytes([3u8; 16]))
                 .assert_datom(
                     EntityId::from_content(b"mem-test"),
                     Attribute::from("db/doc"),

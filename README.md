@@ -264,7 +264,7 @@ Use the framework before authoring spec invariants, choosing implementations, sc
                         ┌──────────────▼──────────────┐
                         │   ferratom-clock             │  ZERO project deps
                         │   HybridClock, TxId,         │  Clock leaf crate
-                        │   AgentId, Frontier          │  (ADR-FERR-015)
+                        │   NodeId, Frontier           │  (ADR-FERR-015)
                         └─────────────────────────────┘
 ```
 
@@ -272,7 +272,7 @@ Use the framework before authoring spec invariants, choosing implementations, sc
 
 | Crate | Role | LOC | Dependencies |
 |-------|------|-----|-------------|
-| `ferratom-clock` | Clock primitives: HybridClock, TxId, AgentId, Frontier | ~350 | serde (zero project deps) |
+| `ferratom-clock` | Clock primitives: HybridClock, TxId, NodeId, Frontier | ~350 | serde (zero project deps) |
 | `ferratom` | Core types: Datom, EntityId, Value, Schema, Wire trust boundary | ~3,300 | ferratom-clock, blake3, ordered-float, serde |
 | `ferratomic-db` | Store engine: MVCC, WAL, checkpoint, indexes, merge, LIVE resolution | ~8,800 | ferratom, im, arc-swap, bitvec, bincode, memmap2 |
 | `ferratomic-datalog` | Query: Datalog parser, planner, evaluator, CALM classification | stubs | ferratom, ferratomic-db |

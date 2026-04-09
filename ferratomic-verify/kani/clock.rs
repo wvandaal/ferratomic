@@ -6,7 +6,7 @@
 //! `SystemClock`, so Kani proves the real HLC transition logic without
 //! reaching host syscalls such as `clock_gettime`.
 
-use ferratom::{AgentId, HybridClock};
+use ferratom::{HybridClock, NodeId};
 
 use super::helpers::KaniClock;
 #[cfg(not(kani))]
@@ -19,7 +19,7 @@ use super::kani;
 #[cfg_attr(not(kani), ignore = "requires Kani verifier")]
 fn hlc_monotonicity() {
     let mut hlc = HybridClock::with_clock(
-        AgentId::from_bytes([1u8; 16]),
+        NodeId::from_bytes([1u8; 16]),
         KaniClock::new([
             kani::any(),
             kani::any(),
@@ -43,12 +43,10 @@ fn hlc_monotonicity() {
 #[cfg_attr(not(kani), test)]
 #[cfg_attr(not(kani), ignore = "requires Kani verifier")]
 fn hlc_causality() {
-    let mut sender = HybridClock::with_clock(
-        AgentId::from_bytes([1u8; 16]),
-        KaniClock::new([kani::any()]),
-    );
+    let mut sender =
+        HybridClock::with_clock(NodeId::from_bytes([1u8; 16]), KaniClock::new([kani::any()]));
     let mut receiver = HybridClock::with_clock(
-        AgentId::from_bytes([2u8; 16]),
+        NodeId::from_bytes([2u8; 16]),
         KaniClock::new([kani::any(), kani::any()]),
     );
 

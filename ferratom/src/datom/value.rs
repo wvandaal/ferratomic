@@ -442,11 +442,11 @@ mod tests {
             "lattice/elements",
             "lattice/ident",
             "lattice/top",
-            "tx/agent",
-            "tx/coherence-override",
+            "tx/origin",
             "tx/provenance",
             "tx/rationale",
             "tx/time",
+            "tx/validation-override",
         ]
         .into_iter()
         .map(Attribute::from)

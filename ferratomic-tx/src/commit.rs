@@ -105,7 +105,7 @@ impl Transaction<Building> {
         validate::validate_datoms(&self.datoms, schema)?;
 
         Ok(Transaction {
-            agent: self.agent,
+            node: self.node,
             datoms: self.datoms,
             _state: PhantomData,
         })
@@ -123,7 +123,7 @@ impl Transaction<Building> {
     #[must_use]
     pub fn commit_unchecked(self) -> Transaction<Committed> {
         Transaction {
-            agent: self.agent,
+            node: self.node,
             datoms: self.datoms,
             _state: PhantomData,
         }
@@ -144,19 +144,19 @@ impl Transaction<Committed> {
     /// Consume the transaction and yield the owned datom vector.
     ///
     /// INV-FERR-020: Ownership transfer prevents double-application.
-    /// The caller must read [`agent()`](Self::agent) BEFORE calling this
+    /// The caller must read [`node()`](Self::node) BEFORE calling this
     /// method, since `self` is consumed.
     #[must_use]
     pub fn into_datoms(self) -> Vec<Datom> {
         self.datoms
     }
 
-    /// The agent who created this transaction.
+    /// The node that created this transaction.
     ///
-    /// INV-FERR-015: The agent identity is used by `HybridClock::tick` to
+    /// INV-FERR-015: The node identity is used by `HybridClock::tick` to
     /// produce a unique `TxId` when the `Store` applies this transaction.
     #[must_use]
-    pub fn agent(&self) -> ferratom::AgentId {
-        self.agent
+    pub fn node(&self) -> ferratom::NodeId {
+        self.node
     }
 }

@@ -9,10 +9,15 @@
 //!
 //! # Types
 //!
-//! - [`AgentId`]: 16-byte agent identifier (newtype over `[u8; 16]`).
-//! - [`TxId`]: Transaction identifier — `(physical, logical, agent)` triple.
+//! - [`NodeId`]: 16-byte node identifier (newtype over `[u8; 16]`).
+//! - [`TxId`]: Transaction identifier — `(physical, logical, node)` triple.
 //! - [`HybridClock`]: Stateful clock that produces monotonically increasing `TxId`s.
-//! - [`Frontier`]: Vector clock tracking per-agent progress.
+//! - [`Frontier`]: Vector clock tracking per-node progress.
+//!
+//! C8 (Substrate Independence): The engine-level writer identifier is
+//! `NodeId`, not `AgentId`. "Node" matches HLC literature, CRDT literature,
+//! and Datomic's "peer" terminology. Application-layer code may still use
+//! `:agent/*` namespace conventions on top of this primitive.
 
 // INV-FERR-023: No unsafe code permitted. Compiler-enforced.
 #![forbid(unsafe_code)]
@@ -23,7 +28,7 @@ mod frontier;
 mod txid;
 
 pub use frontier::Frontier;
-pub use txid::{AgentId, TxId};
+pub use txid::{NodeId, TxId};
 
 // ---------------------------------------------------------------------------
 // ClockError
@@ -117,7 +122,7 @@ impl ClockSource for SystemClock {
 /// INV-FERR-016: `receive()` merges a remote timestamp into the local
 /// clock state, ensuring that subsequent `tick()`s produce timestamps
 /// ordered after the remote event. This establishes happens-before
-/// ordering across agents.
+/// ordering across nodes.
 #[derive(Clone, Debug)]
 pub struct HybridClock<C: ClockSource = SystemClock> {
     /// Wall clock source.
@@ -126,22 +131,22 @@ pub struct HybridClock<C: ClockSource = SystemClock> {
     physical: u64,
     /// Logical counter within the current physical timestamp.
     logical: u32,
-    /// Identity of the agent owning this clock.
-    agent: AgentId,
+    /// Identity of the node owning this clock.
+    node: NodeId,
 }
 
 impl<C: ClockSource> HybridClock<C> {
-    /// Create a new `HybridClock` for the given agent with a custom clock source.
+    /// Create a new `HybridClock` for the given node with a custom clock source.
     ///
     /// INV-FERR-015: The clock starts at `(0, 0)` — the first `tick()`
     /// will advance to at least the current wall clock time.
     #[must_use]
-    pub fn with_clock(agent: AgentId, clock: C) -> Self {
+    pub fn with_clock(node: NodeId, clock: C) -> Self {
         Self {
             clock,
             physical: 0,
             logical: 0,
-            agent,
+            node,
         }
     }
 
@@ -187,7 +192,7 @@ impl<C: ClockSource> HybridClock<C> {
             }
         }
 
-        Ok(TxId::with_agent(self.physical, self.logical, self.agent))
+        Ok(TxId::with_node(self.physical, self.logical, self.node))
     }
 
     /// Merge a remote timestamp into the local clock state.
@@ -225,22 +230,22 @@ impl<C: ClockSource> HybridClock<C> {
 }
 
 impl HybridClock<SystemClock> {
-    /// Create a new `HybridClock` for the given agent using the real wall clock.
+    /// Create a new `HybridClock` for the given node using the real wall clock.
     ///
     /// This is a convenience constructor equivalent to
-    /// `HybridClock::with_clock(agent, SystemClock)`.
+    /// `HybridClock::with_clock(node, SystemClock)`.
     ///
     /// INV-FERR-015: The clock starts at `(0, 0)` — the first `tick()`
     /// will advance to at least the current wall clock time.
     #[must_use]
-    pub fn new(agent: AgentId) -> Self {
-        Self::with_clock(agent, SystemClock)
+    pub fn new(node: NodeId) -> Self {
+        Self::with_clock(node, SystemClock)
     }
 
     /// Alias for [`HybridClock::new`] — explicitly names the clock source.
     #[must_use]
-    pub fn with_system_clock(agent: AgentId) -> Self {
-        Self::new(agent)
+    pub fn with_system_clock(node: NodeId) -> Self {
+        Self::new(node)
     }
 }
 
@@ -253,30 +258,30 @@ mod tests {
     use super::*;
 
     #[test]
-    fn agent_id_roundtrip() {
+    fn node_id_roundtrip() {
         let bytes = [1u8, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
-        let id = AgentId::from_bytes(bytes);
+        let id = NodeId::from_bytes(bytes);
         assert_eq!(*id.as_bytes(), bytes);
     }
 
     #[test]
-    fn agent_id_from_seed_deterministic() {
-        let a = AgentId::from_seed(42);
-        let b = AgentId::from_seed(42);
-        assert_eq!(a, b, "Same seed must produce same AgentId");
+    fn node_id_from_seed_deterministic() {
+        let a = NodeId::from_seed(42);
+        let b = NodeId::from_seed(42);
+        assert_eq!(a, b, "Same seed must produce same NodeId");
     }
 
     #[test]
-    fn agent_id_from_seed_distinct() {
-        let a = AgentId::from_seed(1);
-        let b = AgentId::from_seed(2);
-        assert_ne!(a, b, "Different seeds must produce different AgentIds");
+    fn node_id_from_seed_distinct() {
+        let a = NodeId::from_seed(1);
+        let b = NodeId::from_seed(2);
+        assert_ne!(a, b, "Different seeds must produce different NodeIds");
     }
 
     #[test]
-    fn agent_id_ord_is_lexicographic() {
-        let a = AgentId::from_bytes([0u8; 16]);
-        let b = AgentId::from_bytes([1u8; 16]);
+    fn node_id_ord_is_lexicographic() {
+        let a = NodeId::from_bytes([0u8; 16]);
+        let b = NodeId::from_bytes([1u8; 16]);
         assert!(a < b);
     }
 
@@ -285,16 +290,16 @@ mod tests {
         let tx = TxId::new(100, 5, 7);
         assert_eq!(tx.physical(), 100);
         assert_eq!(tx.logical(), 5);
-        assert_eq!(tx.agent(), AgentId::from_seed(7));
+        assert_eq!(tx.node(), NodeId::from_seed(7));
     }
 
     #[test]
-    fn tx_id_with_agent_accessors() {
-        let agent = AgentId::from_bytes([0xAA; 16]);
-        let tx = TxId::with_agent(200, 10, agent);
+    fn tx_id_with_node_accessors() {
+        let node = NodeId::from_bytes([0xAA; 16]);
+        let tx = TxId::with_node(200, 10, node);
         assert_eq!(tx.physical(), 200);
         assert_eq!(tx.logical(), 10);
-        assert_eq!(tx.agent(), agent);
+        assert_eq!(tx.node(), node);
     }
 
     #[test]
@@ -312,10 +317,10 @@ mod tests {
     }
 
     #[test]
-    fn tx_id_ord_agent_tiebreaks() {
+    fn tx_id_ord_node_tiebreaks() {
         let a = TxId::new(5, 5, 0);
         let b = TxId::new(5, 5, 1);
-        assert!(a < b, "Higher agent must break physical+logical tie");
+        assert!(a < b, "Higher node must break physical+logical tie");
     }
 
     #[test]
@@ -327,8 +332,8 @@ mod tests {
 
     #[test]
     fn inv_ferr_015_tick_monotonicity() {
-        let agent = AgentId::from_bytes([1u8; 16]);
-        let mut clock = HybridClock::with_system_clock(agent);
+        let node = NodeId::from_bytes([1u8; 16]);
+        let mut clock = HybridClock::with_system_clock(node);
         let t1 = clock.tick().unwrap();
         let t2 = clock.tick().unwrap();
         let t3 = clock.tick().unwrap();
@@ -338,8 +343,8 @@ mod tests {
 
     #[test]
     fn inv_ferr_016_receive_advances_past_remote() {
-        let mut sender = HybridClock::with_system_clock(AgentId::from_bytes([1u8; 16]));
-        let mut recv_clock = HybridClock::with_system_clock(AgentId::from_bytes([2u8; 16]));
+        let mut sender = HybridClock::with_system_clock(NodeId::from_bytes([1u8; 16]));
+        let mut recv_clock = HybridClock::with_system_clock(NodeId::from_bytes([2u8; 16]));
         let sent = sender.tick().unwrap();
         recv_clock.receive(&sent);
         let after_recv = recv_clock.tick().unwrap();
@@ -348,7 +353,7 @@ mod tests {
 
     #[test]
     fn inv_ferr_016_receive_preserves_local_progress() {
-        let mut clock = HybridClock::with_system_clock(AgentId::from_bytes([1u8; 16]));
+        let mut clock = HybridClock::with_system_clock(NodeId::from_bytes([1u8; 16]));
         let local = clock.tick().unwrap();
         let old_remote = TxId::new(0, 0, 5);
         clock.receive(&old_remote);
@@ -358,28 +363,28 @@ mod tests {
 
     #[test]
     fn frontier_advance_and_get() {
-        let agent = AgentId::from_bytes([1u8; 16]);
+        let node = NodeId::from_bytes([1u8; 16]);
         let tx = TxId::new(10, 0, 0);
         let mut frontier = Frontier::new();
-        frontier.advance(agent, tx);
-        assert_eq!(frontier.get(&agent), Some(&tx));
+        frontier.advance(node, tx);
+        assert_eq!(frontier.get(&node), Some(&tx));
     }
 
     #[test]
     fn frontier_advance_only_moves_forward() {
-        let agent = AgentId::from_bytes([1u8; 16]);
+        let node = NodeId::from_bytes([1u8; 16]);
         let old = TxId::new(1, 0, 0);
         let new = TxId::new(10, 0, 0);
         let mut frontier = Frontier::new();
-        frontier.advance(agent, new);
-        frontier.advance(agent, old);
-        assert_eq!(frontier.get(&agent), Some(&new));
+        frontier.advance(node, new);
+        frontier.advance(node, old);
+        assert_eq!(frontier.get(&node), Some(&new));
     }
 
     #[test]
-    fn frontier_merge_takes_per_agent_max() {
-        let a1 = AgentId::from_bytes([1u8; 16]);
-        let a2 = AgentId::from_bytes([2u8; 16]);
+    fn frontier_merge_takes_per_node_max() {
+        let a1 = NodeId::from_bytes([1u8; 16]);
+        let a2 = NodeId::from_bytes([2u8; 16]);
         let mut f1 = Frontier::new();
         f1.advance(a1, TxId::new(10, 0, 0));
         f1.advance(a2, TxId::new(5, 0, 0));
@@ -414,8 +419,8 @@ mod tests {
     /// `MAX_BUSY_WAIT_RETRIES`, and returns `Err(LogicalOverflow)`.
     #[test]
     fn test_inv_ferr_021_logical_overflow_under_frozen_clock() {
-        let agent = AgentId::from_bytes([7u8; 16]);
-        let mut clock = HybridClock::with_clock(agent, FrozenClock { fixed_ms: 42 });
+        let node = NodeId::from_bytes([7u8; 16]);
+        let mut clock = HybridClock::with_clock(node, FrozenClock { fixed_ms: 42 });
 
         // First tick: physical=42, logical=0.
         let first = clock.tick().expect("first tick must succeed");

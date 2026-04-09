@@ -20,7 +20,7 @@
 
 use std::time::Instant;
 
-use ferratom::{AgentId, Attribute, Datom, EntityId, Op, TxId, Value};
+use ferratom::{Attribute, Datom, EntityId, NodeId, Op, TxId, Value};
 use ferratomic_index::{AevtKey, EavtKey};
 use ferratomic_positional::store::PositionalStore;
 use rand::distributions::WeightedIndex;
@@ -49,8 +49,8 @@ const SEED_EAVT: u64 = 0xea0e_ea0e_ea0e_ea0e;
 const SEED_AEVT: u64 = 0xae0e_ae0e_ae0e_ae0e;
 const SEED_RANGE: u64 = 0xfa11_ba11_fa11_ba11;
 
-/// Fixed agent ID for synthetic dataset (16 bytes).
-const SYNTH_AGENT_BYTES: [u8; 16] = [0x42; 16];
+/// Fixed node ID for synthetic dataset (16 bytes).
+const SYNTH_NODE_BYTES: [u8; 16] = [0x42; 16];
 
 /// Number of point queries to run per scale point.
 const POINT_QUERY_COUNT: usize = 100_000;
@@ -91,14 +91,14 @@ fn generate_dataset(count: usize) -> Vec<Datom> {
         .collect();
     let dist = WeightedIndex::new(&weights).expect("Zipf weights must be valid");
 
-    let agent = AgentId::from_bytes(SYNTH_AGENT_BYTES);
+    let node = NodeId::from_bytes(SYNTH_NODE_BYTES);
     let mut datoms = Vec::with_capacity(count);
     for i in 0..count {
         let entity = EntityId::from_content(format!("entity-{i}").as_bytes());
         let attr_idx = dist.sample(&mut rng);
         let attribute = attributes[attr_idx].clone();
         let value = Value::Long(i as i64);
-        let tx = TxId::with_agent((i as u64) + 1, 0, agent);
+        let tx = TxId::with_node((i as u64) + 1, 0, node);
         datoms.push(Datom::new(entity, attribute, value, tx, Op::Assert));
     }
     datoms

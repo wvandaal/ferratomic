@@ -4,7 +4,7 @@
 //! INV-FERR-031.
 //! Phase 4a: all tests passing against ferratomic-db implementation.
 
-use ferratom::{AgentId, Attribute, EntityId, FerraError, Value};
+use ferratom::{Attribute, EntityId, FerraError, NodeId, Value};
 use ferratomic_db::{
     store::Store,
     writer::{Building, Transaction, TxValidationError},
@@ -13,13 +13,13 @@ use ferratomic_db::{
 /// Build a transaction that defines a new schema attribute with the given ident,
 /// value type, and cardinality on the given entity.
 fn build_define_attribute_tx(
-    agent: AgentId,
+    node: NodeId,
     entity: EntityId,
     ident: &str,
     value_type: &str,
     cardinality: &str,
 ) -> Transaction<Building> {
-    Transaction::new(agent)
+    Transaction::new(node)
         .assert_datom(
             entity,
             Attribute::from("db/ident"),
@@ -73,9 +73,9 @@ fn inv_ferr_009_genesis_schema() {
 #[test]
 fn inv_ferr_009_reject_unknown_attribute() {
     let store = Store::genesis();
-    let agent = AgentId::from_bytes([1u8; 16]);
+    let node = NodeId::from_bytes([1u8; 16]);
 
-    let tx = Transaction::new(agent).assert_datom(
+    let tx = Transaction::new(node).assert_datom(
         EntityId::from_content(b"e1"),
         Attribute::from("nonexistent/attribute"),
         Value::String("test".into()),
@@ -93,10 +93,10 @@ fn inv_ferr_009_reject_unknown_attribute() {
 #[test]
 fn inv_ferr_009_reject_wrong_type() {
     let store = Store::genesis();
-    let agent = AgentId::from_bytes([1u8; 16]);
+    let node = NodeId::from_bytes([1u8; 16]);
 
     // :db/ident expects Keyword, but we pass Long
-    let tx = Transaction::new(agent).assert_datom(
+    let tx = Transaction::new(node).assert_datom(
         EntityId::from_content(b"e1"),
         Attribute::from("db/ident"),
         Value::Long(42),
@@ -114,12 +114,12 @@ fn inv_ferr_009_reject_wrong_type() {
 #[test]
 fn inv_ferr_009_schema_evolution() {
     let mut store = Store::genesis();
-    let agent = AgentId::from_bytes([1u8; 16]);
+    let node = NodeId::from_bytes([1u8; 16]);
     let new_attr_entity = EntityId::from_content(b"new-attr-entity");
 
     // First transaction: define a new attribute
     let define_tx = build_define_attribute_tx(
-        agent,
+        node,
         new_attr_entity,
         "user/email",
         "db.type/string",
@@ -133,7 +133,7 @@ fn inv_ferr_009_schema_evolution() {
         .expect("transact should succeed");
 
     // Second transaction: use the newly defined attribute
-    let use_tx = Transaction::new(agent).assert_datom(
+    let use_tx = Transaction::new(node).assert_datom(
         EntityId::from_content(b"user-1"),
         Attribute::from("user/email"),
         Value::String("alice@example.com".into()),
@@ -161,10 +161,10 @@ fn inv_ferr_009_schema_evolution() {
 #[test]
 fn inv_ferr_009_atomic_rejection() {
     let store = Store::genesis();
-    let agent = AgentId::from_bytes([1u8; 16]);
+    let node = NodeId::from_bytes([1u8; 16]);
 
     // Transaction with one valid and one invalid datom
-    let tx = Transaction::new(agent)
+    let tx = Transaction::new(node)
         .assert_datom(
             EntityId::from_content(b"e1"),
             Attribute::from("db/doc"),
@@ -187,10 +187,10 @@ fn inv_ferr_009_atomic_rejection() {
 #[test]
 fn test_inv_ferr_009_reject_invalid_value_type() {
     let mut store = Store::genesis();
-    let agent = AgentId::from_bytes([1u8; 16]);
+    let node = NodeId::from_bytes([1u8; 16]);
     let attr_entity = EntityId::from_content(b"invalid-value-type");
 
-    let define_tx = Transaction::new(agent)
+    let define_tx = Transaction::new(node)
         .assert_datom(
             attr_entity,
             Attribute::from("db/ident"),
@@ -231,10 +231,10 @@ fn test_inv_ferr_009_reject_invalid_value_type() {
 #[test]
 fn test_inv_ferr_009_reject_invalid_cardinality() {
     let mut store = Store::genesis();
-    let agent = AgentId::from_bytes([2u8; 16]);
+    let node = NodeId::from_bytes([2u8; 16]);
     let attr_entity = EntityId::from_content(b"invalid-cardinality");
 
-    let define_tx = Transaction::new(agent)
+    let define_tx = Transaction::new(node)
         .assert_datom(
             attr_entity,
             Attribute::from("db/ident"),

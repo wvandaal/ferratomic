@@ -17,7 +17,7 @@
 //! +------------------+
 //! | Epoch    (8B)    | u64 little-endian
 //! +------------------+
-//! | Genesis  (16B)   | AgentId bytes
+//! | Genesis  (16B)   | NodeId bytes
 //! +------------------+
 //! | Payload  (N)     | bincode: V3PayloadWrite/V3PayloadRead
 //! +------------------+
@@ -35,7 +35,7 @@
 //! +------------------+
 //! | Epoch    (8B)    | u64 little-endian
 //! +------------------+
-//! | Genesis  (16B)   | AgentId bytes
+//! | Genesis  (16B)   | NodeId bytes
 //! +------------------+
 //! | Payload  (N)     | bincode: V3LiveFirstPayloadWrite/Read
 //! |  schema_pairs    |   sorted (String, AttributeDef) pairs
@@ -50,7 +50,7 @@
 //! enforcement, then converts via `into_trusted()` after BLAKE3 verification.
 
 use bitvec::prelude::{BitVec, Lsb0};
-use ferratom::{AgentId, AttributeDef, Datom, FerraError};
+use ferratom::{AttributeDef, Datom, FerraError, NodeId};
 use serde::{Deserialize, Serialize};
 
 /// V3 magic bytes: re-exported from lib.rs for single source of truth.
@@ -105,7 +105,7 @@ struct V3PayloadRead {
 /// Serialize store data to V3 checkpoint bytes (in-memory).
 ///
 /// INV-FERR-013: The returned bytes contain the full store state (epoch,
-/// genesis agent, schema, all datoms, LIVE bitvector) in the V3 wire format.
+/// genesis node, schema, all datoms, LIVE bitvector) in the V3 wire format.
 /// A trailing BLAKE3 hash covers all preceding bytes for tamper detection.
 ///
 /// # Errors
@@ -115,7 +115,7 @@ pub fn serialize_v3_bytes(
     datoms: &[Datom],
     schema_pairs: &[(String, AttributeDef)],
     epoch: u64,
-    genesis_agent: AgentId,
+    genesis_node: NodeId,
     live_bits: &BitVec<u64, Lsb0>,
 ) -> Result<Vec<u8>, FerraError> {
     let payload = V3PayloadWrite {
@@ -132,11 +132,11 @@ pub fn serialize_v3_bytes(
     let total_size = V3_HEADER_SIZE + payload_bytes.len() + HASH_SIZE;
     let mut buf = Vec::with_capacity(total_size);
 
-    // Header: magic + version + epoch + genesis_agent
+    // Header: magic + version + epoch + genesis_node
     buf.extend_from_slice(&V3_MAGIC);
     buf.extend_from_slice(&V3_VERSION.to_le_bytes());
     buf.extend_from_slice(&epoch.to_le_bytes());
-    buf.extend_from_slice(genesis_agent.as_bytes());
+    buf.extend_from_slice(genesis_node.as_bytes());
 
     // Payload
     buf.extend_from_slice(&payload_bytes);
@@ -154,8 +154,8 @@ fn verify_v3_checksum(data: &[u8]) -> Result<&[u8], FerraError> {
     crate::mmap::verify_blake3(data, V3_HEADER_SIZE)
 }
 
-/// Parse the V3 fixed header: magic, version, epoch, `genesis_agent`.
-fn parse_v3_header(content: &[u8]) -> Result<(u64, AgentId), FerraError> {
+/// Parse the V3 fixed header: magic, version, epoch, `genesis_node`.
+fn parse_v3_header(content: &[u8]) -> Result<(u64, NodeId), FerraError> {
     let magic: [u8; 4] = content[0..4]
         .try_into()
         .map_err(|_| corrupted("CHK3 magic", "truncated"))?;
@@ -180,8 +180,8 @@ fn parse_v3_header(content: &[u8]) -> Result<(u64, AgentId), FerraError> {
     );
     let genesis_bytes: [u8; 16] = content[14..30]
         .try_into()
-        .map_err(|_| corrupted("16-byte genesis agent", "truncated"))?;
-    Ok((epoch, AgentId::from_bytes(genesis_bytes)))
+        .map_err(|_| corrupted("16-byte genesis node", "truncated"))?;
+    Ok((epoch, NodeId::from_bytes(genesis_bytes)))
 }
 
 /// Shorthand for `CheckpointCorrupted` error construction.
@@ -194,9 +194,9 @@ fn corrupted(expected: &str, actual: &str) -> FerraError {
 
 /// Parse V3 header allowing either standard or LIVE-first version.
 ///
-/// Returns `(epoch, genesis_agent, version)`. Does NOT validate the version
+/// Returns `(epoch, genesis_node, version)`. Does NOT validate the version
 /// field — the caller is responsible for version dispatch.
-fn parse_v3_header_versioned(content: &[u8]) -> Result<(u64, AgentId, u16), FerraError> {
+fn parse_v3_header_versioned(content: &[u8]) -> Result<(u64, NodeId, u16), FerraError> {
     let magic: [u8; 4] = content[0..4]
         .try_into()
         .map_err(|_| corrupted("CHK3 magic", "truncated"))?;
@@ -215,8 +215,8 @@ fn parse_v3_header_versioned(content: &[u8]) -> Result<(u64, AgentId, u16), Ferr
     );
     let genesis_bytes: [u8; 16] = content[14..30]
         .try_into()
-        .map_err(|_| corrupted("16-byte genesis agent", "truncated"))?;
-    Ok((epoch, AgentId::from_bytes(genesis_bytes), version))
+        .map_err(|_| corrupted("16-byte genesis node", "truncated"))?;
+    Ok((epoch, NodeId::from_bytes(genesis_bytes), version))
 }
 
 /// Deserialize V3 checkpoint bytes into raw checkpoint data.
@@ -230,7 +230,7 @@ fn parse_v3_header_versioned(content: &[u8]) -> Result<(u64, AgentId, u16), Ferr
 /// truncation, or deserialization failure.
 pub fn deserialize_v3_bytes(data: &[u8]) -> Result<CheckpointData, FerraError> {
     let content = verify_v3_checksum(data)?;
-    let (epoch, genesis_agent) = parse_v3_header(content)?;
+    let (epoch, genesis_node) = parse_v3_header(content)?;
 
     // Deserialize payload through ADR-FERR-010 trust boundary.
     let wire_payload: V3PayloadRead = bincode::deserialize(&content[V3_HEADER_SIZE..])
@@ -256,7 +256,7 @@ pub fn deserialize_v3_bytes(data: &[u8]) -> Result<CheckpointData, FerraError> {
 
     Ok(CheckpointData {
         epoch,
-        genesis_agent,
+        genesis_node,
         schema_pairs: wire_payload.schema_pairs,
         datoms,
         live_bits: Some(wire_payload.live_bits),
@@ -308,7 +308,7 @@ pub fn serialize_v3_live_first(
     datoms: &[Datom],
     schema_pairs: &[(String, AttributeDef)],
     epoch: u64,
-    genesis_agent: AgentId,
+    genesis_node: NodeId,
     live_bits: &BitVec<u64, Lsb0>,
 ) -> Result<Vec<u8>, FerraError> {
     // Partition datoms by LIVE status. Both partitions are EAVT-sorted
@@ -348,7 +348,7 @@ pub fn serialize_v3_live_first(
     buf.extend_from_slice(&V3_MAGIC);
     buf.extend_from_slice(&V3_LIVE_FIRST_VERSION.to_le_bytes());
     buf.extend_from_slice(&epoch.to_le_bytes());
-    buf.extend_from_slice(genesis_agent.as_bytes());
+    buf.extend_from_slice(genesis_node.as_bytes());
 
     buf.extend_from_slice(&payload_bytes);
 
@@ -369,7 +369,7 @@ pub fn serialize_v3_live_first(
 /// mismatch, or deserialization failure.
 pub fn deserialize_v3_live_first_partial(data: &[u8]) -> Result<PartialCheckpointData, FerraError> {
     let content = verify_v3_checksum(data)?;
-    let (epoch, genesis_agent, version) = parse_v3_header_versioned(content)?;
+    let (epoch, genesis_node, version) = parse_v3_header_versioned(content)?;
     if version != V3_LIVE_FIRST_VERSION {
         return Err(corrupted(
             &format!("version {V3_LIVE_FIRST_VERSION:#06x} (LIVE-first)"),
@@ -394,7 +394,7 @@ pub fn deserialize_v3_live_first_partial(data: &[u8]) -> Result<PartialCheckpoin
 
     Ok(PartialCheckpointData {
         epoch,
-        genesis_agent,
+        genesis_node,
         schema_pairs: wire_payload.schema_pairs,
         live_datoms,
         hist_datoms,
@@ -420,7 +420,7 @@ pub fn deserialize_v3_live_first_full(data: &[u8]) -> Result<CheckpointData, Fer
 
     Ok(CheckpointData {
         epoch: partial.epoch,
-        genesis_agent: partial.genesis_agent,
+        genesis_node: partial.genesis_node,
         schema_pairs: partial.schema_pairs,
         datoms: merged,
         live_bits: Some(live_bits),

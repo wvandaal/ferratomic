@@ -584,7 +584,7 @@ ADR-FERR-025 (transaction-level federation)
 
 > **Phase 4a.5 staging note**: Phase 4a.5 implements selective merge with
 > positive-only DatomFilter variants only: `All`, `AttributeNamespace`,
-> `FromAgents`, `Entities`, `And`, `Or` (ADR-FERR-022). The `Not`, `Custom`,
+> `FromNodes`, `Entities`, `And`, `Or` (ADR-FERR-022). The `Not`, `Custom`,
 > and `AfterEpoch` variants are deferred to Phase 4c with their own safety
 > analysis for non-monotonicity, serializability, and epoch-index dependency.
 
@@ -643,8 +643,8 @@ pub enum DatomFilter {
     AttributeNamespace(Vec<String>),
     /// Accept datoms with entity IDs in the given set
     Entities(BTreeSet<EntityId>),
-    /// Accept datoms from transactions by specific agents
-    FromAgents(BTreeSet<AgentId>),
+    /// Accept datoms from transactions by specific nodes
+    FromNodes(BTreeSet<NodeId>),
     /// Accept datoms from transactions after a given epoch
     AfterEpoch(Epoch),
     /// Conjunction: all sub-filters must match
@@ -666,7 +666,7 @@ impl DatomFilter {
                 prefixes.iter().any(|p| datom.attribute.starts_with(p))
             }
             DatomFilter::Entities(ids) => ids.contains(&datom.entity),
-            DatomFilter::FromAgents(agents) => agents.contains(&datom.tx.agent),
+            DatomFilter::FromNodes(nodes) => nodes.contains(&datom.tx.node),
             DatomFilter::AfterEpoch(epoch) => datom.tx.wall_time > epoch.0,
             DatomFilter::And(filters) => {
                 filters.iter().all(|f| f.matches(datom, schema))
@@ -961,10 +961,10 @@ pub fn merge(a: &Store, b: &Store) -> Store {
     Store::from_datoms(merged)
 }
 
-/// Query: given a datom, return the agent that originally created it.
+/// Query: given a datom, return the node that originally created it.
 /// This works across any number of merges because TxId is immutable.
-pub fn provenance_agent(datom: &Datom) -> AgentId {
-    datom.tx.agent
+pub fn provenance_node(datom: &Datom) -> NodeId {
+    datom.tx.node
 }
 
 /// Query: given a datom, return the wall-clock time of original creation.
@@ -2129,7 +2129,7 @@ These scenarios demonstrate selective merge (INV-FERR-039) in practice:
 | Federated search across all local projects | `Federation` over `LocalTransport` stores | Query all projects simultaneously. No data movement — queries fan out and results merge. |
 | Cloud-scale agent coordination | `Federation` over `TcpTransport`/`QuicTransport` | Agents on different machines share knowledge through federated queries. Selective merge for deliberate knowledge transfer. |
 | Offline work + sync | Local store accumulates datoms offline | On reconnect: `selective_merge(remote, local, All)` pushes local knowledge to shared store. `selective_merge(local, remote, filter)` pulls relevant updates. |
-| Cross-organization knowledge exchange | `And(vec![AttributeNamespace(vec!["policy/"]), FromAgents(trusted_agents)])` | Import only policies from trusted agents. Defense in depth: namespace filter + agent filter. |
+| Cross-organization knowledge exchange | `And(vec![AttributeNamespace(vec!["policy/"]), FromNodes(trusted_nodes)])` | Import only policies from trusted nodes. Defense in depth: namespace filter + node filter. |
 
 ### §23.8.6: Security & Trust
 
@@ -2397,7 +2397,7 @@ INV-FERR-063 (provenance lattice), ADR-FERR-021 (signature storage), ADR-FERR-02
 > ∥ sorted_predecessor_entity_ids ∥ store_fingerprint ∥ signer_public_key)`.
 > All byte representations use INV-FERR-086 canonical format.
 > Metadata datoms (`:tx/signature`, `:tx/signer`, `:tx/predecessor`,
-> `:tx/provenance`, `:tx/time`, `:tx/agent`, `:tx/derivation-source`) are
+> `:tx/provenance`, `:tx/time`, `:tx/origin`, `:tx/derivation-source`) are
 > EXCLUDED from the signing message per ADR-FERR-021. Only user-asserted
 > datoms are signed.
 > **D19**: Predecessor ENTITY IDS (not TxIds) are used in the signing message.
@@ -5033,7 +5033,7 @@ merge, recovery, and federation without a parallel data structure.
 
 **Decision**: **Option A: Datoms**
 
-Signature datoms follow the same pattern as `:tx/time` and `:tx/agent` — metadata
+Signature datoms follow the same pattern as `:tx/time` and `:tx/origin` — metadata
 datoms added by the engine after the signing message is computed. The signing
 message covers user datoms + TxId + predecessors + signer public key. The
 `:tx/signature` and `:tx/signer` datoms are NOT part of the signing message —
@@ -5049,7 +5049,7 @@ the store must also touch the signature map. This violates "everything is datoms
 
 **Consequence**: The signing message definition must explicitly exclude metadata
 datoms (`:tx/signature`, `:tx/signer`, `:tx/predecessor`, `:tx/provenance`,
-`:tx/time`, `:tx/agent`). Only user-asserted datoms are signed. The exclusion is
+`:tx/time`, `:tx/origin`). Only user-asserted datoms are signed. The exclusion is
 deterministic: metadata datoms are identified by their attribute namespace (`tx/*`).
 
 **Source**: SEED.md §4 (append-only store), doc 005 (everything is datoms).
@@ -5062,7 +5062,7 @@ deterministic: metadata datoms are identified by their attribute namespace (`tx/
 **Stage**: 0
 
 **Problem**: Which DatomFilter variants should Phase 4a.5 implement? The full spec
-(§23.8) defines `All`, `AttributeNamespace`, `Entities`, `FromAgents`, `AfterEpoch`,
+(§23.8) defines `All`, `AttributeNamespace`, `Entities`, `FromNodes`, `AfterEpoch`,
 `And`, `Or`, `Not`, `Custom`.
 
 **Options**:
@@ -5070,7 +5070,7 @@ deterministic: metadata datoms are identified by their attribute namespace (`tx/
 | Option | Description | Pros | Cons |
 |--------|-------------|------|------|
 | A: All variants | Full DatomFilter enum | Complete. | `Not` is non-monotone (can mask retractions). `Custom` not serializable. `AfterEpoch` needs prolly tree epoch index. |
-| B: Positive-only | `All`, `AttributeNamespace`, `FromAgents`, `Entities`, `And`, `Or` | Monotone: CALM theorem applies (no coordination needed). Serializable. No prolly tree dependency. | Missing negation, custom predicates, temporal filtering. |
+| B: Positive-only | `All`, `AttributeNamespace`, `FromNodes`, `Entities`, `And`, `Or` | Monotone: CALM theorem applies (no coordination needed). Serializable. No prolly tree dependency. | Missing negation, custom predicates, temporal filtering. |
 
 **Decision**: **Option B: Positive-only**
 
@@ -5100,29 +5100,29 @@ risk of `Not` requires careful design of the interaction with LIVE resolution.
 **Stage**: 0
 
 **Problem**: Where does the signing key live? Options: per-Database (auto-sign),
-per-Transaction (explicit), per-Agent lookup table.
+per-Transaction (explicit), per-Node lookup table.
 
 **Options**:
 
 | Option | Description | Pros | Cons |
 |--------|-------------|------|------|
-| A: Per-Database | `Database` holds a `SigningKey`. All txns auto-signed. | Simple API. | Single-agent: can't have different agents sign through same Database. |
-| B: Per-Transaction | Signing key passed explicitly per transaction. | Multi-agent: different agents sign through same Database. | Callers must manage keys. |
-| C: Per-Agent lookup | Database holds `Map<AgentId, SigningKey>`. | Auto-sign per agent. | Key management in engine. Couples engine to key storage. |
+| A: Per-Database | `Database` holds a `SigningKey`. All txns auto-signed. | Simple API. | Single-node: can't have different nodes sign through same Database. |
+| B: Per-Transaction | Signing key passed explicitly per transaction. | Multi-node: different nodes sign through same Database. | Callers must manage keys. |
+| C: Per-Node lookup | Database holds `Map<NodeId, SigningKey>`. | Auto-sign per node. | Key management in engine. Couples engine to key storage. |
 
 **Decision**: **Option B: Per-Transaction**
 
-The goal is massively distributed multi-agent support. Multiple agents write
-through the same Database (e.g., via LocalTransport federation). Each agent has
-its own signing key. Per-Database signing limits to single agent. Per-Agent
+The goal is massively distributed multi-node support. Multiple nodes write
+through the same Database (e.g., via LocalTransport federation). Each node has
+its own signing key. Per-Database signing limits to single node. Per-Node
 lookup couples key management to the engine, violating "not an application
 framework."
 
-The signing step is explicit: `Transaction::new(agent).assert_datom(...)
+The signing step is explicit: `Transaction::new(node).assert_datom(...)
 .sign(signature, signer).commit(&schema)`. Signing is between building and
 committing — it doesn't require schema validation to happen first.
 
-**Rejected**: Option A limits to single-agent stores. Option C puts key
+**Rejected**: Option A limits to single-node stores. Option C puts key
 management in the engine, creating a dependency on key storage infrastructure.
 
 **Consequence**: **Superseded by ADR-FERR-034 (Database-Layer Signing)**.
@@ -5433,9 +5433,9 @@ consequence. INV-FERR-051 Level 0 (signing message includes tx_id).
 identity), C2 (content addressing)
 **Stage**: 0
 
-**Problem**: Transaction metadata datoms (tx/time, tx/agent, etc.) are grouped
+**Problem**: Transaction metadata datoms (tx/time, tx/origin, etc.) are grouped
 under a transaction entity. Currently:
-`EntityId::from_content(format!("tx-{epoch}-{agent_bytes}"))`. This is
+`EntityId::from_content(format!("tx-{epoch}-{node_bytes}"))`. This is
 store-local: epoch is a per-store monotonic counter, not a universal identifier.
 Two stores at different epochs but with the same transaction cannot compute the
 same entity. Predecessor Refs from INV-FERR-061 need to point to the
@@ -5447,17 +5447,17 @@ peer's epoch counter.
 
 | Option | Description | Pros | Cons |
 |--------|-------------|------|------|
-| A: Epoch-based (current) | `EntityId::from_content("tx-{epoch}-{agent}")` | Simple. Unique within one store. | Store-local. Not recomputable by peers. Predecessor Refs don't work cross-store. |
+| A: Epoch-based (current) | `EntityId::from_content("tx-{epoch}-{node}")` | Simple. Unique within one store. | Store-local. Not recomputable by peers. Predecessor Refs don't work cross-store. |
 | B: TxId-based | `EntityId::from_content(canonical_bytes(tx_id))` | Universally deterministic. TxId IS the canonical identity. Peer-recomputable. | Requires canonical byte format for TxId. Changes existing entity computation. |
 
 **Decision**: **Option B: TxId-based**
 
 TxId is the transaction's canonical identity — a globally unique triple
-`(physical, logical, agent)` produced by the HLC (INV-FERR-015). Content-
+`(physical, logical, node)` produced by the HLC (INV-FERR-015). Content-
 addressing from TxId (C2) produces EntityIds that are deterministic, peer-
 recomputable, and consistent across replicas. Predecessor Refs point to entities
 that ARE the predecessor transactions — navigating a Ref lands on ALL the
-predecessor's metadata datoms (tx/time, tx/agent, tx/signature, etc.).
+predecessor's metadata datoms (tx/time, tx/origin, tx/signature, etc.).
 
 **Rejected**: Option A leaks a store-local counter (epoch) into the entity
 computation. Epoch is an implementation detail, not an identity. Two replicas
@@ -5600,19 +5600,19 @@ pub fn genesis_with_identity(signing_key: &SigningKey) -> Result<Database, Ferra
     let db = Database::genesis();
     let pubkey = signing_key.verifying_key();
 
-    // AgentId: derived via BLAKE3 hash of the public key, then truncated to 16 bytes.
+    // NodeId: derived via BLAKE3 hash of the public key, then truncated to 16 bytes.
     // This is consistent with EntityId derivation (both use BLAKE3 first), avoiding
     // the raw-truncation pitfall where two keys sharing a 16-byte prefix collide.
     // The hash ensures uniform distribution regardless of key structure.
-    let agent_hash = blake3::hash(pubkey.as_bytes());
-    let agent = AgentId::from_bytes(agent_hash.as_bytes()[..16].try_into()?);
+    let node_hash = blake3::hash(pubkey.as_bytes());
+    let node = NodeId::from_bytes(node_hash.as_bytes()[..16].try_into()?);
 
     // EntityId: full 32-byte BLAKE3 hash of the public key (INV-FERR-012).
     let store_entity = EntityId::from_content(pubkey.as_bytes());
     let schema_entity_pk = EntityId::from_content(b"store/public-key");
     let schema_entity_cr = EntityId::from_content(b"store/created");
 
-    let tx = Transaction::new(agent)
+    let tx = Transaction::new(node)
         // Define store/public-key attribute (schema-as-data, C3)
         .assert_datom(schema_entity_pk, Attribute::from("db/ident"),
                      Value::Keyword("store/public-key".into()))
@@ -5870,9 +5870,9 @@ fn predecessor_count_matches_frontier() {
 
     let mut frontier = Frontier::new();
     for i in 0..frontier_size {
-        let agent = AgentId::from_bytes([i as u8; 16]);
+        let node = NodeId::from_bytes([i as u8; 16]);
         let tx_id = TxId::new(1, i as u32, i as u16);
-        frontier.advance(agent, tx_id);
+        frontier.advance(node, tx_id);
     }
 
     let predecessors = emit_predecessors(
@@ -5895,13 +5895,13 @@ where the predecessor DAG contains a cycle.
 proptest! {
     #[test]
     fn predecessors_complete_and_acyclic(
-        agents in prop::collection::vec(arb_agent_id(), 1..10),
+        nodes in prop::collection::vec(arb_node_id(), 1..10),
         tx_count in 1..20usize,
     ) {
         let mut db = Database::genesis();
         for i in 0..tx_count {
-            let agent = agents[i % agents.len()];
-            let tx = Transaction::new(agent)
+            let node = nodes[i % nodes.len()];
+            let tx = Transaction::new(node)
                 .assert_datom(
                     EntityId::from_content(&[i as u8]),
                     Attribute::from("db/doc"),
@@ -5961,15 +5961,15 @@ proptest! {
 **Lean theorem**:
 ```lean
 /-- INV-FERR-061 (a): Predecessor completeness — the number of predecessor
-    datoms equals the number of agents in the Frontier.
+    datoms equals the number of nodes in the Frontier.
     emit_predecessors produces one datom per frontier entry. -/
 theorem predecessor_complete
-    (F : Finset (AgentId × TxId))
+    (F : Finset (NodeId × TxId))
     (tx_entity : EntityId) :
     (emit_predecessors F tx_entity).card = F.card := by
   -- emit_predecessors maps each frontier entry to exactly one datom.
-  -- The mapping is injective (different agents produce different predecessor
-  -- datoms because the Ref value differs per agent's latest TxId).
+  -- The mapping is injective (different nodes produce different predecessor
+  -- datoms because the Ref value differs per node's latest TxId).
   exact Finset.card_image_of_injective F (emit_predecessors_injective tx_entity)
 
 /-- INV-FERR-061 (b): The predecessor relation forms a DAG — acyclicity.
@@ -6622,8 +6622,8 @@ pub enum DatomFilter {
     /// Accept datoms with attributes matching any of the given namespace prefixes.
     /// INV-FERR-044: namespace isolation for the six-layer knowledge stack.
     AttributeNamespace(Vec<String>),
-    /// Accept datoms from transactions by specific agents.
-    FromAgents(BTreeSet<AgentId>),
+    /// Accept datoms from transactions by specific nodes.
+    FromNodes(BTreeSet<NodeId>),
     /// Accept datoms with entity IDs in the given set.
     Entities(BTreeSet<EntityId>),
     /// Conjunction: all sub-filters must match.
@@ -6640,7 +6640,7 @@ impl DatomFilter {
             DatomFilter::AttributeNamespace(prefixes) => {
                 prefixes.iter().any(|p| datom.attribute().as_str().starts_with(p))
             }
-            DatomFilter::FromAgents(agents) => agents.contains(&datom.tx().agent()),
+            DatomFilter::FromNodes(nodes) => nodes.contains(&datom.tx().node()),
             DatomFilter::Entities(ids) => ids.contains(&datom.entity()),
             DatomFilter::And(filters) => filters.iter().all(|f| f.matches(datom)),
             DatomFilter::Or(filters) => filters.iter().any(|f| f.matches(datom)),
@@ -6810,7 +6810,7 @@ pub fn tx_id_canonical_bytes(tx_id: TxId) -> [u8; 28] {
     let mut buf = [0u8; 28];
     buf[0..8].copy_from_slice(&tx_id.physical().to_le_bytes());
     buf[8..12].copy_from_slice(&tx_id.logical().to_le_bytes());
-    buf[12..28].copy_from_slice(tx_id.agent().as_bytes());
+    buf[12..28].copy_from_slice(tx_id.node().as_bytes());
     buf
 }
 

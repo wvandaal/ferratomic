@@ -1,6 +1,6 @@
 use std::{collections::BTreeSet, sync::Arc};
 
-use ferratom::{AgentId, Attribute, Cardinality, Datom, EntityId, Op, TxId, Value, ValueType};
+use ferratom::{Attribute, Cardinality, Datom, EntityId, NodeId, Op, TxId, Value, ValueType};
 use ferratomic_tx::Transaction;
 
 use crate::{
@@ -72,10 +72,10 @@ const GENESIS_ATTRIBUTE_IDENTS: [&str; 19] = [
     "lattice/bottom",
     "lattice/top",
     "tx/time",
-    "tx/agent",
+    "tx/origin",
     "tx/provenance",
     "tx/rationale",
-    "tx/coherence-override",
+    "tx/validation-override",
 ];
 
 #[test]
@@ -187,12 +187,12 @@ fn test_parse_cardinality_variants() {
 /// INV-FERR-072: after transact, store is demoted back to Positional.
 #[test]
 fn test_inv_ferr_072_demote_after_transact() {
-    use ferratom::AgentId;
+    use ferratom::NodeId;
     use ferratomic_tx::Transaction;
 
     let mut store = Store::genesis();
-    let agent = AgentId::from_bytes([1u8; 16]);
-    let tx = Transaction::new(agent)
+    let node = NodeId::from_bytes([1u8; 16]);
+    let tx = Transaction::new(node)
         .assert_datom(
             EntityId::from_content(b"e1"),
             Attribute::from("db/doc"),
@@ -529,7 +529,7 @@ fn test_inv_ferr_027_entity_exists_empty() {
 fn test_inv_ferr_007_epoch_overflow_rejected() {
     let mut store = Store::genesis();
     store.epoch = u64::MAX;
-    let tx = Transaction::new(AgentId::from_bytes([1u8; 16]))
+    let tx = Transaction::new(NodeId::from_bytes([1u8; 16]))
         .assert_datom(
             EntityId::from_content(b"overflow"),
             Attribute::from("db/doc"),
@@ -577,9 +577,9 @@ fn test_inv_ferr_072_batch_splice_schema_and_repr() {
 /// Shared fixture: genesis store + 3 transactions via `batch_splice_transact`.
 fn batch_splice_3tx_fixture() -> (Store, Vec<TxReceipt>) {
     let mut store = Store::genesis();
-    let agent = AgentId::from_bytes([10u8; 16]);
+    let node = NodeId::from_bytes([10u8; 16]);
 
-    let tx1 = Transaction::new(agent)
+    let tx1 = Transaction::new(node)
         .assert_datom(
             EntityId::from_content(b"batch-e1"),
             Attribute::from("db/doc"),
@@ -588,7 +588,7 @@ fn batch_splice_3tx_fixture() -> (Store, Vec<TxReceipt>) {
         .commit(store.schema())
         .expect("tx1 valid");
 
-    let tx2 = Transaction::new(agent)
+    let tx2 = Transaction::new(node)
         .assert_datom(
             EntityId::from_content(b"attr-user-email"),
             Attribute::from("db/ident"),
@@ -607,7 +607,7 @@ fn batch_splice_3tx_fixture() -> (Store, Vec<TxReceipt>) {
         .commit(store.schema())
         .expect("tx2 valid");
 
-    let tx3 = Transaction::new(agent)
+    let tx3 = Transaction::new(node)
         .assert_datom(
             EntityId::from_content(b"batch-e3"),
             Attribute::from("db/doc"),
@@ -617,9 +617,9 @@ fn batch_splice_3tx_fixture() -> (Store, Vec<TxReceipt>) {
         .expect("tx3 valid");
 
     let batches = vec![
-        (tx1.into_datoms(), TxId::with_agent(100, 0, agent)),
-        (tx2.into_datoms(), TxId::with_agent(200, 0, agent)),
-        (tx3.into_datoms(), TxId::with_agent(300, 0, agent)),
+        (tx1.into_datoms(), TxId::with_node(100, 0, node)),
+        (tx2.into_datoms(), TxId::with_node(200, 0, node)),
+        (tx3.into_datoms(), TxId::with_node(300, 0, node)),
     ];
 
     let receipts = store
@@ -701,8 +701,8 @@ fn test_inv_ferr_072_batch_splice_transact_empty() {
 #[test]
 fn test_inv_ferr_072_batch_splice_transact_rejects_empty_tx() {
     let mut store = Store::genesis();
-    let agent = AgentId::from_bytes([11u8; 16]);
-    let batches = vec![(Vec::new(), TxId::with_agent(100, 0, agent))];
+    let node = NodeId::from_bytes([11u8; 16]);
+    let batches = vec![(Vec::new(), TxId::with_node(100, 0, node))];
     let result = store.batch_splice_transact(batches);
     assert!(
         result.is_err(),
@@ -714,12 +714,12 @@ fn test_inv_ferr_072_batch_splice_transact_rejects_empty_tx() {
 #[test]
 fn test_inv_ferr_072_batch_splice_ordmap_fallback() {
     let mut store = Store::genesis();
-    let agent = AgentId::from_bytes([12u8; 16]);
+    let node = NodeId::from_bytes([12u8; 16]);
     // Force OrdMap representation
     store.promote();
     assert!(store.positional().is_none(), "must be OrdMap after promote");
 
-    let tx = Transaction::new(agent)
+    let tx = Transaction::new(node)
         .assert_datom(
             EntityId::from_content(b"ordmap-test"),
             Attribute::from("db/doc"),
@@ -728,7 +728,7 @@ fn test_inv_ferr_072_batch_splice_ordmap_fallback() {
         .commit(store.schema())
         .expect("tx valid");
 
-    let batches = vec![(tx.into_datoms(), TxId::with_agent(100, 0, agent))];
+    let batches = vec![(tx.into_datoms(), TxId::with_node(100, 0, node))];
     let receipts = store
         .batch_splice_transact(batches)
         .expect("batch must succeed");
@@ -743,12 +743,12 @@ fn test_inv_ferr_072_batch_splice_ordmap_fallback() {
 /// INV-FERR-072: batch produces identical datom set to sequential transacts.
 #[test]
 fn test_inv_ferr_072_batch_equals_sequential() {
-    let agent = AgentId::from_bytes([13u8; 16]);
+    let node = NodeId::from_bytes([13u8; 16]);
 
     // Build two identical transaction sets
     let make_txs = |schema: &ferratom::Schema| -> Vec<Transaction<ferratomic_tx::Committed>> {
         vec![
-            Transaction::new(agent)
+            Transaction::new(node)
                 .assert_datom(
                     EntityId::from_content(b"eq-1"),
                     Attribute::from("db/doc"),
@@ -756,7 +756,7 @@ fn test_inv_ferr_072_batch_equals_sequential() {
                 )
                 .commit(schema)
                 .expect("tx1"),
-            Transaction::new(agent)
+            Transaction::new(node)
                 .assert_datom(
                     EntityId::from_content(b"eq-2"),
                     Attribute::from("db/doc"),
@@ -782,7 +782,7 @@ fn test_inv_ferr_072_batch_equals_sequential() {
         .map(|(i, tx)| {
             (
                 tx.into_datoms(),
-                TxId::with_agent(u64::try_from(i + 1).unwrap_or(0), 0, agent),
+                TxId::with_node(u64::try_from(i + 1).unwrap_or(0), 0, node),
             )
         })
         .collect();

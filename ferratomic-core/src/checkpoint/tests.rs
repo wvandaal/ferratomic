@@ -30,7 +30,7 @@ fn test_inv_ferr_013_roundtrip_empty() {
 fn test_inv_ferr_013_roundtrip_with_datoms() {
     let mut store = Store::genesis();
 
-    let tx = Transaction::new(store.genesis_agent())
+    let tx = Transaction::new(store.genesis_node())
         .assert_datom(
             EntityId::from_content(b"entity-1"),
             Attribute::from("db/doc"),
@@ -197,7 +197,7 @@ fn test_inv_ferr_013_v3_genesis_roundtrip() {
 fn test_inv_ferr_013_v3_store_roundtrip() {
     let mut store = Store::genesis();
 
-    let tx = Transaction::new(store.genesis_agent())
+    let tx = Transaction::new(store.genesis_node())
         .assert_datom(
             EntityId::from_content(b"v3-entity-1"),
             Attribute::from("db/doc"),
@@ -279,7 +279,7 @@ fn test_inv_ferr_075_live_first_roundtrip() {
     // Full round-trip: serialize LIVE-first -> deserialize -> same datom set.
     let mut store = Store::genesis();
 
-    let tx = Transaction::new(store.genesis_agent())
+    let tx = Transaction::new(store.genesis_node())
         .assert_datom(
             EntityId::from_content(b"entity-1"),
             Attribute::from("db/doc"),
@@ -310,7 +310,7 @@ fn test_inv_ferr_075_partial_store_live_only() {
     let mut store = Store::genesis();
 
     // Assert then retract to create historical datoms.
-    let tx1 = Transaction::new(store.genesis_agent())
+    let tx1 = Transaction::new(store.genesis_node())
         .assert_datom(
             EntityId::from_content(b"entity-1"),
             Attribute::from("db/doc"),
@@ -319,7 +319,7 @@ fn test_inv_ferr_075_partial_store_live_only() {
         .commit_unchecked();
     store.transact_test(tx1).unwrap();
 
-    let tx2 = Transaction::new(store.genesis_agent())
+    let tx2 = Transaction::new(store.genesis_node())
         .retract_datom(
             EntityId::from_content(b"entity-1"),
             Attribute::from("db/doc"),
@@ -398,7 +398,7 @@ fn test_inv_ferr_075_100_percent_live() {
     // All datoms LIVE (no retractions) -> hist_datoms empty.
     let mut store = Store::genesis();
 
-    let tx = Transaction::new(store.genesis_agent())
+    let tx = Transaction::new(store.genesis_node())
         .assert_datom(
             EntityId::from_content(b"all-live"),
             Attribute::from("db/doc"),
@@ -441,7 +441,7 @@ fn test_inv_ferr_075_live_only_query() {
     let mut store = Store::genesis();
 
     // Assert entity "alive" with a known value.
-    let tx = Transaction::new(store.genesis_agent())
+    let tx = Transaction::new(store.genesis_node())
         .assert_datom(
             EntityId::from_content(b"alive"),
             Attribute::from("db/doc"),
@@ -491,7 +491,7 @@ fn test_inv_ferr_075_mixed_live_groups() {
     let mut store = Store::genesis();
 
     // Entity "alive" — Assert only → LIVE.
-    let tx1 = Transaction::new(store.genesis_agent())
+    let tx1 = Transaction::new(store.genesis_node())
         .assert_datom(
             EntityId::from_content(b"alive"),
             Attribute::from("db/doc"),
@@ -501,7 +501,7 @@ fn test_inv_ferr_075_mixed_live_groups() {
     store.transact_test(tx1).unwrap();
 
     // Entity "dead" — Assert then Retract → NOT live.
-    let tx2 = Transaction::new(store.genesis_agent())
+    let tx2 = Transaction::new(store.genesis_node())
         .assert_datom(
             EntityId::from_content(b"dead"),
             Attribute::from("db/doc"),
@@ -510,7 +510,7 @@ fn test_inv_ferr_075_mixed_live_groups() {
         .commit_unchecked();
     store.transact_test(tx2).unwrap();
 
-    let tx3 = Transaction::new(store.genesis_agent())
+    let tx3 = Transaction::new(store.genesis_node())
         .retract_datom(
             EntityId::from_content(b"dead"),
             Attribute::from("db/doc"),
@@ -520,7 +520,7 @@ fn test_inv_ferr_075_mixed_live_groups() {
     store.transact_test(tx3).unwrap();
 
     // Entity "also-alive" — Assert only → LIVE.
-    let tx4 = Transaction::new(store.genesis_agent())
+    let tx4 = Transaction::new(store.genesis_node())
         .assert_datom(
             EntityId::from_content(b"also-alive"),
             Attribute::from("db/doc"),

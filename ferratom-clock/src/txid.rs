@@ -1,31 +1,37 @@
-//! Transaction identifier and agent identity types.
+//! Transaction identifier and node identity types.
 //!
 //! INV-FERR-015: HLC monotonicity — `TxId` ordering guarantees every
 //! `tick()` output is strictly greater than the previous.
 //!
 //! INV-FERR-016: HLC causality — if e1 happens-before e2, then
 //! `hlc(e1) < hlc(e2)`.
+//!
+//! C8 (Substrate Independence): The engine-level identifier for the
+//! distributed writer is `NodeId`, not `AgentId`. "Node" is the
+//! domain-neutral name shared with HLC literature, CRDT literature, and
+//! Datomic's "peer" terminology. Application-layer code is free to use
+//! `:agent/*` namespace conventions on top of this primitive.
 
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
-// AgentId
+// NodeId
 // ---------------------------------------------------------------------------
 
-/// 16-byte agent identifier.
+/// 16-byte node identifier.
 ///
-/// INV-FERR-015/016: Each agent in the distributed system has a unique
+/// INV-FERR-015/016: Each node in the distributed system has a unique
 /// identity used to distinguish concurrent writers and break ties in the
 /// hybrid logical clock.
 ///
 /// Lexicographic byte comparison via derived `Ord`.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Debug, Serialize, Deserialize)]
-pub struct AgentId([u8; 16]);
+pub struct NodeId([u8; 16]);
 
-impl AgentId {
-    /// Create an `AgentId` from raw bytes.
+impl NodeId {
+    /// Create a `NodeId` from raw bytes.
     ///
-    /// INV-FERR-015: Every agent must have a unique 16-byte identifier.
+    /// INV-FERR-015: Every node must have a unique 16-byte identifier.
     /// The caller is responsible for uniqueness (typically via UUID v4 or
     /// BLAKE3 truncation).
     #[must_use]
@@ -39,7 +45,7 @@ impl AgentId {
         &self.0
     }
 
-    /// Create an `AgentId` from a `u16` seed by zero-extending into 16 bytes.
+    /// Create a `NodeId` from a `u16` seed by zero-extending into 16 bytes.
     ///
     /// Intended for tests and generators where a compact seed is more
     /// convenient than a full 16-byte array.
@@ -61,54 +67,54 @@ impl AgentId {
 /// Hybrid Logical Clock transaction identifier.
 ///
 /// INV-FERR-015: HLC monotonicity. Lexicographic ordering on
-/// `(physical, logical, agent)` guarantees every `tick()` output is
+/// `(physical, logical, node)` guarantees every `tick()` output is
 /// strictly greater than the previous.
 ///
 /// INV-FERR-016: HLC causality. `receive()` advances the local clock
 /// past the remote timestamp, so causally-related events are ordered.
 ///
-/// Total order: `(physical, logical, agent)` — physical time dominates,
-/// logical breaks ties within the same millisecond, agent breaks ties
-/// when two agents happen to share the same `(physical, logical)`.
+/// Total order: `(physical, logical, node)` — physical time dominates,
+/// logical breaks ties within the same millisecond, node breaks ties
+/// when two nodes happen to share the same `(physical, logical)`.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
 pub struct TxId {
     /// Wall-clock time in milliseconds since epoch.
     physical: u64,
     /// Logical counter within the same physical timestamp.
     logical: u32,
-    /// Agent that created this transaction.
-    agent: AgentId,
+    /// Node that originated this transaction.
+    node: NodeId,
 }
 
 impl TxId {
     /// Create a `TxId` from compact components. **Testing only.**
     ///
-    /// INV-FERR-015: The triple `(physical, logical, agent)` forms a
+    /// INV-FERR-015: The triple `(physical, logical, node)` forms a
     /// totally ordered HLC timestamp.
     ///
-    /// The `agent_seed` is zero-extended into a 16-byte `AgentId`. This
+    /// The `node_seed` is zero-extended into a 16-byte `NodeId`. This
     /// constructor exists for ergonomic use in tests and generators; prefer
-    /// [`TxId::with_agent`] in production code.
+    /// [`TxId::with_node`] in production code.
     #[cfg(any(test, feature = "test-utils"))]
     #[must_use]
-    pub fn new(physical: u64, logical: u32, agent_seed: u16) -> Self {
+    pub fn new(physical: u64, logical: u32, node_seed: u16) -> Self {
         Self {
             physical,
             logical,
-            agent: AgentId::from_seed(agent_seed),
+            node: NodeId::from_seed(node_seed),
         }
     }
 
-    /// Create a `TxId` with an explicit [`AgentId`].
+    /// Create a `TxId` with an explicit [`NodeId`].
     ///
     /// INV-FERR-015: Production constructor for HLC timestamps produced
     /// by [`HybridClock::tick`](crate::HybridClock::tick).
     #[must_use]
-    pub fn with_agent(physical: u64, logical: u32, agent: AgentId) -> Self {
+    pub fn with_node(physical: u64, logical: u32, node: NodeId) -> Self {
         Self {
             physical,
             logical,
-            agent,
+            node,
         }
     }
 
@@ -124,24 +130,24 @@ impl TxId {
         self.logical
     }
 
-    /// Agent that created this transaction.
+    /// Node that originated this transaction.
     #[must_use]
-    pub fn agent(&self) -> AgentId {
-        self.agent
+    pub fn node(&self) -> NodeId {
+        self.node
     }
 }
 
-/// Lexicographic ordering: `(physical, logical, agent)`.
+/// Lexicographic ordering: `(physical, logical, node)`.
 ///
 /// INV-FERR-015: This ordering guarantees that monotonically increasing
 /// physical time produces monotonically increasing `TxId`s, with logical
-/// and agent as tiebreakers.
+/// and node as tiebreakers.
 impl Ord for TxId {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.physical
             .cmp(&other.physical)
             .then_with(|| self.logical.cmp(&other.logical))
-            .then_with(|| self.agent.cmp(&other.agent))
+            .then_with(|| self.node.cmp(&other.node))
     }
 }
 

@@ -5,7 +5,7 @@
 
 use std::{collections::BTreeSet, sync::Arc};
 
-use ferratom::{AgentId, Attribute, Datom, EntityId, Op, TxId, Value};
+use ferratom::{Attribute, Datom, EntityId, NodeId, Op, TxId, Value};
 use ferratomic_db::{
     indexes::{EavtKey, IndexBackend},
     store::Store,
@@ -63,7 +63,7 @@ fn snapshot_isolation() {
     let snapshot = store.snapshot();
     let snapshot_datoms: BTreeSet<Datom> = snapshot.datoms().cloned().collect();
 
-    let tx = Transaction::new(AgentId::from_bytes([0u8; 16]))
+    let tx = Transaction::new(NodeId::from_bytes([0u8; 16]))
         .assert_datom(
             EntityId::from_content(b"kani-snapshot"),
             Attribute::from("test/name"),
@@ -85,11 +85,11 @@ fn snapshot_isolation() {
 fn write_linearizability() {
     let mut epochs: Vec<u64> = Vec::new();
     let mut store = Store::genesis();
-    let agent = AgentId::from_bytes([1u8; 16]);
+    let node = NodeId::from_bytes([1u8; 16]);
 
     for _ in 0..kani::any::<u8>().min(5) {
         let datom_id = kani::any::<u8>();
-        let tx = Transaction::new(agent)
+        let tx = Transaction::new(node)
             .assert_datom(
                 EntityId::from_content(&[datom_id]),
                 Attribute::from("test/counter"),
@@ -119,7 +119,7 @@ fn write_linearizability() {
 #[cfg_attr(not(kani), ignore = "requires Kani verifier")]
 fn observer_monotonicity() {
     let mut store = Store::genesis();
-    let agent = AgentId::from_bytes([1u8; 16]);
+    let node = NodeId::from_bytes([1u8; 16]);
     let mut epochs: Vec<u64> = Vec::new();
 
     // Record genesis epoch.
@@ -129,7 +129,7 @@ fn observer_monotonicity() {
     kani::assume(n_txns > 0 && n_txns <= 4);
 
     for i in 0..n_txns {
-        let tx = Transaction::new(agent)
+        let tx = Transaction::new(node)
             .assert_datom(
                 EntityId::from_content(&[i, 0x11]),
                 Attribute::from("db/doc"),
@@ -253,9 +253,9 @@ fn index_backend_order_independence() {
 #[cfg_attr(not(kani), ignore = "requires Kani verifier")]
 fn eavt_lookup_correctness() {
     let mut store = Store::genesis();
-    let agent = AgentId::from_bytes([3u8; 16]);
+    let node = NodeId::from_bytes([3u8; 16]);
 
-    let tx = Transaction::new(agent)
+    let tx = Transaction::new(node)
         .assert_datom(
             EntityId::from_content(b"eavt-lookup"),
             Attribute::from("db/doc"),

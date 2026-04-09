@@ -18,7 +18,7 @@ fn build_shifted_store_ordmap(start: usize, count: usize) -> Store {
     let mut store = Store::genesis();
     for index in start..start + count {
         let tx =
-            ferratomic_db::writer::Transaction::new(ferratom::AgentId::from_bytes([0xBBu8; 16]))
+            ferratomic_db::writer::Transaction::new(ferratom::NodeId::from_bytes([0xBBu8; 16]))
                 .assert_datom(
                     doc_entity(index),
                     ferratom::Attribute::from(DOC_ATTRIBUTE),
@@ -105,7 +105,7 @@ fn bench_merge_10k_x_10k(c: &mut Criterion) {
 /// to keep CI fast while covering the code path.
 ///
 /// Note: `build_shifted_store_ordmap` produces stores with metadata datoms
-/// (`:tx/time`, `:tx/agent` per transaction), so datom counts are larger
+/// (`:tx/time`, `:tx/origin` per transaction), so datom counts are larger
 /// than the user-datom count. Assertions verify set-union monotonicity
 /// rather than exact counts.
 fn bench_merge_mixed_repr(c: &mut Criterion) {

@@ -19,7 +19,7 @@
 
 use std::collections::BTreeSet;
 
-use ferratom::{AgentId, Attribute, Datom, EntityId, Op, TxId, Value};
+use ferratom::{Attribute, Datom, EntityId, NodeId, Op, TxId, Value};
 use ferratomic_db::store::Store;
 use proptest::prelude::*;
 
@@ -134,9 +134,9 @@ pub fn arb_tx_id() -> impl Strategy<Value = TxId> {
         .prop_map(|(wall, counter, node)| TxId::new(wall, counter, node))
 }
 
-/// Arbitrary AgentId.
-pub fn arb_agent_id() -> impl Strategy<Value = AgentId> {
-    any::<[u8; 16]>().prop_map(AgentId::from_bytes)
+/// Arbitrary NodeId: 16-byte node identifier for testing.
+pub fn arb_node_id() -> impl Strategy<Value = NodeId> {
+    any::<[u8; 16]>().prop_map(NodeId::from_bytes)
 }
 
 // ---------------------------------------------------------------------------
@@ -214,8 +214,8 @@ pub fn arb_store_with_overlap(
 /// Arbitrary committed Transaction (bypasses schema for testing).
 pub fn arb_transaction(
 ) -> impl Strategy<Value = ferratomic_db::writer::Transaction<ferratomic_db::writer::Committed>> {
-    (arb_agent_id(), prop::collection::vec(arb_datom(), 1..20)).prop_map(|(agent, datoms)| {
-        let mut tx = ferratomic_db::writer::Transaction::new(agent);
+    (arb_node_id(), prop::collection::vec(arb_datom(), 1..20)).prop_map(|(node, datoms)| {
+        let mut tx = ferratomic_db::writer::Transaction::new(node);
         for d in datoms {
             tx = tx.assert_datom(d.entity(), d.attribute().clone(), d.value().clone());
         }
@@ -227,8 +227,8 @@ pub fn arb_transaction(
 /// Used for testing transaction atomicity (INV-FERR-006).
 pub fn arb_multi_datom_transaction(
 ) -> impl Strategy<Value = ferratomic_db::writer::Transaction<ferratomic_db::writer::Committed>> {
-    (arb_agent_id(), prop::collection::vec(arb_datom(), 2..20)).prop_map(|(agent, datoms)| {
-        let mut tx = ferratomic_db::writer::Transaction::new(agent);
+    (arb_node_id(), prop::collection::vec(arb_datom(), 2..20)).prop_map(|(node, datoms)| {
+        let mut tx = ferratomic_db::writer::Transaction::new(node);
         for d in datoms {
             tx = tx.assert_datom(d.entity(), d.attribute().clone(), d.value().clone());
         }

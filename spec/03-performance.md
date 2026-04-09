@@ -221,7 +221,7 @@ fn measure_write_amplification(count: usize) -> f64 {
     let dir = tempfile::TempDir::new().expect("create temp dir");
     let wal_path = dir.path().join("wa_test.wal");
     let db = Database::genesis_with_wal(&wal_path).expect("genesis_with_wal");
-    let agent = AgentId::from_bytes([2u8; 16]);
+    let node = NodeId::from_bytes([2u8; 16]);
 
     let mut logical_bytes: u64 = 0;
     for i in 0..count {
@@ -967,7 +967,7 @@ Let genesis() be the store bootstrap function.
 Current certified structure:
   datoms(genesis()) = ∅
   epoch(genesis()) = 0
-  genesis_agent(genesis()) = [0; 16]
+  genesis_node(genesis()) = [0; 16]
   schema(genesis()) = deterministic 19-attribute axiomatic schema
 
 At the datom-set layer, genesis is the semilattice bottom element.
@@ -978,7 +978,7 @@ At the store layer, genesis is a deterministic bootstrap state.
 Every call to `Store::genesis()` must yield the same bootstrap state. That means:
 - the same empty primary store,
 - the same epoch,
-- the same genesis agent,
+- the same genesis node,
 - the same ordered schema definitions,
 - and therefore the same starting point for every test, recovery flow, and replica.
 
@@ -987,7 +987,7 @@ The deterministic schema is assembled from two fixed builders:
 - `define_tx_schema`: 5 transaction metadata attributes
 
 The current transaction metadata surface is exactly:
-`tx/time`, `tx/agent`, `tx/provenance`, `tx/rationale`, `tx/coherence-override`
+`tx/time`, `tx/origin`, `tx/provenance`, `tx/rationale`, `tx/validation-override`
 
 This invariant is intentionally narrower than “future genesis may grow”. Axiomatic
 schema growth is a spec change, not a silent implementation detail.
@@ -1001,7 +1001,7 @@ pub fn genesis() -> Store {
         repr: StoreRepr::Positional(Arc::new(positional)),
         schema: crate::schema_evolution::genesis_schema(),
         epoch: 0,
-        genesis_agent: AgentId::from_bytes([0u8; 16]),
+        genesis_node: NodeId::from_bytes([0u8; 16]),
         live_causal: OrdMap::new(),
         live_set: OrdMap::new(),
         schema_conflicts: Vec::new(),
@@ -1022,7 +1022,7 @@ fn genesis_determinism() {
     assert_eq!(a.datom_set(), b.datom_set());
     assert_eq!(a.epoch(), b.epoch());
     assert_eq!(a.schema(), b.schema());
-    assert_eq!(a.genesis_agent(), b.genesis_agent());
+    assert_eq!(a.genesis_node(), b.genesis_node());
 }
 ```
 
@@ -1044,7 +1044,7 @@ proptest! {
         prop_assert_eq!(g1.datom_set(), g2.datom_set());
         prop_assert_eq!(g1.epoch(), g2.epoch());
         prop_assert_eq!(g1.schema(), g2.schema());
-        prop_assert_eq!(g1.genesis_agent(), g2.genesis_agent());
+        prop_assert_eq!(g1.genesis_node(), g2.genesis_node());
     }
 }
 ```

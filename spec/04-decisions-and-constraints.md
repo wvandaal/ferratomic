@@ -411,7 +411,7 @@ it and must use `into_verified()` (which requires cryptographic proof).
 - `WireEntityId([u8; 32])` — `Deserialize`, converts via `into_trusted()` or `into_verified(proof)`
 - `WireValue` — 11 variants matching `Value`, with `WireEntityId` for `Ref`
 - `WireDatom` — all wire-type fields
-- `WireCheckpointPayload` — schema + genesis_agent + `Vec<WireDatom>`
+- `WireCheckpointPayload` — schema + genesis_node + `Vec<WireDatom>`
 
 **Modified core types**:
 - `EntityId`: remove `Deserialize`, add `from_trusted_bytes(pub(crate))`
@@ -419,7 +419,7 @@ it and must use `into_verified()` (which requires cryptographic proof).
 - `Datom`: remove `Deserialize` (contains `EntityId`)
 - `NonNanFloat`: custom `Deserialize` impl that rejects NaN
 
-**Unchanged types**: `TxId`, `AgentId`, `Op`, `Attribute` retain `Deserialize` (no
+**Unchanged types**: `TxId`, `NodeId`, `Op`, `Attribute` retain `Deserialize` (no
 `EntityId` content, no invariants that deserialization could violate).
 
 **Trust provenance model** (every EntityId has exactly one provenance):
@@ -451,7 +451,7 @@ inlines and erases the conversion. Benchmarks show no regression.
 **Stage**: 0
 
 **Problem**: The `ferratom` leaf crate contained both core datom types (`Datom`,
-`EntityId`, `Value`, `Schema`) AND clock types (`HybridClock`, `TxId`, `AgentId`,
+`EntityId`, `Value`, `Schema`) AND clock types (`HybridClock`, `TxId`, `NodeId`,
 `Frontier`). These are two distinct responsibilities: the datom model and the
 temporal ordering model. The clock types have their own invariants (INV-FERR-015,
 INV-FERR-016) and their own test surface. Combining them in one crate violates
@@ -462,13 +462,13 @@ single responsibility and complicates the dependency DAG.
 | Option | Description | Pros | Cons |
 |--------|-------------|------|------|
 | A: Keep in ferratom | Status quo. All leaf types in one crate. | Simpler workspace. | Mixed responsibilities. Clock changes recompile all datom consumers. |
-| B: Extract ferratom-clock | New leaf crate for HLC/TxId/AgentId/Frontier. ferratom depends on ferratom-clock. | Single responsibility. Clock invariants isolated. LOC budget compliance (<1,000 LOC per crate for leaves). Precedent for Phase 4b ferratomic-prolly extraction. | One more crate in workspace. |
+| B: Extract ferratom-clock | New leaf crate for HLC/TxId/NodeId/Frontier. ferratom depends on ferratom-clock. | Single responsibility. Clock invariants isolated. LOC budget compliance (<1,000 LOC per crate for leaves). Precedent for Phase 4b ferratomic-prolly extraction. | One more crate in workspace. |
 
 **Decision**: **Option B: Extract ferratom-clock**
 
 The dependency DAG becomes:
 ```
-ferratom-clock (leaf: HLC, TxId, AgentId, Frontier)
+ferratom-clock (leaf: HLC, TxId, NodeId, Frontier)
   ↑
 ferratom (leaf: Datom, EntityId, Value, Schema — depends on ferratom-clock)
   ↑
@@ -492,7 +492,7 @@ ferratomic-datalog (query: Datalog parser + evaluator)
 - `ferratom` gains a dependency on `ferratom-clock`. This is the ONLY
   additional internal dependency, preserving the acyclic DAG.
 - `ferratom-clock` has zero project-internal dependencies (leaf crate).
-- `HybridClock`, `TxId`, `AgentId`, and `Frontier` are re-exported from
+- `HybridClock`, `TxId`, `NodeId`, and `Frontier` are re-exported from
   `ferratom` for backward compatibility (consumers don't need to add
   `ferratom-clock` to their `Cargo.toml`).
 - Default type parameter `HybridClock<C = SystemClock>` preserves all

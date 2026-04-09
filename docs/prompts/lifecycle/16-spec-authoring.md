@@ -289,6 +289,10 @@ Mechanical translation of Level 0 into Lean 4. Use the definitions from
 - Update `spec/README.md` if the INV count changed
 - Verify the INV-FERR ID doesn't collide with existing IDs
 
+### Six-Dimension Scoring (GOALS.md §7)
+
+Before finalizing any non-trivial invariant, ADR, or spec section, score it across all six dimensions (1-10 each). Document the composite. Any dimension below 7.0 → reconsider. Correctness below 10.0 → cannot ship. See GOALS.md §7.4 for a worked example (INV-FERR-049 rewrite: pre/post scores across all six dimensions).
+
 ---
 
 ## The Five-Lens Convergence Protocol
@@ -479,3 +483,5 @@ theorem rolling_boundary_deterministic (w : Fin 32 → UInt8) :
   section first. Context prevents ID collisions, contradictions, and redundancy.
 - Do not edit spec files without verifying that the change reduces or maintains
   drift. New content must be consistent with all existing invariants.
+
+**Knowledge Organization Rule**: Prescriptive content (invariants, ADRs, decisions) goes in `spec/` or `GOALS.md` — NEVER only in `docs/ideas/`. Idea docs may explore but must reference canonical sources as authoritative. See AGENTS.md Knowledge Organization Rule.

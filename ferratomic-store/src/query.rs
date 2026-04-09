@@ -164,7 +164,7 @@ fn select_latest_live_value_from_iter<'a>(
 mod tests {
     use std::collections::BTreeSet;
 
-    use ferratom::{AgentId, Attribute, Datom, EntityId, Op, TxId, Value};
+    use ferratom::{Attribute, Datom, EntityId, NodeId, Op, TxId, Value};
     use ferratomic_tx::Transaction;
 
     use crate::store::Store;
@@ -252,13 +252,13 @@ mod tests {
     #[test]
     fn test_inv_ferr_032_transact_path_updates_live_metadata() {
         let mut store = Store::genesis();
-        let agent = AgentId::from_bytes([0x91; 16]);
+        let node = NodeId::from_bytes([0x91; 16]);
         let entity = EntityId::from_content(b"bd-ik91-transact");
         let attribute = Attribute::from("db/doc");
         let older_value = Value::String("z-old".into());
         let newer_value = Value::String("a-new".into());
 
-        let tx1 = Transaction::new(agent)
+        let tx1 = Transaction::new(node)
             .assert_datom(entity, attribute.clone(), older_value.clone())
             .commit(store.schema())
             .expect("bd-ik91: first transact-path assertion must validate");
@@ -266,7 +266,7 @@ mod tests {
             .transact_test(tx1)
             .expect("bd-ik91: first transact-path assertion must apply");
 
-        let tx2 = Transaction::new(agent)
+        let tx2 = Transaction::new(node)
             .assert_datom(entity, attribute.clone(), newer_value.clone())
             .commit(store.schema())
             .expect("bd-ik91: second transact-path assertion must validate");

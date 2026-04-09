@@ -31,7 +31,7 @@ pub(crate) struct V4PayloadRead {
     pub(crate) attributes: Vec<String>,
     /// Value column (wire format, may contain unverified `EntityId` via Ref).
     pub(crate) values: Vec<ferratom::wire::WireValue>,
-    /// `TxId` column (safe -- just integers + agent bytes).
+    /// `TxId` column (safe -- just integers + node bytes).
     pub(crate) tx_ids: Vec<TxId>,
     /// Op column (true = Assert, false = Retract).
     pub(crate) ops: Vec<bool>,
@@ -57,8 +57,8 @@ fn corrupted(expected: &str, actual: &str) -> FerraError {
     }
 }
 
-/// Parse the V4 fixed header: magic, version, epoch, `genesis_agent`.
-fn parse_v4_header(content: &[u8]) -> Result<(u64, ferratom::AgentId), FerraError> {
+/// Parse the V4 fixed header: magic, version, epoch, `genesis_node`.
+fn parse_v4_header(content: &[u8]) -> Result<(u64, ferratom::NodeId), FerraError> {
     let magic: [u8; 4] = content[0..4]
         .try_into()
         .map_err(|_| corrupted("CHK4 magic", "truncated"))?;
@@ -83,8 +83,8 @@ fn parse_v4_header(content: &[u8]) -> Result<(u64, ferratom::AgentId), FerraErro
     );
     let genesis_bytes: [u8; 16] = content[14..30]
         .try_into()
-        .map_err(|_| corrupted("16-byte genesis agent", "truncated"))?;
-    Ok((epoch, ferratom::AgentId::from_bytes(genesis_bytes)))
+        .map_err(|_| corrupted("16-byte genesis node", "truncated"))?;
+    Ok((epoch, ferratom::NodeId::from_bytes(genesis_bytes)))
 }
 
 /// Validate that all V4 columns have consistent length.
@@ -141,7 +141,7 @@ fn validate_column_lengths(payload: &V4PayloadRead) -> Result<usize, FerraError>
 /// truncation, column length mismatch, or deserialization failure.
 pub fn deserialize_v4_bytes(data: &[u8]) -> Result<CheckpointData, FerraError> {
     let content = verify_v4_checksum(data)?;
-    let (epoch, genesis_agent) = parse_v4_header(content)?;
+    let (epoch, genesis_node) = parse_v4_header(content)?;
 
     // Deserialize columnar payload through ADR-FERR-010 trust boundary.
     let wire_payload: V4PayloadRead = bincode::deserialize(&content[V4_HEADER_SIZE..])
@@ -186,7 +186,7 @@ pub fn deserialize_v4_bytes(data: &[u8]) -> Result<CheckpointData, FerraError> {
 
     Ok(CheckpointData {
         epoch,
-        genesis_agent,
+        genesis_node,
         schema_pairs,
         datoms,
         live_bits: Some(live_bits),

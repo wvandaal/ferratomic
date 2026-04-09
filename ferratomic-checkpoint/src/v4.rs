@@ -17,7 +17,7 @@
 //! +------------------+
 //! | Epoch    (8B)    | u64 little-endian
 //! +------------------+
-//! | Genesis  (16B)   | AgentId bytes
+//! | Genesis  (16B)   | NodeId bytes
 //! +------------------+
 //! | Payload  (N)     | bincode: V4PayloadWrite/V4PayloadRead
 //! |  schema_pairs    |   sorted (String, AttributeDef) pairs
@@ -37,7 +37,7 @@
 //! `into_trusted()` after BLAKE3 verification.
 
 use bitvec::prelude::{BitVec, Lsb0};
-use ferratom::{AgentId, AttributeDef, Datom, EntityId, FerraError, Op, TxId, Value};
+use ferratom::{AttributeDef, Datom, EntityId, FerraError, NodeId, Op, TxId, Value};
 use serde::Serialize;
 
 pub use super::v4_read::deserialize_v4_bytes;
@@ -89,7 +89,7 @@ struct V4PayloadWrite<'a> {
 /// Serialize store data to V4 columnar checkpoint bytes (in-memory).
 ///
 /// INV-FERR-013: The returned bytes contain the full store state (epoch,
-/// genesis agent, schema, all datoms decomposed into columns, LIVE bitvector)
+/// genesis node, schema, all datoms decomposed into columns, LIVE bitvector)
 /// in the V4 wire format. A trailing BLAKE3 hash covers all preceding bytes
 /// for tamper detection.
 ///
@@ -100,7 +100,7 @@ pub fn serialize_v4_bytes(
     datoms: &[Datom],
     schema_pairs: &[(String, AttributeDef)],
     epoch: u64,
-    genesis_agent: AgentId,
+    genesis_node: NodeId,
     live_bits: &BitVec<u64, Lsb0>,
 ) -> Result<Vec<u8>, FerraError> {
     // Decompose datoms into per-column arrays.
@@ -136,11 +136,11 @@ pub fn serialize_v4_bytes(
     let total_size = V4_HEADER_SIZE + payload_bytes.len() + HASH_SIZE;
     let mut buf = Vec::with_capacity(total_size);
 
-    // Header: magic + version + epoch + genesis_agent
+    // Header: magic + version + epoch + genesis_node
     buf.extend_from_slice(&V4_MAGIC);
     buf.extend_from_slice(&V4_VERSION.to_le_bytes());
     buf.extend_from_slice(&epoch.to_le_bytes());
-    buf.extend_from_slice(genesis_agent.as_bytes());
+    buf.extend_from_slice(genesis_node.as_bytes());
 
     // Payload
     buf.extend_from_slice(&payload_bytes);
@@ -161,7 +161,7 @@ mod tests {
     use std::sync::Arc;
 
     use bitvec::prelude::{BitVec, Lsb0};
-    use ferratom::{AgentId, Attribute, AttributeDef, Datom, EntityId, Op, TxId, Value};
+    use ferratom::{Attribute, AttributeDef, Datom, EntityId, NodeId, Op, TxId, Value};
 
     use super::*;
     use crate::CheckpointData;
@@ -207,7 +207,7 @@ mod tests {
         let (datoms, live_bits) = make_test_datoms();
         CheckpointData {
             epoch: 42,
-            genesis_agent: AgentId::from_bytes([1u8; 16]),
+            genesis_node: NodeId::from_bytes([1u8; 16]),
             schema_pairs: test_schema_pairs(),
             datoms,
             live_bits: Some(live_bits),
@@ -228,7 +228,7 @@ mod tests {
             &data.datoms,
             &data.schema_pairs,
             data.epoch,
-            data.genesis_agent,
+            data.genesis_node,
             lb_ref,
         )
         .map_err(|e| format!("serialize: {e}"))
@@ -243,8 +243,8 @@ mod tests {
             "INV-FERR-013: epoch must roundtrip"
         );
         assert_eq!(
-            loaded.genesis_agent, data.genesis_agent,
-            "INV-FERR-013: genesis_agent must roundtrip"
+            loaded.genesis_node, data.genesis_node,
+            "INV-FERR-013: genesis_node must roundtrip"
         );
         assert_eq!(
             loaded.datoms, data.datoms,
@@ -264,7 +264,7 @@ mod tests {
     fn test_inv_ferr_013_v4_empty_roundtrip() {
         let data = CheckpointData {
             epoch: 0,
-            genesis_agent: AgentId::from_bytes([0u8; 16]),
+            genesis_node: NodeId::from_bytes([0u8; 16]),
             schema_pairs: Vec::new(),
             datoms: Vec::new(),
             live_bits: Some(BitVec::new()),
@@ -274,7 +274,7 @@ mod tests {
             &data.datoms,
             &data.schema_pairs,
             data.epoch,
-            data.genesis_agent,
+            data.genesis_node,
             data.live_bits.as_ref().map_or(&BitVec::new(), |b| b),
         )
         .map_err(|e| format!("serialize empty: {e}"))
@@ -298,7 +298,7 @@ mod tests {
             &data.datoms,
             &data.schema_pairs,
             data.epoch,
-            data.genesis_agent,
+            data.genesis_node,
             data.live_bits.as_ref().map_or(&BitVec::new(), |b| b),
         )
         .map_err(|e| format!("serialize: {e}"))
@@ -330,7 +330,7 @@ mod tests {
             &data.datoms,
             &data.schema_pairs,
             data.epoch,
-            data.genesis_agent,
+            data.genesis_node,
             lb_ref,
         )
         .map_err(|e| format!("V4 serialize: {e}"))
@@ -345,7 +345,7 @@ mod tests {
             &data.datoms,
             &data.schema_pairs,
             data.epoch,
-            data.genesis_agent,
+            data.genesis_node,
             lb_ref,
         )
         .map_err(|e| format!("V3 serialize: {e}"))
@@ -358,8 +358,8 @@ mod tests {
         // V4 must produce identical CheckpointData as V3.
         assert_eq!(v4_loaded.epoch, v3_loaded.epoch, "V4 epoch must match V3");
         assert_eq!(
-            v4_loaded.genesis_agent, v3_loaded.genesis_agent,
-            "V4 genesis_agent must match V3"
+            v4_loaded.genesis_node, v3_loaded.genesis_node,
+            "V4 genesis_node must match V3"
         );
         assert_eq!(
             v4_loaded.datoms, v3_loaded.datoms,
@@ -403,7 +403,7 @@ mod tests {
             &datoms,
             &schema,
             10,
-            AgentId::from_bytes([5u8; 16]),
+            NodeId::from_bytes([5u8; 16]),
             &live_bits,
         )
         .map_err(|e| format!("serialize: {e}"))
@@ -433,7 +433,7 @@ mod tests {
             &data.datoms,
             &data.schema_pairs,
             data.epoch,
-            data.genesis_agent,
+            data.genesis_node,
             lb_ref,
         )
         .map_err(|e| format!("serialize: {e}"))

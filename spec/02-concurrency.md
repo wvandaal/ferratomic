@@ -506,14 +506,14 @@ ADR-FERR-005 (Clock Model)
 
 #### Level 0 (Algebraic Law)
 ```
-Let HLC = (physical : u64, logical : u32, agent : AgentId) be a hybrid logical clock.
-Let tick : Agent → HLC be the clock advance function.
+Let HLC = (physical : u64, logical : u32, node : NodeId) be a hybrid logical clock.
+Let tick : Node → HLC be the clock advance function.
 
-∀ agent α:
+∀ node α:
   ∀ consecutive ticks t₁, t₂ of α (t₁ before t₂):
     tick(α, t₂).physical ≥ tick(α, t₁).physical
 
-Physical time component is monotonically non-decreasing for any single agent.
+Physical time component is monotonically non-decreasing for any single node.
 If the wall clock advances, physical advances. If the wall clock is stale
 (NTP regression, VM snapshot restore), the logical counter increments to
 maintain the total ordering:
@@ -525,9 +525,9 @@ maintain the total ordering:
     else
       (pt, 0, α)
 
-AgentId ordering: AgentId is a [u8; 16] byte array. Total order is lexicographic
+NodeId ordering: NodeId is a [u8; 16] byte array. Total order is lexicographic
 byte comparison. This is deterministic, portable, and collision-resistant when
-AgentId = BLAKE3(agent_name)[0..16]. Two agents with identical BLAKE3 prefixes
+NodeId = BLAKE3(node_name)[0..16]. Two nodes with identical BLAKE3 prefixes
 (16-byte collision probability ≈ 2⁻¹²⁸) are operationally indistinguishable —
 a negligible risk equivalent to SHA-256 collision.
 
@@ -561,20 +561,20 @@ advances, preventing counter wrap-around.
 
 #### Level 2 (Implementation Contract)
 ```rust
-/// Agent identifier: 16-byte BLAKE3 hash prefix.
+/// Node identifier: 16-byte BLAKE3 hash prefix.
 /// Lexicographic byte order via derived Ord provides the total order
 /// used as tie-breaker in HLC comparison.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct AgentId([u8; 16]);  // Lexicographic byte order via derived Ord
+pub struct NodeId([u8; 16]);  // Lexicographic byte order via derived Ord
 
 /// Hybrid Logical Clock.
 /// Invariant: every call to tick() returns a value strictly greater than
-/// any previous return value on this agent.
+/// any previous return value on this node.
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub struct Hlc {
     physical: u64,   // milliseconds since epoch
     logical: u32,    // counter within same millisecond
-    agent: AgentId,  // tie-breaker across agents
+    node: NodeId,    // tie-breaker across nodes
 }
 
 impl Hlc {
@@ -624,7 +624,7 @@ impl Hlc {
 #[kani::proof]
 #[kani::unwind(10)]
 fn hlc_monotonicity() {
-    let mut hlc = Hlc::new(AgentId::test());
+    let mut hlc = Hlc::new(NodeId::test());
     let mut prev = hlc.clone();
 
     for _ in 0..kani::any::<u8>().min(5) {
@@ -651,7 +651,7 @@ proptest! {
     fn hlc_strictly_monotonic(
         wall_clocks in prop::collection::vec(0u64..1_000_000, 2..50),
     ) {
-        let mut hlc = Hlc::new(AgentId::test());
+        let mut hlc = Hlc::new(NodeId::test());
         let mut prev: Option<Hlc> = None;
 
         for wc in wall_clocks {
@@ -674,7 +674,7 @@ proptest! {
         remote_physical in 0u64..1_000_000,
         remote_logical in 0u32..1000,
     ) {
-        let mut hlc = Hlc::new(AgentId::from("local"));
+        let mut hlc = Hlc::new(NodeId::from("local"));
         for _ in 0..local_ticks {
             hlc.tick();
         }
@@ -683,7 +683,7 @@ proptest! {
         let remote = Hlc {
             physical: remote_physical,
             logical: remote_logical,
-            agent: AgentId::from("remote"),
+            agent: NodeId::from("remote"),
         };
         hlc.receive(&remote);
 
@@ -792,7 +792,7 @@ impl stateright::Model for HlcCausalityModel {
         vec![HlcNetworkState {
             agents: (0..self.agent_count)
                 .map(|i| AgentHlc {
-                    hlc: Hlc::new(AgentId::from(i)),
+                    hlc: Hlc::new(NodeId::from(i)),
                     events: vec![],
                 })
                 .collect(),
@@ -859,8 +859,8 @@ impl stateright::Model for HlcCausalityModel {
 #[kani::proof]
 #[kani::unwind(6)]
 fn hlc_causality() {
-    let mut sender = Hlc::new(AgentId::from("sender"));
-    let mut receiver = Hlc::new(AgentId::from("receiver"));
+    let mut sender = Hlc::new(NodeId::from("sender"));
+    let mut receiver = Hlc::new(NodeId::from("receiver"));
 
     // Sender ticks
     let send_hlc = sender.tick();
@@ -893,7 +893,7 @@ proptest! {
         agent_sequence in prop::collection::vec(0..5usize, 2..20),
     ) {
         let mut agents: Vec<Hlc> = (0..agent_count)
-            .map(|i| Hlc::new(AgentId::from(i)))
+            .map(|i| Hlc::new(NodeId::from(i)))
             .collect();
 
         let mut hlc_chain: Vec<Hlc> = vec![];

@@ -192,7 +192,7 @@ Attribute      | Name is interned (O(1) clone)          | countable
 Value          | Exactly 11 value domains                | sum of 11 variants
 Op             | Assert or Retract (no third option)     | 2
 Datom          | Immutable 5-tuple fact                  | product of 5 fields
-TxId           | Causally ordered timestamp              | (u64, u32, AgentId)
+TxId           | Causally ordered timestamp              | (u64, u32, NodeId)
 Schema         | Attribute -> Definition partial function| finite map
 Store          | Append-only datom set with invariants   | (OrdSet, Indexes, Schema, u64)
 ```

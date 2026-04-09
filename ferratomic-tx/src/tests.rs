@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use ferratom::{AgentId, Attribute, EntityId, Op, Schema, TxId, Value};
+use ferratom::{Attribute, EntityId, NodeId, Op, Schema, TxId, Value};
 
 use crate::{validate::value_matches_type, *};
 
@@ -34,8 +34,8 @@ fn test_schema() -> Schema {
 
 #[test]
 fn test_transaction_new_is_empty() {
-    let agent = AgentId::from_bytes([0u8; 16]);
-    let tx = Transaction::new(agent);
+    let node = NodeId::from_bytes([0u8; 16]);
+    let tx = Transaction::new(node);
     let committed = tx.commit_unchecked();
     assert!(
         committed.datoms().is_empty(),
@@ -45,9 +45,9 @@ fn test_transaction_new_is_empty() {
 
 #[test]
 fn test_transaction_assert_datom_accumulates() {
-    let agent = AgentId::from_bytes([1u8; 16]);
+    let node = NodeId::from_bytes([1u8; 16]);
     let entity = EntityId::from_content(b"test");
-    let tx = Transaction::new(agent)
+    let tx = Transaction::new(node)
         .assert_datom(
             entity,
             Attribute::from("user/name"),
@@ -60,23 +60,23 @@ fn test_transaction_assert_datom_accumulates() {
 }
 
 #[test]
-fn test_transaction_agent_preserved() {
-    let agent = AgentId::from_bytes([42u8; 16]);
-    let tx = Transaction::new(agent).commit_unchecked();
+fn test_transaction_node_preserved() {
+    let node = NodeId::from_bytes([42u8; 16]);
+    let tx = Transaction::new(node).commit_unchecked();
     assert_eq!(
-        tx.agent(),
-        agent,
-        "committed transaction should preserve agent"
+        tx.node(),
+        node,
+        "committed transaction should preserve node"
     );
 }
 
 #[test]
 fn test_inv_ferr_009_commit_valid() {
     let schema = test_schema();
-    let agent = AgentId::from_bytes([0u8; 16]);
+    let node = NodeId::from_bytes([0u8; 16]);
     let entity = EntityId::from_content(b"e1");
 
-    let tx = Transaction::new(agent).assert_datom(
+    let tx = Transaction::new(node).assert_datom(
         entity,
         Attribute::from("user/name"),
         Value::String("Bob".into()),
@@ -92,10 +92,10 @@ fn test_inv_ferr_009_commit_valid() {
 #[test]
 fn test_inv_ferr_009_commit_unknown_attribute() {
     let schema = test_schema();
-    let agent = AgentId::from_bytes([0u8; 16]);
+    let node = NodeId::from_bytes([0u8; 16]);
     let entity = EntityId::from_content(b"e1");
 
-    let tx = Transaction::new(agent).assert_datom(
+    let tx = Transaction::new(node).assert_datom(
         entity,
         Attribute::from("nonexistent/attr"),
         Value::String("test".into()),
@@ -111,11 +111,11 @@ fn test_inv_ferr_009_commit_unknown_attribute() {
 #[test]
 fn test_inv_ferr_009_commit_wrong_type() {
     let schema = test_schema();
-    let agent = AgentId::from_bytes([0u8; 16]);
+    let node = NodeId::from_bytes([0u8; 16]);
     let entity = EntityId::from_content(b"e1");
 
     let tx =
-        Transaction::new(agent).assert_datom(entity, Attribute::from("user/name"), Value::Long(42));
+        Transaction::new(node).assert_datom(entity, Attribute::from("user/name"), Value::Long(42));
 
     let result = tx.commit(&schema);
     assert!(
@@ -127,9 +127,9 @@ fn test_inv_ferr_009_commit_wrong_type() {
 #[test]
 fn test_inv_ferr_006_atomic_rejection() {
     let schema = test_schema();
-    let agent = AgentId::from_bytes([0u8; 16]);
+    let node = NodeId::from_bytes([0u8; 16]);
 
-    let tx = Transaction::new(agent)
+    let tx = Transaction::new(node)
         .assert_datom(
             EntityId::from_content(b"e1"),
             Attribute::from("user/name"),
@@ -150,10 +150,10 @@ fn test_inv_ferr_006_atomic_rejection() {
 
 #[test]
 fn test_datoms_have_placeholder_tx_id() {
-    let agent = AgentId::from_bytes([0u8; 16]);
+    let node = NodeId::from_bytes([0u8; 16]);
     let entity = EntityId::from_content(b"e1");
 
-    let committed = Transaction::new(agent)
+    let committed = Transaction::new(node)
         .assert_datom(
             entity,
             Attribute::from("user/name"),
@@ -172,10 +172,10 @@ fn test_datoms_have_placeholder_tx_id() {
 
 #[test]
 fn test_datoms_have_op_assert() {
-    let agent = AgentId::from_bytes([0u8; 16]);
+    let node = NodeId::from_bytes([0u8; 16]);
     let entity = EntityId::from_content(b"e1");
 
-    let committed = Transaction::new(agent)
+    let committed = Transaction::new(node)
         .assert_datom(
             entity,
             Attribute::from("user/name"),
@@ -237,9 +237,9 @@ fn test_value_matches_type_rejects_mismatches() {
 
 #[test]
 fn test_commit_unchecked_accepts_anything() {
-    let agent = AgentId::from_bytes([0u8; 16]);
+    let node = NodeId::from_bytes([0u8; 16]);
 
-    let committed = Transaction::new(agent)
+    let committed = Transaction::new(node)
         .assert_datom(
             EntityId::from_content(b"e"),
             Attribute::from("totally/made-up"),
@@ -252,10 +252,10 @@ fn test_commit_unchecked_accepts_anything() {
 
 #[test]
 fn test_builder_chaining() {
-    let agent = AgentId::from_bytes([0u8; 16]);
+    let node = NodeId::from_bytes([0u8; 16]);
     let entity = EntityId::from_content(b"e");
 
-    let mut tx = Transaction::new(agent);
+    let mut tx = Transaction::new(node);
     for i in 0..5 {
         tx = tx.assert_datom(entity, Attribute::from("user/name"), Value::Long(i));
     }
@@ -266,10 +266,10 @@ fn test_builder_chaining() {
 /// Regression: bd-79n — `retract_datom` creates `Op::Retract` datoms.
 #[test]
 fn test_bug_bd_79n_retract_datom() {
-    let agent = AgentId::from_bytes([0u8; 16]);
+    let node = NodeId::from_bytes([0u8; 16]);
     let entity = EntityId::from_content(b"e1");
 
-    let committed = Transaction::new(agent)
+    let committed = Transaction::new(node)
         .retract_datom(
             entity,
             Attribute::from("user/name"),
@@ -288,10 +288,10 @@ fn test_bug_bd_79n_retract_datom() {
 /// Regression: bd-79n — mixed assert and retract transaction.
 #[test]
 fn test_bug_bd_79n_mixed_assert_retract() {
-    let agent = AgentId::from_bytes([0u8; 16]);
+    let node = NodeId::from_bytes([0u8; 16]);
     let entity = EntityId::from_content(b"e1");
 
-    let committed = Transaction::new(agent)
+    let committed = Transaction::new(node)
         .assert_datom(
             entity,
             Attribute::from("user/name"),

@@ -210,7 +210,7 @@ br create \
 **Acceptance**:
 1. Recovery detects and rejects tampered WAL frames.
 2. Chain hash break at frame N discards frames N+ and logs warning.
-**File(s)**: ferratomic-core/src/wal.rs
+**File(s)**: ferratomic-wal/src/wal.rs
 **Depends on**: br-30 (WAL append implementation).
 BODY
 )"

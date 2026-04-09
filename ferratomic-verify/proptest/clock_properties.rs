@@ -1,7 +1,7 @@
 //! Property tests for INV-FERR-015 (HLC monotonicity) and
 //! INV-FERR-016 (HLC causality).
 
-use ferratom::{AgentId, HybridClock, TxId};
+use ferratom::{HybridClock, NodeId, TxId};
 use proptest::prelude::*;
 
 proptest! {
@@ -12,8 +12,8 @@ proptest! {
     fn inv_ferr_015_hlc_monotonicity(
         tick_count in 2usize..200,
     ) {
-        let agent = AgentId::from_bytes([1u8; 16]);
-        let mut clock = HybridClock::new(agent);
+        let node = NodeId::from_bytes([1u8; 16]);
+        let mut clock = HybridClock::new(node);
         let mut prev = clock.tick().unwrap();
 
         for i in 1..tick_count {
@@ -34,8 +34,8 @@ proptest! {
         local_ticks in 1usize..50,
         remote_physical in 0u64..1000,
     ) {
-        let agent = AgentId::from_bytes([2u8; 16]);
-        let mut clock = HybridClock::new(agent);
+        let node = NodeId::from_bytes([2u8; 16]);
+        let mut clock = HybridClock::new(node);
 
         // Advance local clock.
         let mut last_local = clock.tick().unwrap();
@@ -44,8 +44,8 @@ proptest! {
         }
 
         // Receive a remote timestamp that may be in the past.
-        let remote_agent = AgentId::from_bytes([3u8; 16]);
-        let remote_tx = TxId::with_agent(remote_physical, 0, remote_agent);
+        let remote_node = NodeId::from_bytes([3u8; 16]);
+        let remote_tx = TxId::with_node(remote_physical, 0, remote_node);
         clock.receive(&remote_tx);
 
         // Next tick must still be strictly greater.
@@ -58,17 +58,17 @@ proptest! {
     }
 
     /// INV-FERR-016: receive() ensures next tick is greater than the
-    /// remote timestamp (causal ordering across agents).
+    /// remote timestamp (causal ordering across nodes).
     #[test]
     fn inv_ferr_016_hlc_causality(
         remote_physical in 0u64..u64::MAX / 2,
         remote_logical in 0u32..1000,
     ) {
-        let local_agent = AgentId::from_bytes([10u8; 16]);
-        let remote_agent = AgentId::from_bytes([20u8; 16]);
-        let mut clock = HybridClock::new(local_agent);
+        let local_node = NodeId::from_bytes([10u8; 16]);
+        let remote_node = NodeId::from_bytes([20u8; 16]);
+        let mut clock = HybridClock::new(local_node);
 
-        let remote_tx = TxId::with_agent(remote_physical, remote_logical, remote_agent);
+        let remote_tx = TxId::with_node(remote_physical, remote_logical, remote_node);
         clock.receive(&remote_tx);
 
         let local_tx = clock.tick().unwrap();
@@ -79,28 +79,28 @@ proptest! {
         );
     }
 
-    /// INV-FERR-016: causality is transitive across a chain of agents.
+    /// INV-FERR-016: causality is transitive across a chain of nodes.
     #[test]
     fn inv_ferr_016_hlc_causality_chain(
         chain_length in 2usize..10,
     ) {
-        let mut agents: Vec<HybridClock> = (0..chain_length)
+        let mut nodes: Vec<HybridClock> = (0..chain_length)
             .map(|i| {
                 let mut bytes = [0u8; 16];
                 bytes[0] = i as u8;
-                HybridClock::new(AgentId::from_bytes(bytes))
+                HybridClock::new(NodeId::from_bytes(bytes))
             })
             .collect();
 
-        // Agent 0 ticks, sends to agent 1, who ticks and sends to agent 2, etc.
-        let mut prev_tx = agents[0].tick().unwrap();
+        // Node 0 ticks, sends to node 1, who ticks and sends to node 2, etc.
+        let mut prev_tx = nodes[0].tick().unwrap();
 
-        for (i, agent) in agents.iter_mut().enumerate().skip(1) {
-            agent.receive(&prev_tx);
-            let current = agent.tick().unwrap();
+        for (i, node) in nodes.iter_mut().enumerate().skip(1) {
+            node.receive(&prev_tx);
+            let current = node.tick().unwrap();
             prop_assert!(
                 current > prev_tx,
-                "INV-FERR-016: agent {} tick {:?} not after agent {} tick {:?}",
+                "INV-FERR-016: node {} tick {:?} not after node {} tick {:?}",
                 i, current, i - 1, prev_tx
             );
             prev_tx = current;

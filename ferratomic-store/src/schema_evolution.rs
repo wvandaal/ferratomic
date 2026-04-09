@@ -16,12 +16,12 @@
 //!
 //! ```rust,no_run
 //! use std::sync::Arc;
-//! use ferratom::{AgentId, Attribute, EntityId, Value};
+//! use ferratom::{NodeId, Attribute, EntityId, Value};
 //! use ferratomic_db::db::Database;
 //! use ferratomic_db::writer::Transaction;
 //!
 //! let db = Database::genesis();
-//! let agent = AgentId::from_bytes([1u8; 16]);
+//! let node = NodeId::from_bytes([1u8; 16]);
 //!
 //! // The genesis schema contains 19 axiomatic attributes (INV-FERR-031).
 //! // "db/doc" is one of them -- it accepts String values.
@@ -31,7 +31,7 @@
 //! // Define a new attribute by transacting meta-schema datoms.
 //! // All three meta-attributes must share the same entity.
 //! let attr_entity = EntityId::from_content(b"user/email-def");
-//! let tx = Transaction::new(agent)
+//! let tx = Transaction::new(node)
 //!     .assert_datom(
 //!         attr_entity,
 //!         Attribute::from("db/ident"),
@@ -185,8 +185,8 @@ fn define_tx_schema(schema: &mut Schema) {
         lww_instant("Transaction wall-clock time"),
     );
     schema.define(
-        Attribute::from("tx/agent"),
-        lww_ref("Agent that created transaction"),
+        Attribute::from("tx/origin"),
+        lww_ref("Node that originated transaction"),
     );
     schema.define(
         Attribute::from("tx/provenance"),
@@ -197,8 +197,8 @@ fn define_tx_schema(schema: &mut Schema) {
         lww_str("Why this transaction exists"),
     );
     schema.define(
-        Attribute::from("tx/coherence-override"),
-        lww_str("Manual coherence exemption"),
+        Attribute::from("tx/validation-override"),
+        lww_str("Manual validation exemption"),
     );
 }
 

@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use bitvec::prelude::{BitVec, Lsb0};
-use ferratom::{AgentId, Attribute, AttributeDef, Datom, EntityId, Op, TxId, Value};
+use ferratom::{Attribute, AttributeDef, Datom, EntityId, NodeId, Op, TxId, Value};
 
 use crate::{
     deserialize_checkpoint_bytes, deserialize_live_first_partial, serialize_checkpoint_bytes,
@@ -55,7 +55,7 @@ fn make_checkpoint_data() -> CheckpointData {
     let (datoms, live_bits) = make_test_datoms();
     CheckpointData {
         epoch: 42,
-        genesis_agent: AgentId::from_bytes([1u8; 16]),
+        genesis_node: NodeId::from_bytes([1u8; 16]),
         schema_pairs: test_schema_pairs(),
         datoms,
         live_bits: Some(live_bits),
@@ -78,8 +78,8 @@ fn test_inv_ferr_013_v3_raw_roundtrip() {
         "INV-FERR-013: epoch must roundtrip"
     );
     assert_eq!(
-        loaded.genesis_agent, data.genesis_agent,
-        "INV-FERR-013: genesis_agent must roundtrip"
+        loaded.genesis_node, data.genesis_node,
+        "INV-FERR-013: genesis_node must roundtrip"
     );
     assert_eq!(
         loaded.datoms, data.datoms,
@@ -99,7 +99,7 @@ fn test_inv_ferr_013_v3_raw_roundtrip() {
 fn test_inv_ferr_013_v3_empty_roundtrip() {
     let data = CheckpointData {
         epoch: 0,
-        genesis_agent: AgentId::from_bytes([0u8; 16]),
+        genesis_node: NodeId::from_bytes([0u8; 16]),
         schema_pairs: Vec::new(),
         datoms: Vec::new(),
         live_bits: Some(BitVec::new()),
@@ -195,7 +195,7 @@ fn test_inv_ferr_075_live_first_roundtrip() {
     let loaded = deserialize_checkpoint_bytes(&bytes).expect("deserialize via dispatch");
 
     assert_eq!(loaded.epoch, data.epoch);
-    assert_eq!(loaded.genesis_agent, data.genesis_agent);
+    assert_eq!(loaded.genesis_node, data.genesis_node);
     assert_eq!(loaded.datoms, data.datoms);
     assert_eq!(loaded.schema_pairs, data.schema_pairs);
 }
@@ -209,7 +209,7 @@ fn test_inv_ferr_075_partial_roundtrip() {
     let partial = deserialize_live_first_partial(&bytes).expect("partial load");
 
     assert_eq!(partial.epoch, data.epoch);
-    assert_eq!(partial.genesis_agent, data.genesis_agent);
+    assert_eq!(partial.genesis_node, data.genesis_node);
     assert_eq!(partial.schema_pairs, data.schema_pairs);
 
     // Live + hist should reconstruct original datom set.
@@ -284,7 +284,7 @@ fn test_inv_ferr_013_file_roundtrip() {
     let loaded = crate::load_checkpoint(&path).expect("load_checkpoint");
 
     assert_eq!(loaded.epoch, data.epoch);
-    assert_eq!(loaded.genesis_agent, data.genesis_agent);
+    assert_eq!(loaded.genesis_node, data.genesis_node);
     assert_eq!(loaded.datoms, data.datoms);
     assert_eq!(loaded.schema_pairs, data.schema_pairs);
 }
@@ -352,7 +352,7 @@ fn test_inv_ferr_013_v3_live_bits_mismatch() {
 #[test]
 fn test_inv_ferr_013_v2_roundtrip() {
     // V2 uses the CHKP magic with version=2 and a bincode payload of
-    // (schema_pairs, genesis_agent, datoms). Construct via the V3 serializer
+    // (schema_pairs, genesis_node, datoms). Construct via the V3 serializer
     // with V2 magic isn't possible — instead, verify that any V3-serialized
     // checkpoint can be deserialized (V2 is read-only legacy; the crate
     // always writes V3). This test exercises the version dispatch path.
@@ -368,7 +368,7 @@ fn test_inv_ferr_013_v2_roundtrip() {
     )];
     let data = CheckpointData {
         epoch: 5,
-        genesis_agent: AgentId::from_bytes([0xAA; 16]),
+        genesis_node: NodeId::from_bytes([0xAA; 16]),
         schema_pairs: schema_pairs.clone(),
         datoms: datoms.clone(),
         live_bits: Some(live_bits),

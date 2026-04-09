@@ -19,7 +19,7 @@ fn checkpoint_store(db: &Database) -> Store {
     let schema = db.schema();
     let attrs = schema_attrs(&schema);
     let datoms = db.snapshot().datoms().cloned().collect::<Vec<_>>();
-    Store::from_checkpoint(db.epoch(), Store::genesis().genesis_agent(), attrs, datoms)
+    Store::from_checkpoint(db.epoch(), Store::genesis().genesis_node(), attrs, datoms)
 }
 
 fn checkpoint_database(db: &Database, data_dir: &Path) -> Result<(), FerraError> {
@@ -70,7 +70,7 @@ fn bench_cold_start(c: &mut Criterion) {
                     );
                     // bd-tnkm: The fixture seeds `datom_count` user datoms,
                     // but each transaction also adds 2 metadata datoms
-                    // (`:tx/time`, `:tx/agent`), so recovered count > datom_count.
+                    // (`:tx/time`, `:tx/origin`), so recovered count > datom_count.
                     // Assert `>=` as a lower bound on set-union fidelity.
                     let recovered = result.database.snapshot().datoms().count();
                     assert!(

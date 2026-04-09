@@ -139,11 +139,11 @@ impl Database<Ready> {
                 })?;
             for tx in transactions {
                 let tx_id = clock.tick()?;
-                // NOTE: tx.agent() is NOT preserved — all metadata uses the
-                // HLC's agent (the Database's agent). This is correct for
-                // single-node operation where the Database IS the agent.
-                // Multi-agent batch support requires extending the batch
-                // tuple to carry per-tx AgentId (deferred to Phase 4b).
+                // NOTE: tx.node() is NOT preserved — all metadata uses the
+                // HLC's node (the Database's node). This is correct for
+                // single-node operation where the Database IS the node.
+                // Multi-node batch support requires extending the batch
+                // tuple to carry per-tx NodeId (deferred to Phase 4b).
                 let datoms = tx.into_datoms();
                 batches.push((datoms, tx_id));
             }

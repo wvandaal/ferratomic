@@ -25,7 +25,7 @@
 
 use std::{collections::BTreeSet, sync::Arc};
 
-use ferratom::{AgentId, Attribute, AttributeDef, Datom, EntityId, Op, Schema, TxId, Value};
+use ferratom::{Attribute, AttributeDef, Datom, EntityId, NodeId, Op, Schema, TxId, Value};
 use ferratomic_index::SortedVecIndexes;
 use ferratomic_positional::PositionalStore;
 use im::{OrdMap, OrdSet};
@@ -66,7 +66,7 @@ impl TxReceipt {
     }
 
     /// The datoms inserted by this transaction, stamped with the real
-    /// `TxId` and including tx metadata datoms (`:tx/time`, `:tx/agent`).
+    /// `TxId` and including tx metadata datoms (`:tx/time`, `:tx/origin`).
     #[must_use]
     pub fn datoms(&self) -> &[Datom] {
         &self.datoms
@@ -122,9 +122,9 @@ pub struct Store {
     /// Monotonically increasing transaction epoch counter.
     /// INV-FERR-007: incremented on every successful transact.
     pub(crate) epoch: u64,
-    /// The agent identity used for genesis transactions.
+    /// The node identity used for genesis transactions.
     /// Stored so callers can create transactions against this store.
-    pub(crate) genesis_agent: AgentId,
+    pub(crate) genesis_node: NodeId,
     /// INV-FERR-029/032: Causal OR-Set LIVE lattice.
     ///
     /// Maps `(entity, attribute)` to `value` to `(TxId, Op)` where `TxId` is
@@ -164,7 +164,7 @@ impl Store {
             repr: StoreRepr::Positional(Arc::new(positional)),
             schema: Schema::empty(),
             epoch: 0,
-            genesis_agent: AgentId::from_bytes([0u8; 16]),
+            genesis_node: NodeId::from_bytes([0u8; 16]),
             live_causal,
             live_set,
             schema_conflicts: Vec::new(),
@@ -174,14 +174,14 @@ impl Store {
     /// Reconstruct a store from checkpoint data.
     ///
     /// INV-FERR-013: Used by `load_checkpoint` to rebuild the store from
-    /// serialized epoch, genesis agent, schema attributes, and datoms.
+    /// serialized epoch, genesis node, schema attributes, and datoms.
     /// INV-FERR-005: indexes are rebuilt from the datom set by construction.
     ///
     /// bd-h2fz: builds `Positional` repr for cache-optimal cold-start reads.
     #[must_use]
     pub fn from_checkpoint(
         epoch: u64,
-        genesis_agent: AgentId,
+        genesis_node: NodeId,
         schema_attrs: Vec<(String, AttributeDef)>,
         datoms: Vec<Datom>,
     ) -> Self {
@@ -196,7 +196,7 @@ impl Store {
             repr: StoreRepr::Positional(Arc::new(positional)),
             schema,
             epoch,
-            genesis_agent,
+            genesis_node,
             live_causal,
             live_set,
             schema_conflicts: Vec::new(),
@@ -220,7 +220,7 @@ impl Store {
     /// `live_bits` preconditions are violated (INV-FERR-076).
     pub fn from_checkpoint_v3(
         epoch: u64,
-        genesis_agent: AgentId,
+        genesis_node: NodeId,
         schema_attrs: Vec<(String, AttributeDef)>,
         sorted_datoms: Vec<Datom>,
         live_bits: bitvec::prelude::BitVec<u64, bitvec::prelude::Lsb0>,
@@ -236,7 +236,7 @@ impl Store {
             repr: StoreRepr::Positional(Arc::new(positional)),
             schema,
             epoch,
-            genesis_agent,
+            genesis_node,
             live_causal,
             live_set,
             schema_conflicts: Vec::new(),
@@ -258,7 +258,7 @@ impl Store {
             repr: StoreRepr::Positional(Arc::new(positional)),
             schema: crate::schema_evolution::genesis_schema(),
             epoch: 0,
-            genesis_agent: AgentId::from_bytes([0u8; 16]),
+            genesis_node: NodeId::from_bytes([0u8; 16]),
             live_causal: OrdMap::new(),
             live_set: OrdMap::new(),
             schema_conflicts: Vec::new(),
@@ -422,14 +422,14 @@ impl Store {
         &self.schema
     }
 
-    /// The agent identity associated with this store's genesis.
+    /// The node identity associated with this store's genesis.
     ///
-    /// Callers use this to construct `Transaction::new(store.genesis_agent())`
+    /// Callers use this to construct `Transaction::new(store.genesis_node())`
     /// when they need to transact against a genesis store without
-    /// manufacturing their own agent identity.
+    /// manufacturing their own node identity.
     #[must_use]
-    pub fn genesis_agent(&self) -> AgentId {
-        self.genesis_agent
+    pub fn genesis_node(&self) -> NodeId {
+        self.genesis_node
     }
 
     /// The current epoch (transaction counter).

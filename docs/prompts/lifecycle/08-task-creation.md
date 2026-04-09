@@ -258,7 +258,7 @@ impl Snapshot {
 // Snapshot is Send + Sync because Arc<StoreInner> is Send + Sync.
 // StoreInner must not contain any !Send or !Sync fields.
 ```
-**File(s)**: ferratomic-core/src/snapshot.rs
+**File(s)**: ferratomic-core/src/snapshot.rs (Database MVCC facade)
 **Depends on**: None.
 BODY
 )"
@@ -277,7 +277,7 @@ br create \
 1. All writes go through WriterActor channel.
 2. Concurrent write requests are serialized (total order).
 3. Group commit batches writes within a configurable window.
-**File(s)**: ferratomic-core/src/writer.rs
+**File(s)**: ferratomic-core/src/writer.rs (Database MVCC facade)
 **Depends on**: br-51 (Snapshot struct must exist first).
 BODY
 )"
@@ -328,7 +328,7 @@ Before creating any task, verify:
 - [ ] Description has all 5 sections (What/Why/Acceptance/Files/Depends)
 - [ ] Each acceptance criterion is binary (pass or fail, no "mostly works")
 - [ ] At least one acceptance criterion references an INV-FERR
-- [ ] File paths are specific (not "somewhere in ferratomic-core")
+- [ ] File paths are specific (not "somewhere in the workspace")
 - [ ] Dependencies are real (not aspirational ordering preferences)
 - [ ] Priority reflects impact, not effort
 - [ ] **Epistemic fit**: verification method matches the invariant's domain (see table above)
@@ -337,6 +337,10 @@ Before creating any task, verify:
 - [ ] Every method signature specifies receiver (&self/&mut self), visibility, return type
 - [ ] Every enum match enumerates all arms (no `_ =>` wildcards)
 - [ ] Changed method signatures show old → new with affected callers listed
+
+**Non-trivial beads**: Score against GOALS.md §7 (six dimensions, 1-10 each). Include the composite in the bead description.
+
+**Knowledge Organization Rule**: Beads are canonical work items. `docs/ideas/` is context, not commitment. See AGENTS.md.
 
 ---
 

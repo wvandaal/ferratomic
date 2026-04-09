@@ -14,7 +14,7 @@
 
 use std::sync::Arc;
 
-use ferratom::{AgentId, Attribute, Datom, EntityId, NonNanFloat, Op, TxId, Value};
+use ferratom::{Attribute, Datom, EntityId, NodeId, NonNanFloat, Op, TxId, Value};
 use proptest::prelude::*;
 
 // ---------------------------------------------------------------------------
@@ -157,24 +157,24 @@ fn ci_ferr_002_op_cardinality() {
     );
 }
 
-/// CI-FERR-002 / AgentId fixed-size: `AgentId` is exactly 16 bytes.
+/// CI-FERR-002 / NodeId fixed-size: `NodeId` is exactly 16 bytes.
 ///
-/// The spec requires a 16-byte agent identifier. This is a structural
+/// The spec requires a 16-byte node identifier. This is a structural
 /// property verified via `size_of`.
 #[test]
-fn ci_ferr_002_agent_id_fixed_size() {
+fn ci_ferr_002_node_id_fixed_size() {
     assert_eq!(
-        std::mem::size_of::<AgentId>(),
+        std::mem::size_of::<NodeId>(),
         16,
-        "CI-FERR-002: AgentId must be exactly 16 bytes"
+        "CI-FERR-002: NodeId must be exactly 16 bytes"
     );
 
     // Verify the backing bytes are exactly 16 bytes.
-    let agent = AgentId::from_bytes([0xABu8; 16]);
+    let node = NodeId::from_bytes([0xABu8; 16]);
     assert_eq!(
-        agent.as_bytes().len(),
+        node.as_bytes().len(),
         16,
-        "CI-FERR-002: AgentId::as_bytes must return exactly 16 bytes"
+        "CI-FERR-002: NodeId::as_bytes must return exactly 16 bytes"
     );
 }
 
@@ -213,13 +213,13 @@ proptest! {
         value_long in any::<i64>(),
         tx_physical in any::<u64>(),
         tx_logical in any::<u32>(),
-        tx_agent_seed in any::<u16>(),
+        tx_node_seed in any::<u16>(),
         is_assert in any::<bool>(),
     ) {
         let entity = EntityId::from_bytes(entity_bytes);
         let attribute = Attribute::from(attr_name.as_str());
         let value = Value::Long(value_long);
-        let tx = TxId::new(tx_physical, tx_logical, tx_agent_seed);
+        let tx = TxId::new(tx_physical, tx_logical, tx_node_seed);
         let op = if is_assert { Op::Assert } else { Op::Retract };
 
         let datom = Datom::new(entity, attribute.clone(), value.clone(), tx, op);
@@ -287,7 +287,7 @@ proptest! {
     }
 
     /// CI-FERR-002 / TxId ordering: TxId ordering is lexicographic on
-    /// (physical, logical, agent). Construct two TxIds and verify that
+    /// (physical, logical, node). Construct two TxIds and verify that
     /// the ordering contract holds.
     ///
     /// INV-FERR-015: The total order enables HLC monotonicity.
@@ -295,28 +295,28 @@ proptest! {
     fn ci_ferr_002_tx_id_ordering(
         phys_a in any::<u64>(),
         log_a in any::<u32>(),
-        agent_a in any::<u16>(),
+        node_a in any::<u16>(),
         phys_b in any::<u64>(),
         log_b in any::<u32>(),
-        agent_b in any::<u16>(),
+        node_b in any::<u16>(),
     ) {
-        let tx_a = TxId::new(phys_a, log_a, agent_a);
-        let tx_b = TxId::new(phys_b, log_b, agent_b);
+        let tx_a = TxId::new(phys_a, log_a, node_a);
+        let tx_b = TxId::new(phys_b, log_b, node_b);
 
-        // Reconstruct expected ordering: lexicographic on (physical, logical, agent).
-        let agent_id_a = AgentId::from_seed(agent_a);
-        let agent_id_b = AgentId::from_seed(agent_b);
+        // Reconstruct expected ordering: lexicographic on (physical, logical, node).
+        let node_id_a = NodeId::from_seed(node_a);
+        let node_id_b = NodeId::from_seed(node_b);
         let expected = phys_a
             .cmp(&phys_b)
             .then_with(|| log_a.cmp(&log_b))
-            .then_with(|| agent_id_a.cmp(&agent_id_b));
+            .then_with(|| node_id_a.cmp(&node_id_b));
 
         prop_assert_eq!(
             tx_a.cmp(&tx_b),
             expected,
-            "CI-FERR-002: TxId ordering must be lexicographic on (physical, logical, agent). \
+            "CI-FERR-002: TxId ordering must be lexicographic on (physical, logical, node). \
              a=({}, {}, {}), b=({}, {}, {})",
-            phys_a, log_a, agent_a, phys_b, log_b, agent_b
+            phys_a, log_a, node_a, phys_b, log_b, node_b
         );
 
         // Verify accessor consistency.
@@ -329,8 +329,8 @@ proptest! {
             "CI-FERR-002: TxId::logical() must return the logical component"
         );
         prop_assert_eq!(
-            tx_a.agent(), agent_id_a,
-            "CI-FERR-002: TxId::agent() must return the agent component"
+            tx_a.node(), node_id_a,
+            "CI-FERR-002: TxId::node() must return the node component"
         );
     }
 }

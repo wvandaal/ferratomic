@@ -39,7 +39,7 @@ produces code that is harder to read and no faster.
 
 ### Criterion.rs Benchmarks
 
-Location: `ferratomic-core/benches/` (one file per subsystem).
+Location: Per-crate `benches/` directories (one file per subsystem).
 
 ```rust
 // benches/store_bench.rs
@@ -115,7 +115,7 @@ CARGO_TARGET_DIR=/data/cargo-target cargo bench --workspace -- --baseline main
 
 ```bash
 # Step 1: Measure baseline
-CARGO_TARGET_DIR=/data/cargo-target cargo bench -p ferratomic-core \
+CARGO_TARGET_DIR=/data/cargo-target cargo bench -p ferratomic-store \
   -- store/merge --save-baseline before
 
 # Output:
@@ -147,7 +147,7 @@ CARGO_TARGET_DIR=/data/cargo-target cargo flamegraph \
 # merge_sorted_indexes uses im::OrdMap::union_with (O(n) for sorted inputs).
 
 # Step 5: Measure improvement
-CARGO_TARGET_DIR=/data/cargo-target cargo bench -p ferratomic-core \
+CARGO_TARGET_DIR=/data/cargo-target cargo bench -p ferratomic-store \
   -- store/merge --baseline before
 
 # Output:
@@ -187,10 +187,13 @@ CARGO_TARGET_DIR=/data/cargo-target cargo bench --workspace -- --save-baseline m
 ## Benchmark File Organization
 
 ```
-ferratomic-core/benches/
+ferratomic-store/benches/
   store_bench.rs       # apply_datoms, merge, index lookups
+ferratomic-core/benches/
   snapshot_bench.rs    # Snapshot creation, read under contention
+ferratomic-wal/benches/
   wal_bench.rs         # WAL append, fsync, recovery
+ferratomic-checkpoint/benches/
   checkpoint_bench.rs  # Full + incremental checkpoint
   prolly_bench.rs      # Build, read, diff, transfer
 ```

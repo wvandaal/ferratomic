@@ -10,7 +10,7 @@ Optimized prompts for driving every phase of ferratomic development with AI agen
 | 02 | [Lean Proofs](02-lean-proofs.md) | 1 | Mixed | Writing Lean 4 theorems for INV-FERR |
 | 03 | [Test Suite](03-test-suite.md) | 2 | Low | Writing tests before implementation (red phase) |
 | 04 | [Type Definition](04-type-definition.md) | 3 | Low | Implementing ferratom crate types |
-| 05 | [Implementation](05-implementation.md) | 4 | Low | Implementing ferratomic-core modules |
+| 05 | [Implementation](05-implementation.md) | 4 | Low | Implementing workspace crate modules |
 | 06 | [Cleanroom Review](06-cleanroom-review.md) | Any | High | Post-implementation adversarial audit |
 | 07 | [Bug Triage](07-bug-triage.md) | Any | Mixed | When a defect is discovered |
 | 08 | [Task Creation](08-task-creation.md) | Any | Low | Creating new beads issues |

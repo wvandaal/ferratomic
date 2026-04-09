@@ -11,7 +11,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use ferratom::{AgentId, Attribute, EntityId, Value};
+use ferratom::{Attribute, EntityId, NodeId, Value};
 use ferratomic_db::{
     db::Database,
     observer::{DatomObserver, Observer},
@@ -65,10 +65,10 @@ impl DatomObserver for RecordingObserver {
 #[test]
 fn inv_ferr_006_snapshot_stability() {
     let mut store = Store::genesis();
-    let agent = AgentId::from_bytes([1u8; 16]);
+    let node = NodeId::from_bytes([1u8; 16]);
 
     // Commit first transaction
-    let tx1 = Transaction::new(agent)
+    let tx1 = Transaction::new(node)
         .assert_datom(
             EntityId::from_content(b"e1"),
             Attribute::from("db/doc"),
@@ -83,7 +83,7 @@ fn inv_ferr_006_snapshot_stability() {
     let snap_count = snap.datoms().count();
 
     // Commit second transaction AFTER snapshot
-    let tx2 = Transaction::new(agent)
+    let tx2 = Transaction::new(node)
         .assert_datom(
             EntityId::from_content(b"e2"),
             Attribute::from("db/doc"),
@@ -111,11 +111,11 @@ fn inv_ferr_006_snapshot_stability() {
 #[test]
 fn test_inv_ferr_005_bijection_after_transact() {
     let mut store = Store::genesis();
-    let agent = AgentId::from_bytes([5u8; 16]);
+    let node = NodeId::from_bytes([5u8; 16]);
 
     // Transact several batches of datoms.
     for i in 0..5i64 {
-        let tx = Transaction::new(agent)
+        let tx = Transaction::new(node)
             .assert_datom(
                 EntityId::from_content(format!("bijection-e{}", i).as_bytes()),
                 Attribute::from("db/doc"),
@@ -191,14 +191,14 @@ fn test_inv_ferr_005_bijection_after_transact() {
 #[test]
 fn inv_ferr_006_concurrent_read_write() {
     let mut store = Store::genesis();
-    let agent = AgentId::from_bytes([1u8; 16]);
+    let node = NodeId::from_bytes([1u8; 16]);
 
     // Snapshot before any user transactions
     let snap_before = store.snapshot();
     let count_before = snap_before.datoms().count();
 
     // Commit a transaction
-    let tx = Transaction::new(agent)
+    let tx = Transaction::new(node)
         .assert_datom(
             EntityId::from_content(b"e1"),
             Attribute::from("db/doc"),
@@ -233,11 +233,11 @@ fn inv_ferr_006_concurrent_read_write() {
 #[test]
 fn inv_ferr_007_epoch_ordering() {
     let mut store = Store::genesis();
-    let agent = AgentId::from_bytes([1u8; 16]);
+    let node = NodeId::from_bytes([1u8; 16]);
 
     let mut epochs = Vec::new();
     for i in 0..5i64 {
-        let tx = Transaction::new(agent)
+        let tx = Transaction::new(node)
             .assert_datom(
                 EntityId::from_content(format!("e{}", i).as_bytes()),
                 Attribute::from("tx/provenance"),
@@ -266,13 +266,13 @@ fn inv_ferr_007_epoch_ordering() {
 #[test]
 fn inv_ferr_011_observer_epoch_monotonic() {
     let mut store = Store::genesis();
-    let agent = AgentId::from_bytes([1u8; 16]);
-    let observer = Observer::new(AgentId::from_bytes([2u8; 16]));
+    let node = NodeId::from_bytes([1u8; 16]);
+    let observer = Observer::new(NodeId::from_bytes([2u8; 16]));
 
     let mut prev_epoch = 0u64;
 
     for i in 0..10i64 {
-        let tx = Transaction::new(agent)
+        let tx = Transaction::new(node)
             .assert_datom(
                 EntityId::from_content(format!("e{}", i).as_bytes()),
                 Attribute::from("tx/provenance"),
@@ -299,10 +299,10 @@ fn inv_ferr_011_observer_epoch_monotonic() {
 #[test]
 fn inv_ferr_011_database_observer_catchup_delivery() {
     let db = Database::genesis();
-    let agent = AgentId::from_bytes([3u8; 16]);
+    let node = NodeId::from_bytes([3u8; 16]);
 
     for i in 0..2i64 {
-        let tx = Transaction::new(agent)
+        let tx = Transaction::new(node)
             .assert_datom(
                 EntityId::from_content(format!("catchup-e{}", i).as_bytes()),
                 Attribute::from("db/doc"),
@@ -335,7 +335,7 @@ fn inv_ferr_011_database_observer_commit_delivery() {
     db.register_observer(observer)
         .expect("observer registration should succeed");
 
-    let tx = Transaction::new(AgentId::from_bytes([4u8; 16]))
+    let tx = Transaction::new(NodeId::from_bytes([4u8; 16]))
         .assert_datom(
             EntityId::from_content(b"observer-db"),
             Attribute::from("db/doc"),
@@ -392,10 +392,10 @@ fn assert_invariant_violation(
 /// bd-n1i: error-path test for epoch overflow.
 #[test]
 fn test_inv_ferr_007_epoch_overflow() {
-    let agent = AgentId::from_bytes([7u8; 16]);
-    let mut store = Store::from_checkpoint(u64::MAX, agent, Vec::new(), Vec::new());
+    let node = NodeId::from_bytes([7u8; 16]);
+    let mut store = Store::from_checkpoint(u64::MAX, node, Vec::new(), Vec::new());
 
-    let tx = Transaction::new(agent)
+    let tx = Transaction::new(node)
         .assert_datom(
             EntityId::from_content(b"overflow-entity"),
             Attribute::from("db/doc"),
@@ -423,10 +423,10 @@ fn test_inv_ferr_007_epoch_overflow() {
 /// strictly greater than the previous one.
 #[test]
 fn inv_ferr_015_hlc_tick_monotonic() {
-    use ferratom::{AgentId, HybridClock};
+    use ferratom::{HybridClock, NodeId};
 
-    let agent = AgentId::from_bytes([15u8; 16]);
-    let mut clock = HybridClock::new(agent);
+    let node = NodeId::from_bytes([15u8; 16]);
+    let mut clock = HybridClock::new(node);
     let mut prev = clock.tick().unwrap();
 
     for i in 1..100 {
@@ -449,10 +449,10 @@ fn inv_ferr_015_hlc_tick_monotonic() {
 /// strictly increasing `TxId` values via the logical counter.
 #[test]
 fn inv_ferr_015_hlc_same_millisecond_monotonic() {
-    use ferratom::{AgentId, HybridClock};
+    use ferratom::{HybridClock, NodeId};
 
-    let agent = AgentId::from_bytes([15u8; 16]);
-    let mut clock = HybridClock::new(agent);
+    let node = NodeId::from_bytes([15u8; 16]);
+    let mut clock = HybridClock::new(node);
 
     // Rapid-fire ticks in the same millisecond window.
     let t1 = clock.tick().unwrap();
@@ -469,12 +469,12 @@ fn inv_ferr_015_hlc_same_millisecond_monotonic() {
 /// Agent B's tick must be strictly greater than Agent A's timestamp.
 #[test]
 fn inv_ferr_016_hlc_causality_two_agents() {
-    use ferratom::{AgentId, HybridClock};
+    use ferratom::{HybridClock, NodeId};
 
-    let agent_a = AgentId::from_bytes([16u8; 16]);
-    let agent_b = AgentId::from_bytes([17u8; 16]);
-    let mut clock_a = HybridClock::new(agent_a);
-    let mut clock_b = HybridClock::new(agent_b);
+    let node_a = NodeId::from_bytes([16u8; 16]);
+    let node_b = NodeId::from_bytes([17u8; 16]);
+    let mut clock_a = HybridClock::new(node_a);
+    let mut clock_b = HybridClock::new(node_b);
 
     // Agent A produces a timestamp.
     let a_tx = clock_a.tick().unwrap();
@@ -494,16 +494,16 @@ fn inv_ferr_016_hlc_causality_two_agents() {
 /// INV-FERR-016: HLC causality chain across three agents.
 ///
 /// A -> B -> C: each receive+tick must produce a timestamp strictly greater
-/// than the preceding agent's timestamp.
+/// than the preceding node's timestamp.
 #[test]
 fn inv_ferr_016_hlc_causality_chain() {
-    use ferratom::{AgentId, HybridClock};
+    use ferratom::{HybridClock, NodeId};
 
     let mut clocks: Vec<HybridClock> = (0..3)
         .map(|i| {
             let mut bytes = [0u8; 16];
             bytes[0] = 100 + i;
-            HybridClock::new(AgentId::from_bytes(bytes))
+            HybridClock::new(NodeId::from_bytes(bytes))
         })
         .collect();
 
@@ -513,17 +513,11 @@ fn inv_ferr_016_hlc_causality_chain() {
     clocks[2].receive(&t1);
     let t2 = clocks[2].tick().unwrap();
 
-    assert!(
-        t1 > t0,
-        "INV-FERR-016: agent 1 tick must exceed agent 0 tick"
-    );
-    assert!(
-        t2 > t1,
-        "INV-FERR-016: agent 2 tick must exceed agent 1 tick"
-    );
+    assert!(t1 > t0, "INV-FERR-016: node 1 tick must exceed node 0 tick");
+    assert!(t2 > t1, "INV-FERR-016: node 2 tick must exceed node 1 tick");
     assert!(
         t2 > t0,
-        "INV-FERR-016: agent 2 tick must exceed agent 0 tick (transitivity)"
+        "INV-FERR-016: node 2 tick must exceed node 0 tick (transitivity)"
     );
 }
 
@@ -534,10 +528,10 @@ fn inv_ferr_016_hlc_causality_chain() {
 #[test]
 fn inv_ferr_018_retract_adds_datom() {
     let mut store = Store::genesis();
-    let agent = AgentId::from_bytes([18u8; 16]);
+    let node = NodeId::from_bytes([18u8; 16]);
 
     // Assert a fact.
-    let tx1 = Transaction::new(agent)
+    let tx1 = Transaction::new(node)
         .assert_datom(
             EntityId::from_content(b"retract-test-entity"),
             Attribute::from("db/doc"),
@@ -549,7 +543,7 @@ fn inv_ferr_018_retract_adds_datom() {
     let after_assert = store.len();
 
     // Retract the same fact.
-    let tx2 = Transaction::new(agent)
+    let tx2 = Transaction::new(node)
         .retract_datom(
             EntityId::from_content(b"retract-test-entity"),
             Attribute::from("db/doc"),
@@ -575,12 +569,12 @@ fn inv_ferr_018_retract_adds_datom() {
 #[test]
 fn inv_ferr_018_append_only_concrete() {
     let mut store = Store::genesis();
-    let agent = AgentId::from_bytes([18u8; 16]);
+    let node = NodeId::from_bytes([18u8; 16]);
     let mut prev_datoms: std::collections::BTreeSet<ferratom::Datom> =
         store.datoms().cloned().collect();
 
     for i in 0..5i64 {
-        let tx = Transaction::new(agent)
+        let tx = Transaction::new(node)
             .assert_datom(
                 EntityId::from_content(format!("append-only-{i}").as_bytes()),
                 Attribute::from("db/doc"),
@@ -613,9 +607,9 @@ fn inv_ferr_018_append_only_concrete() {
 #[test]
 fn inv_ferr_020_transaction_epoch_atomicity() {
     let mut store = Store::genesis();
-    let agent = AgentId::from_bytes([20u8; 16]);
+    let node = NodeId::from_bytes([20u8; 16]);
 
-    let tx = Transaction::new(agent)
+    let tx = Transaction::new(node)
         .assert_datom(
             EntityId::from_content(b"atom-e1"),
             Attribute::from("db/doc"),
@@ -643,7 +637,7 @@ fn inv_ferr_020_transaction_epoch_atomicity() {
         .collect();
 
     // bd-2021: The transaction asserts 3 user datoms, plus `transact`
-    // adds 2 metadata datoms (`:tx/time`, `:tx/agent`), all stamped at
+    // adds 2 metadata datoms (`:tx/time`, `:tx/origin`), all stamped at
     // the same epoch. Total expected: exactly 5.
     assert_eq!(
         tx_datoms.len(),
@@ -748,8 +742,8 @@ fn test_inv_ferr_013_checkpoint_corruption() {
     use ferratomic_db::checkpoint::{load_checkpoint, write_checkpoint};
 
     let mut store = Store::genesis();
-    let agent = AgentId::from_bytes([13u8; 16]);
-    let tx = Transaction::new(agent)
+    let node = NodeId::from_bytes([13u8; 16]);
+    let tx = Transaction::new(node)
         .assert_datom(
             EntityId::from_content(b"corruption-entity"),
             Attribute::from("db/doc"),
@@ -867,9 +861,9 @@ fn test_inv_ferr_025_index_backend_trait() {
 
     // Also verify via the Store-level verify_bijection.
     let mut store = Store::genesis();
-    let agent = AgentId::from_bytes([25u8; 16]);
+    let node = NodeId::from_bytes([25u8; 16]);
     for i in 0..5i64 {
-        let tx = Transaction::new(agent)
+        let tx = Transaction::new(node)
             .assert_datom(
                 EntityId::from_content(format!("bijection-idx-{i}").as_bytes()),
                 Attribute::from("db/doc"),
@@ -902,13 +896,13 @@ fn test_inv_ferr_025_index_backend_trait() {
 #[test]
 fn test_inv_ferr_029_live_resolution() {
     let mut store = Store::genesis();
-    let agent = AgentId::from_bytes([29u8; 16]);
+    let node = NodeId::from_bytes([29u8; 16]);
     let entity = EntityId::from_content(b"live-resolution-entity");
     let attr = Attribute::from("db/doc");
     let value = Value::String("to-be-retracted".into());
 
     // Phase 1: Assert a fact.
-    let tx1 = Transaction::new(agent)
+    let tx1 = Transaction::new(node)
         .assert_datom(entity, attr.clone(), value.clone())
         .commit(store.schema())
         .expect("INV-FERR-029: assert tx must commit");
@@ -924,7 +918,7 @@ fn test_inv_ferr_029_live_resolution() {
     );
 
     // Phase 2: Retract the same fact.
-    let tx2 = Transaction::new(agent)
+    let tx2 = Transaction::new(node)
         .retract_datom(entity, attr.clone(), value.clone())
         .commit_unchecked();
     store
@@ -940,8 +934,8 @@ fn test_inv_ferr_029_live_resolution() {
 }
 
 /// Assert a datom on a database and return the committed transaction result.
-fn assert_on_db(db: &Database, agent: AgentId, entity: EntityId, attr: &Attribute, val: &Value) {
-    let tx = Transaction::new(agent)
+fn assert_on_db(db: &Database, node: NodeId, entity: EntityId, attr: &Attribute, val: &Value) {
+    let tx = Transaction::new(node)
         .assert_datom(entity, attr.clone(), val.clone())
         .commit(&db.schema())
         .expect("INV-FERR-032: assert commit");
@@ -949,8 +943,8 @@ fn assert_on_db(db: &Database, agent: AgentId, entity: EntityId, attr: &Attribut
 }
 
 /// Retract a datom on a database (unchecked commit for retract).
-fn retract_on_db(db: &Database, agent: AgentId, entity: EntityId, attr: &Attribute, val: &Value) {
-    let tx = Transaction::new(agent)
+fn retract_on_db(db: &Database, node: NodeId, entity: EntityId, attr: &Attribute, val: &Value) {
+    let tx = Transaction::new(node)
         .retract_datom(entity, attr.clone(), val.clone())
         .commit_unchecked();
     db.transact(tx).expect("INV-FERR-032: retract transact");
@@ -963,17 +957,17 @@ fn retract_on_db(db: &Database, agent: AgentId, entity: EntityId, attr: &Attribu
 #[test]
 fn test_inv_ferr_032_live_correctness() {
     let db = Database::genesis();
-    let agent = AgentId::from_bytes([32u8; 16]);
+    let node = NodeId::from_bytes([32u8; 16]);
     let entity_a = EntityId::from_content(b"live-correct-a");
     let entity_b = EntityId::from_content(b"live-correct-b");
     let attr = Attribute::from("db/doc");
     let val_old = Value::String("old-value".into());
     let val_new = Value::String("new-value".into());
 
-    assert_on_db(&db, agent, entity_a, &attr, &val_old);
-    assert_on_db(&db, agent, entity_b, &attr, &val_new);
-    retract_on_db(&db, agent, entity_a, &attr, &val_old);
-    assert_on_db(&db, agent, entity_a, &attr, &val_new);
+    assert_on_db(&db, node, entity_a, &attr, &val_old);
+    assert_on_db(&db, node, entity_b, &attr, &val_new);
+    retract_on_db(&db, node, entity_a, &attr, &val_old);
+    assert_on_db(&db, node, entity_a, &attr, &val_new);
 
     let snap = db.snapshot();
     let live = compute_live_view_from_snapshot(&snap);

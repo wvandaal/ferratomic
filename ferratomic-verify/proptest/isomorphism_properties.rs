@@ -295,12 +295,12 @@ fn test_inv_ferr_059_isomorphism_api_shape() {
 /// exercised, proving the per-entity BTreeSet comparison path is correct.
 #[test]
 fn test_inv_ferr_059_isomorphism_with_query_entities() {
-    use ferratom::{AgentId, Attribute, EntityId, Value};
+    use ferratom::{Attribute, EntityId, NodeId, Value};
     use ferratomic_db::writer::Transaction;
 
     let mut store = Store::genesis();
     let entity = EntityId::from_content(b"iso-query-entity");
-    let tx = Transaction::new(AgentId::from_bytes([1u8; 16]))
+    let tx = Transaction::new(NodeId::from_bytes([1u8; 16]))
         .assert_datom(
             entity,
             Attribute::from("db/doc"),
@@ -424,7 +424,7 @@ proptest! {
 
         // Transact a new datom (triggers promote → insert → demote).
         let mut store_mut = store;
-        let tx = Transaction::new(store_mut.genesis_agent())
+        let tx = Transaction::new(store_mut.genesis_node())
             .assert_datom(
                 ferratom::EntityId::from_content(b"isomorphism-test-entity"),
                 ferratom::Attribute::from("db/doc"),

@@ -11,7 +11,7 @@
 use std::{collections::BTreeSet, sync::Arc};
 
 use ferratom::{
-    AgentId, Attribute, AttributeDef, Datom, EntityId, FerraError, Op, Schema, TxId, Value,
+    Attribute, AttributeDef, Datom, EntityId, FerraError, NodeId, Op, Schema, TxId, Value,
 };
 use ferratomic_db::{
     db::Database,
@@ -30,8 +30,8 @@ pub const SCALE_INPUT_SIZES: [usize; 3] = [1_000, 10_000, 100_000];
 /// Transaction counts for write-path benchmarks.
 pub const WRITE_TRANSACTION_COUNTS: [usize; 2] = [1_000, 10_000];
 
-/// Fixed agent identity for benchmark transactions.
-pub const BENCH_AGENT_BYTES: [u8; 16] = [7u8; 16];
+/// Fixed node identity for benchmark transactions.
+pub const BENCH_NODE_BYTES: [u8; 16] = [7u8; 16];
 
 /// Attribute name used by all benchmark datoms.
 pub const DOC_ATTRIBUTE: &str = "db/doc";
@@ -40,9 +40,9 @@ pub const DOC_ATTRIBUTE: &str = "db/doc";
 // Datom factories
 // ---------------------------------------------------------------------------
 
-/// Returns the fixed benchmark agent identity.
-pub fn bench_agent() -> AgentId {
-    AgentId::from_bytes(BENCH_AGENT_BYTES)
+/// Returns the fixed benchmark node identity.
+pub fn bench_node() -> NodeId {
+    NodeId::from_bytes(BENCH_NODE_BYTES)
 }
 
 /// Content-addressed entity ID for benchmark index `index`.
@@ -104,11 +104,11 @@ pub fn build_database(count: usize) -> Database {
 /// Build a committed transaction batch spanning `[start..start+count)`.
 pub fn build_committed_batch(
     schema: &Schema,
-    agent: AgentId,
+    node: NodeId,
     start: usize,
     count: usize,
 ) -> Result<Transaction<Committed>, FerraError> {
-    let mut tx = Transaction::new(agent);
+    let mut tx = Transaction::new(node);
     for index in start..start + count {
         tx = tx.assert_datom(
             doc_entity(index),
@@ -128,14 +128,14 @@ pub fn transact_batched(
     batch_size: usize,
 ) -> Result<(), FerraError> {
     let schema = db.schema();
-    let agent = bench_agent();
+    let node = bench_node();
     let end = start + total_datoms;
     let chunk_size = batch_size.max(1);
     let mut next = start;
 
     while next < end {
         let chunk_len = (end - next).min(chunk_size);
-        let tx = build_committed_batch(&schema, agent, next, chunk_len)?;
+        let tx = build_committed_batch(&schema, node, next, chunk_len)?;
         db.transact(tx)?;
         next += chunk_len;
     }

@@ -67,7 +67,7 @@
 //! +------------------+
 //! | Length   (8B)    | u64 byte count of bincode payload
 //! +------------------+
-//! | Payload  (N)     | bincode: { schema, genesis_agent, datoms }
+//! | Payload  (N)     | bincode: { schema, genesis node, datoms }
 //! +------------------+
 //! | BLAKE3   (32B)   | Hash of all preceding bytes
 //! +------------------+
@@ -90,7 +90,7 @@
 #![warn(clippy::pedantic)]
 
 use bitvec::prelude::{BitVec, Lsb0};
-use ferratom::{AgentId, AttributeDef, Datom, FerraError};
+use ferratom::{AttributeDef, Datom, FerraError, NodeId};
 
 mod io;
 pub mod v3;
@@ -145,8 +145,8 @@ const MIN_FILE_SIZE: usize = HEADER_SIZE + HASH_SIZE;
 pub struct CheckpointData {
     /// Store epoch at checkpoint time.
     pub epoch: u64,
-    /// The genesis agent identity for Store reconstruction.
-    pub genesis_agent: AgentId,
+    /// The genesis node identity for Store reconstruction.
+    pub genesis_node: NodeId,
     /// Schema attributes as sorted (name, definition) pairs.
     pub schema_pairs: Vec<(String, AttributeDef)>,
     /// All datoms (either EAVT-sorted for V3, or unsorted for V2).
@@ -179,8 +179,8 @@ impl CheckpointData {
 pub struct PartialCheckpointData {
     /// Store epoch at checkpoint time.
     pub epoch: u64,
-    /// The genesis agent identity.
-    pub genesis_agent: AgentId,
+    /// The genesis node identity.
+    pub genesis_node: NodeId,
     /// Schema attributes as sorted (name, definition) pairs.
     pub schema_pairs: Vec<(String, AttributeDef)>,
     /// LIVE datoms in canonical EAVT order (INV-FERR-029).
@@ -196,7 +196,7 @@ pub struct PartialCheckpointData {
 /// Serialize checkpoint data to bytes (in-memory) using V3 format.
 ///
 /// INV-FERR-013: The returned bytes contain the full store state (epoch,
-/// schema, genesis agent, all datoms, LIVE bitvector) in the V3 checkpoint
+/// schema, genesis node, all datoms, LIVE bitvector) in the V3 checkpoint
 /// wire format. A trailing BLAKE3 hash covers all preceding bytes for
 /// tamper detection.
 ///
@@ -217,7 +217,7 @@ pub fn serialize_checkpoint_bytes(data: &CheckpointData) -> Result<Vec<u8>, Ferr
         &data.datoms,
         &data.schema_pairs,
         data.epoch,
-        data.genesis_agent,
+        data.genesis_node,
         live_bits,
     )
 }
@@ -237,7 +237,7 @@ pub fn serialize_live_first_bytes(data: &CheckpointData) -> Result<Vec<u8>, Ferr
         &data.datoms,
         &data.schema_pairs,
         data.epoch,
-        data.genesis_agent,
+        data.genesis_node,
         live_bits,
     )
 }
@@ -258,7 +258,7 @@ pub fn serialize_v4_checkpoint_bytes(data: &CheckpointData) -> Result<Vec<u8>, F
         &data.datoms,
         &data.schema_pairs,
         data.epoch,
-        data.genesis_agent,
+        data.genesis_node,
         live_bits,
     )
 }
@@ -371,7 +371,7 @@ fn deserialize_v2_bytes(data: &[u8]) -> Result<CheckpointData, FerraError> {
         })?;
 
     // ADR-FERR-010: Decompose wire payload and convert through trust boundary.
-    let (schema, genesis_agent, wire_datoms) = wire_payload.into_parts();
+    let (schema, genesis_node, wire_datoms) = wire_payload.into_parts();
     let datoms: Vec<Datom> = wire_datoms
         .into_iter()
         .map(ferratom::wire::WireDatom::into_trusted)
@@ -379,7 +379,7 @@ fn deserialize_v2_bytes(data: &[u8]) -> Result<CheckpointData, FerraError> {
 
     Ok(CheckpointData {
         epoch,
-        genesis_agent,
+        genesis_node,
         schema_pairs: schema,
         datoms,
         live_bits: None, // V2 has no LIVE bitvector; caller must recompute.

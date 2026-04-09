@@ -143,10 +143,10 @@ impl Datom {
         // Value: discriminant tag + payload
         self.hash_value(&mut hasher);
 
-        // Tx: physical, logical, agent
+        // Tx: physical, logical, node
         hasher.update(&self.tx.physical().to_le_bytes());
         hasher.update(&self.tx.logical().to_le_bytes());
-        hasher.update(self.tx.agent().as_bytes());
+        hasher.update(self.tx.node().as_bytes());
 
         // Op: single byte discriminant
         match self.op {

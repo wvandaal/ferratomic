@@ -35,7 +35,7 @@ proptest! {
     ) {
         let store = Store::genesis();
         let tx = datoms.into_iter().fold(
-            Transaction::new(store.genesis_agent()),
+            Transaction::new(store.genesis_node()),
             |tx, d| tx.assert_datom(d.entity(), d.attribute().clone(), d.value().clone()),
         );
         let result = tx.commit(store.schema());
@@ -54,7 +54,7 @@ proptest! {
         datom in arb_datom_with_unknown_attr(),
     ) {
         let store = Store::genesis();
-        let tx = Transaction::new(store.genesis_agent())
+        let tx = Transaction::new(store.genesis_node())
             .assert_datom(datom.entity(), datom.attribute().clone(), datom.value().clone());
         let result = tx.commit(store.schema());
         prop_assert!(
@@ -71,7 +71,7 @@ proptest! {
         datom in arb_datom_with_wrong_type(),
     ) {
         let store = Store::genesis();
-        let tx = Transaction::new(store.genesis_agent())
+        let tx = Transaction::new(store.genesis_node())
             .assert_datom(datom.entity(), datom.attribute().clone(), datom.value().clone());
         let result = tx.commit(store.schema());
         prop_assert!(
@@ -87,10 +87,10 @@ proptest! {
     fn inv_ferr_011_observer_never_regresses(
         txns in prop::collection::vec(arb_transaction(), 1..20),
         observe_points in prop::collection::vec(0..20usize, 1..10),
-        observer_agent in arb_agent_id(),
+        observer_node in arb_node_id(),
     ) {
         let mut store = Store::genesis();
-        let observer = Observer::new(observer_agent);
+        let observer = Observer::new(observer_node);
         let mut prev_epoch: Option<u64> = None;
         let mut prev_datoms: Option<BTreeSet<Datom>> = None;
 
@@ -144,7 +144,7 @@ proptest! {
 
         // Unknown attribute must produce UnknownAttribute.
         let tx_unknown = ferratomic_db::writer::Transaction::new(
-            ferratom::AgentId::from_bytes([19u8; 16])
+            ferratom::NodeId::from_bytes([19u8; 16])
         ).assert_datom(
             unknown_datom.entity(),
             unknown_datom.attribute().clone(),
@@ -159,7 +159,7 @@ proptest! {
 
         // Wrong-type must produce SchemaViolation.
         let tx_mistype = ferratomic_db::writer::Transaction::new(
-            ferratom::AgentId::from_bytes([19u8; 16])
+            ferratom::NodeId::from_bytes([19u8; 16])
         ).assert_datom(
             mistyped_datom.entity(),
             mistyped_datom.attribute().clone(),
