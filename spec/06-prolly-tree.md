@@ -1403,11 +1403,11 @@ theorem conforming_implies_all_five
 
 ---
 
-### INV-FERR-045a: Deterministic Chunk Serialization
+### INV-FERR-045a: DatomPair Reference Codec
 
 **Traces to**: INV-FERR-045 (Chunk Content Addressing), INV-FERR-045c (Leaf Chunk
-Codec Conformance — INV-FERR-045a is the DatomPair reference codec implementation
-of the LeafChunkCodec trait; full refactor pending session 023.5 Phase 2),
+Codec Conformance — INV-FERR-045a is the per-codec discharge of T1/T2/T3 for the
+DatomPair codec, supplying the concrete byte layout and validated chunk type),
 INV-FERR-086 (Canonical Datom Format Determinism), S23.9.0 (Canonical Datom Key
 Encoding), C2 (Identity by Content)
 **Referenced by**: INV-FERR-046 (history independence relies on canonical leaf bytes),
@@ -1417,166 +1417,266 @@ resolve deserializes the manifest chunk)
 **Verification**: `V:PROP`, `V:KANI`, `V:TYPE`, `V:LEAN`
 **Stage**: 1
 
-> INV-FERR-045 establishes that *some* canonical byte representation produces the chunk
-> address. INV-FERR-045a establishes *which* representation: the V1 format below, with
-> validated constructors that prevent non-canonical chunks from existing. Without
-> INV-FERR-045a, two implementations could compute different chunk addresses for the
-> "same" chunk content and the structural sharing guarantees of INV-FERR-046 (history
-> independence) and INV-FERR-022 (anti-entropy convergence) would degrade silently into
-> per-implementation isolation.
+> INV-FERR-045 establishes that *some* canonical byte representation produces the
+> chunk address; INV-FERR-045c establishes the trait that ANY conforming leaf
+> codec must satisfy. INV-FERR-045a establishes *which* representation the
+> reference DatomPair codec uses — the V1 byte layout below, with validated
+> constructors that prevent non-canonical chunks from existing. INV-FERR-045a
+> is the per-codec discharge of INV-FERR-045c's conformance theorems (T1
+> round-trip, T2 determinism, T3 injectivity) for the DatomPair codec
+> specifically. Internal-node chunks are also covered here (the standard
+> internal node format) until a future INV-FERR-045b factors them out into a
+> separate per-codec discharge.
+>
+> Without INV-FERR-045a, the LeafChunkCodec trait of INV-FERR-045c would have
+> no concrete reference implementation and the structural sharing guarantees
+> of INV-FERR-046 (history independence) and INV-FERR-022 (anti-entropy
+> convergence) would degrade silently into per-implementation isolation.
 
 #### Level 0 (Algebraic Law)
 ```
-Let Chunk be the disjoint union LeafChunk ⊎ InternalChunk.
-Let serialize_leaf     : LeafChunk     → Bytes
-Let serialize_internal : InternalChunk → Bytes
-Let serialize          : Chunk         → Bytes  := match c with
-                                                    | Leaf l     → serialize_leaf l
-                                                    | Internal i → serialize_internal i
-Let deserialize        : Bytes → Result<Chunk, FerraError>
+Let DatomPairChunk be the validated payload type of a leaf chunk in the DatomPair
+  reference codec format. (Pre-session-023.5: this type was named LeafChunk;
+  renamed to make room for the LeafChunk enum from INV-FERR-045c.)
+Let InternalChunk be the type of internal-node chunks (separator-key, child-address
+  pairs at a tree level >= 1).
 
-A LeafChunk L is canonical iff its entries are sorted strictly ascending by key bytes
-  with no duplicate keys.
+Let dp_encode_payload : DatomPairChunk → Bytes
+Let dp_decode_payload : Bytes → Result<DatomPairChunk, FerraError>
+Let in_encode_payload : InternalChunk  → Bytes
+Let in_decode_payload : Bytes → Result<InternalChunk, FerraError>
+
+A DatomPairChunk D is canonical iff its entries are sorted strictly ascending
+  by key bytes with no duplicate keys.
 An InternalChunk I is canonical iff its children are sorted strictly ascending by
-  separator-key bytes with no duplicate separators, and every child_addr is a 32-byte hash.
+  separator-key bytes with no duplicate separators, and every child_addr is a
+  32-byte hash.
 
-Let CanonicalLeafChunk     = { L : LeafChunk     | canonical(L) }
-Let CanonicalInternalChunk = { I : InternalChunk | canonical(I) }
-Let CanonicalChunk         = CanonicalLeafChunk ⊎ CanonicalInternalChunk
+Let CanonicalDatomPairChunk = { D : DatomPairChunk | canonical(D) }
+Let CanonicalInternalChunk  = { I : InternalChunk  | canonical(I) }
 
-Theorem (round-trip):
-  ∀ c ∈ CanonicalChunk:
-    deserialize(serialize(c)) = Ok(c)
+Theorem (DatomPair round-trip — per-codec discharge of INV-FERR-045c T1):
+  ∀ d ∈ CanonicalDatomPairChunk:
+    dp_decode_payload(dp_encode_payload(d)) = Ok(d)
 
-Theorem (canonicality / injectivity):
-  ∀ c₁, c₂ ∈ CanonicalChunk:
-    serialize(c₁) = serialize(c₂)  ⟺  c₁ = c₂
+Theorem (DatomPair injectivity — per-codec discharge of INV-FERR-045c T3):
+  ∀ d₁, d₂ ∈ CanonicalDatomPairChunk:
+    dp_encode_payload(d₁) = dp_encode_payload(d₂)  ⟺  d₁ = d₂
 
-Theorem (cross-implementation determinism):
-  ∀ implementations I₁, I₂ conforming to the V1 format,
-  ∀ c ∈ CanonicalChunk:
-    serialize_I₁(c) = serialize_I₂(c)
+Theorem (DatomPair cross-implementation determinism — discharge of T2):
+  ∀ implementations I₁, I₂ conforming to the V1 DatomPair payload layout,
+  ∀ d ∈ CanonicalDatomPairChunk:
+    dp_encode_payload_I₁(d) = dp_encode_payload_I₂(d)
+
+Theorem (Internal round-trip):
+  ∀ i ∈ CanonicalInternalChunk:
+    in_decode_payload(in_encode_payload(i)) = Ok(i)
+
+Theorem (Internal injectivity):
+  ∀ i₁, i₂ ∈ CanonicalInternalChunk:
+    in_encode_payload(i₁) = in_encode_payload(i₂)  ⟺  i₁ = i₂
+
+Theorem (Internal cross-implementation determinism):
+  ∀ implementations I₁, I₂ conforming to the V1 internal node layout,
+  ∀ i ∈ CanonicalInternalChunk:
+    in_encode_payload_I₁(i) = in_encode_payload_I₂(i)
 
 Proof:
-  serialize_leaf and serialize_internal are total functions defined by a fixed,
-  little-endian, length-prefixed byte layout (Level 2). Given identical canonical
-  inputs they emit identical byte sequences by construction. The V1 format has no
-  alignment padding, no implementation-defined choices, and no source of nondeterminism.
+  dp_encode_payload and in_encode_payload are total functions defined by fixed,
+  little-endian, length-prefixed byte layouts (Level 2). Given identical
+  canonical inputs they emit identical byte sequences by construction. Neither
+  layout has alignment padding, implementation-defined choices, or any source
+  of nondeterminism.
 
-  Round-trip holds because every byte position in the V1 format encodes a single field
-  with a unique tag-or-position, so deserialize is the structural inverse of serialize.
-  Since the canonical predicate enforces sorted-strictly-ascending entries with no
-  duplicates, the byte order of fields agrees with the byte order in the input, and
-  deserialize reconstructs the same field values in the same order.
+  Round-trip holds because every byte position in each layout encodes a single
+  field with a unique tag-or-position, so the decode function is the structural
+  inverse of the encode function. Since the canonical predicate enforces
+  sorted-strictly-ascending entries with no duplicates, the byte order of
+  fields agrees with the byte order in the input, and the decode reconstructs
+  the same field values in the same order.
 
-  Injectivity follows: if two canonical chunks serialize to the same bytes, then by
-  round-trip they deserialize to identical chunks (deserialize is a function of the bytes,
-  so equal bytes produce equal results), hence c₁ = c₂.
+  Injectivity follows: if two canonical chunks encode to the same bytes, then
+  by round-trip they decode to identical chunks (decode is a function of the
+  bytes, so equal bytes produce equal results), hence the inputs are equal.
 
-Corollary (content-addressing stability):
-  ∀ c₁, c₂ ∈ CanonicalChunk:
-    c₁ = c₂  ⟺  BLAKE3(serialize(c₁)) = BLAKE3(serialize(c₂))    (with negligible collision)
+Corollary (content-addressing stability via INV-FERR-045):
+  ∀ d₁, d₂ ∈ CanonicalDatomPairChunk:
+    d₁ = d₂  ⟺  BLAKE3(serialize_chunk(Leaf(DatomPair(d₁))))
+              = BLAKE3(serialize_chunk(Leaf(DatomPair(d₂))))
+                                              (with negligible collision)
 
-  This is the structural reason INV-FERR-045's content addressing is well-defined: the
-  address depends only on the canonical chunk content, not on incidental serialization
-  choices.
+  Where `serialize_chunk` is the top-level chunk encoder that prepends the
+  CHUNK_KIND_LEAF byte and dispatches through the LeafChunk enum from
+  INV-FERR-045c (which prepends the codec_tag byte). Symmetric corollary
+  holds for InternalChunk via the CHUNK_KIND_INTERNAL prefix.
+
+  This is the structural reason INV-FERR-045's content addressing is well-
+  defined: the address depends only on the canonical chunk content, not on
+  incidental serialization choices.
+
+Layered byte format (preserved from pre-session-023.5 V1 layout, content
+identical, interpretation refactored):
+
+  Leaf:     [CHUNK_KIND_LEAF=0x01] [CODEC_TAG] [dp_encode_payload(...)]
+  Internal: [CHUNK_KIND_INTERNAL=0x02] [INTERNAL_FORMAT_V1=0x01] [in_encode_payload(...)]
+
+  - For the DatomPair codec, CODEC_TAG = 0x01. The two leading 0x01 bytes of
+    a DatomPair leaf chunk are byte-identical to the pre-session-023.5 V1
+    format's [LEAF_CHUNK_TAG=0x01][format_version=0x01] header — the redesign
+    reinterprets byte 1 as the codec discriminator (per §23.9.8) rather than
+    a single-namespace format version, but the on-disk bytes are unchanged.
+  - The CHUNK_KIND_LEAF byte is added by `serialize_chunk` (top-level
+    chunk-kind dispatch). The CODEC_TAG byte is added by `LeafChunk::encode`
+    (the 045c framework codec dispatch). The `dp_encode_payload` function
+    produces only the codec payload — it does NOT emit either leading byte.
 ```
 
 #### Level 1 (State Invariant)
 
-For all chunks reachable from any prolly tree root, the on-disk byte representation is
-the V1 canonical format:
+For all chunks reachable from any prolly tree root, the on-disk byte representation
+is one of the layered V1 formats below:
 
-- Leaf chunks contain a discriminator byte (`0x01`), a format version byte (`0x01`), an
-  entry count, and a sequence of `(key_len, key, value_len, value)` records sorted strictly
-  ascending by `key`. Two leaves containing the same logical key-value set produce
-  byte-identical serializations and therefore byte-identical addresses.
+- **Leaf chunks** (DatomPair codec) start with `[CHUNK_KIND_LEAF=0x01]
+  [CODEC_TAG=0x01]`, followed by the DatomPair codec payload: an entry count
+  and a sequence of `(key_len, key, value_len, value)` records sorted strictly
+  ascending by `key`. Two leaves containing the same logical key-value set
+  produce byte-identical serializations and therefore byte-identical addresses.
+  The codec_tag byte distinguishes the DatomPair codec from future leaf codecs
+  (registered in §23.9.8); the chunk_kind byte distinguishes leaf chunks from
+  internal chunks at the top-level dispatch layer.
 
-- Internal chunks contain a discriminator byte (`0x02`), a format version byte (`0x01`),
-  a tree-level byte, an entry count, and a sequence of `(separator_len, separator,
-  child_addr)` records sorted strictly ascending by `separator`. Two internal nodes
-  containing the same logical separator/child-address pairs at the same level produce
-  byte-identical serializations.
+- **Internal chunks** start with `[CHUNK_KIND_INTERNAL=0x02][INTERNAL_FORMAT_V1=0x01]`,
+  followed by a tree-level byte, an entry count, and a sequence of
+  `(separator_len, separator, child_addr)` records sorted strictly ascending by
+  `separator`. Two internal nodes containing the same logical separator/child-
+  address pairs at the same level produce byte-identical serializations. The
+  second byte is currently a single-version format discriminator; a future
+  INV-FERR-045b will factor it into a per-codec namespace analogous to §23.9.8.
 
-- The canonical predicate is enforced **at construction**: the `LeafChunk` and
-  `InternalChunk` types expose only constructors that validate the sorted-strictly-ascending
-  invariant and return `FerraError::NonCanonicalChunk` on violation. Non-canonical chunks
-  are unrepresentable in well-typed code: there is no public constructor that accepts
-  unsorted or duplicate input.
+- The canonical predicate is enforced **at construction**: the `DatomPairChunk`
+  and `InternalChunk` types expose only constructors that validate the
+  sorted-strictly-ascending invariant and return `FerraError::NonCanonicalChunk`
+  on violation. Non-canonical chunks are unrepresentable in well-typed code:
+  there is no public constructor that accepts unsorted or duplicate input.
 
-- `serialize_leaf` and `serialize_internal` accept only the validated chunk types and
-  therefore cannot fail on ordering grounds. They return `Vec<u8>` (infallible from the
-  domain perspective; the only failure mode is OOM, which is a system-level concern).
+- `DatomPairCodec::encode_payload` and `serialize_internal_payload` accept only
+  the validated chunk types and therefore cannot fail on ordering grounds. They
+  return `Vec<u8>` (infallible from the domain perspective; the only failure
+  mode is OOM, which is a system-level concern). Neither function emits the
+  chunk_kind byte or the codec_tag — those are added by the `serialize_chunk`
+  top-level dispatcher and (for leaves) the `LeafChunk::encode` framework
+  method from INV-FERR-045c.
 
-- `deserialize_chunk` accepts arbitrary bytes and returns `Result<Chunk, FerraError>`.
-  It rejects bytes that do not parse against the V1 grammar OR that decode to a chunk
-  whose entries are not in canonical order. This double-check is the on-the-wire defense
-  against an adversarial peer sending non-canonical bytes whose hash happens to collide
-  with a legitimate chunk.
+- `deserialize_chunk` accepts arbitrary bytes and returns
+  `Result<ProllyChunkBody, FerraError>`. It dispatches on the leading
+  `chunk_kind` byte; for leaves it then delegates to `LeafChunk::decode`
+  (045c framework, which dispatches on the codec_tag byte and calls the
+  appropriate codec's `decode` method); for internals it delegates to
+  `deserialize_internal_payload`. Both delegated paths reject bytes that do
+  not parse against the V1 grammar OR that decode to a chunk whose entries
+  are not in canonical order. This double-check is the on-the-wire defense
+  against an adversarial peer sending non-canonical bytes whose hash happens
+  to collide with a legitimate chunk.
 
-The "two layers of enforcement" — type-level construction barrier plus deserialize-time
-validation — exist because chunks can enter the system from two sources: (1) construction
-by ferratomic-store from an in-memory `im::OrdMap` (type-level enforcement is sufficient),
-or (2) bytes received from a peer over the wire or read from a file written by a different
-implementation (deserialize-time validation is required because the type system cannot
+The "two layers of enforcement" — type-level construction barrier plus
+deserialize-time validation — exist because chunks can enter the system from
+two sources: (1) construction by ferratomic-store from an in-memory
+`im::OrdMap` (type-level enforcement is sufficient), or (2) bytes received from
+a peer over the wire or read from a file written by a different implementation
+(deserialize-time validation is required because the type system cannot
 constrain bytes that haven't been parsed yet).
+
+**Relationship to INV-FERR-045c**: INV-FERR-045a is the per-codec discharge of
+INV-FERR-045c's conformance theorems for the DatomPair codec specifically. The
+trait `LeafChunkCodec` is generic over codec implementations; `DatomPairCodec`
+(defined in Level 2 below) is the reference implementation that the
+`LeafChunk::DatomPair` enum variant of 045c wraps. Future codecs (e.g., the
+WaveletMatrixCodec under `bd-gvil`) provide their own per-codec discharges in
+their own spec entries; this invariant covers DatomPair plus the standard
+internal node format only.
 
 #### Level 2 (Implementation Contract)
 
 ```rust
+use std::collections::BTreeSet;
+use ferratom::{Datom, FerraError, Hash};
+
 // ==========================================================================
-// V1 byte layout
+// V1 byte layout — layered version (post session 023.5 Phase 2)
 // ==========================================================================
 //
-// Leaf chunk:
-//   [0]      discriminator: u8 = LEAF_CHUNK_TAG (0x01)
-//   [1]      format_version: u8 = 0x01
+// On-disk leaf chunk (DatomPair codec):
+//   [0]      chunk_kind: u8 = CHUNK_KIND_LEAF (0x01)
+//                            -- added by `serialize_chunk` (chunk-kind dispatch)
+//   [1]      codec_tag:  u8 = DatomPairCodec::CODEC_TAG (0x01)
+//                            -- added by `LeafChunk::encode` (045c codec dispatch)
 //   [2..6]   entry_count: u32-le
+//                            -- starts the DatomPair codec payload
+//                               (`DatomPairCodec::encode_payload`)
 //   [6..]    entries[entry_count]:
 //              key_len: u32-le
 //              key: [u8; key_len]
 //              value_len: u32-le
 //              value: [u8; value_len]
 //
-// Internal chunk:
-//   [0]      discriminator: u8 = INTERNAL_CHUNK_TAG (0x02)
-//   [1]      format_version: u8 = 0x01
-//   [2]      level: u8                 -- tree height level (>= 1; leaves are level 0)
+// On-disk internal chunk:
+//   [0]      chunk_kind: u8 = CHUNK_KIND_INTERNAL (0x02)
+//                            -- added by `serialize_chunk` (chunk-kind dispatch)
+//   [1]      version: u8 = INTERNAL_FORMAT_V1 (0x01)
+//                            -- starts the internal node payload
+//                               (`serialize_internal_payload`)
+//   [2]      level: u8                 -- tree height level (>= 1)
 //   [3..7]   entry_count: u32-le
 //   [7..]    entries[entry_count]:
 //              separator_len: u32-le
 //              separator: [u8; separator_len]
 //              child_addr: [u8; 32]    -- BLAKE3 hash of child chunk
 //
+// Byte-level compatibility note: This layered V1 layout is byte-identical to the
+// pre-session-023.5 monolithic V1 layout. Byte 0 (formerly LEAF_CHUNK_TAG /
+// INTERNAL_CHUNK_TAG, now CHUNK_KIND_LEAF / CHUNK_KIND_INTERNAL) is the same
+// value. Byte 1 of a leaf chunk (formerly the format_version) is now reinterpreted
+// as the codec_tag from the §23.9.8 Codec Discriminator Registry — DatomPair's
+// codec_tag happens to equal the old format_version (both are 0x01) because
+// DatomPair is the codec the V1 leaf format was originally designed for.
+//
 // Cross-cutting:
 //   - Multi-byte integers are little-endian (matches INV-FERR-086).
 //   - No alignment padding anywhere; bytes are packed.
-//   - Empty leaves (entry_count == 0) and empty internal nodes are syntactically valid
-//     but never appear in well-formed prolly trees: the build path always splits chunks
-//     at boundaries, never produces empty intermediate states. deserialize accepts them
-//     for parser simplicity; downstream constructors reject them per canonical_predicate.
+//   - Empty leaves (entry_count == 0) and empty internal nodes are syntactically
+//     valid but never appear in well-formed prolly trees: the build path always
+//     splits chunks at boundaries, never produces empty intermediate states.
+//     `decode` accepts them for parser simplicity; downstream constructors
+//     reject them per canonical_predicate.
 
-pub const LEAF_CHUNK_TAG: u8     = 0x01;
-pub const INTERNAL_CHUNK_TAG: u8 = 0x02;
-pub const CHUNK_FORMAT_VERSION: u8 = 0x01;
+pub const CHUNK_KIND_LEAF: u8     = 0x01;
+pub const CHUNK_KIND_INTERNAL: u8 = 0x02;
+pub const INTERNAL_FORMAT_V1: u8  = 0x01;
 
 // ==========================================================================
 // Validated chunk types
 // ==========================================================================
 
-/// A leaf chunk: a sorted, deduplicated sequence of (key, value) pairs.
-/// Constructors validate the canonical predicate; non-canonical leaves are
+/// The validated payload type of a leaf chunk in the DatomPair reference
+/// codec format: a sorted, deduplicated sequence of canonical (key, value)
+/// byte pairs. Pre-session-023.5: this type was named `LeafChunk`; renamed
+/// in session 023.5 Phase 2 to make room for the `LeafChunk` enum from
+/// INV-FERR-045c.
+///
+/// Constructors validate the canonical predicate; non-canonical chunks are
 /// unrepresentable in well-typed code.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LeafChunk {
-    /// Entries in strict ascending key order. Field is private — the only way to
-    /// populate it is through `LeafChunk::new` or `LeafChunk::from_sorted_unchecked`.
+pub struct DatomPairChunk {
+    /// Entries in strict ascending key order. Private — the only way to
+    /// populate is through `DatomPairChunk::new` or
+    /// `DatomPairChunk::from_sorted_unchecked`.
     entries: Vec<(Vec<u8>, Vec<u8>)>,
 }
 
-impl LeafChunk {
-    /// Build a leaf chunk from arbitrary entries. Validates strict ascending order
-    /// and duplicate-freedom; sorts internally if `entries` is unsorted.
+impl DatomPairChunk {
+    /// Build a DatomPairChunk from arbitrary entries. Validates strict
+    /// ascending order and duplicate-freedom; sorts internally if `entries`
+    /// is unsorted.
     ///
     /// Returns `FerraError::NonCanonicalChunk` if duplicate keys are present.
     pub fn new(mut entries: Vec<(Vec<u8>, Vec<u8>)>) -> Result<Self, FerraError> {
@@ -1584,23 +1684,23 @@ impl LeafChunk {
         for window in entries.windows(2) {
             if window[0].0 == window[1].0 {
                 return Err(FerraError::NonCanonicalChunk {
-                    reason: "duplicate key in leaf chunk",
+                    reason: "duplicate key in datom pair chunk",
                 });
             }
         }
-        Ok(LeafChunk { entries })
+        Ok(DatomPairChunk { entries })
     }
 
-    /// Build a leaf chunk from already-sorted, already-deduplicated entries.
-    /// The caller asserts the canonical predicate; debug builds assert it.
-    /// This is the hot path used by tree construction where the sort step has
-    /// already happened upstream.
+    /// Build a DatomPairChunk from already-sorted, already-deduplicated
+    /// entries. The caller asserts the canonical predicate; debug builds
+    /// assert it. Hot path used by tree construction where the sort step
+    /// has already happened upstream.
     pub fn from_sorted_unchecked(entries: Vec<(Vec<u8>, Vec<u8>)>) -> Self {
         debug_assert!(
             entries.windows(2).all(|w| w[0].0 < w[1].0),
             "from_sorted_unchecked called with non-canonical entries"
         );
-        LeafChunk { entries }
+        DatomPairChunk { entries }
     }
 
     pub fn entries(&self) -> &[(Vec<u8>, Vec<u8>)] { &self.entries }
@@ -1608,8 +1708,10 @@ impl LeafChunk {
     pub fn is_empty(&self) -> bool { self.entries.is_empty() }
 }
 
-/// An internal chunk: a sorted sequence of (separator_key, child_addr) pairs at a
-/// specific tree level (>= 1). Constructors validate the canonical predicate.
+/// An internal chunk: a sorted sequence of (separator_key, child_addr) pairs
+/// at a specific tree level (>= 1). Constructors validate the canonical
+/// predicate. Unchanged across session 023.5 — internal node format will be
+/// factored into a per-codec discharge under future INV-FERR-045b.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InternalChunk {
     /// Tree level. Leaves are level 0; the root has level == tree height.
@@ -1649,42 +1751,144 @@ impl InternalChunk {
     pub fn children(&self) -> &[(Vec<u8>, Hash)] { &self.children }
 }
 
-/// The full Chunk discriminated union. `serialize` accepts this type;
-/// `deserialize_chunk` produces this type.
+/// The top-level chunk discriminated union. `serialize_chunk` accepts this
+/// type; `deserialize_chunk` produces this type. The `Leaf` variant wraps the
+/// 045c `LeafChunk` enum (closed-world codec dispatch); the `Internal` variant
+/// wraps the (currently single-format) `InternalChunk` type.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProllyChunkBody {
+    /// A leaf chunk encoded by some codec from the `LeafChunk` enum
+    /// (045c). Currently the only registered variant is `DatomPair`; future
+    /// codecs (Wavelet, Verkle, ...) join via spec evolution.
     Leaf(LeafChunk),
+    /// An internal node encoded in the standard internal node format.
+    /// Future per-codec dispatch deferred to INV-FERR-045b.
     Internal(InternalChunk),
 }
 
 // ==========================================================================
-// Serialization
+// DatomPair codec — reference impl of LeafChunkCodec (INV-FERR-045c)
 // ==========================================================================
 
-pub fn serialize_leaf(chunk: &LeafChunk) -> Vec<u8> {
-    // Pre-compute capacity to avoid reallocs.
-    let cap = 6 + chunk.entries.iter().map(|(k, v)| 8 + k.len() + v.len()).sum::<usize>();
-    let mut buf = Vec::with_capacity(cap);
+/// The DatomPair codec — the reference codec implementation of
+/// `LeafChunkCodec` (INV-FERR-045c). Encodes a leaf chunk as length-prefixed
+/// (canonical_key, canonical_value) entries sorted by key. This is the per-
+/// codec discharge of INV-FERR-045c's T1 (round-trip), T2 (determinism), and
+/// T3 (injectivity) for the DatomPair codec specifically; T4 (fingerprint
+/// homomorphism compatibility) and T5 (order independence) follow
+/// structurally from T1 plus the BTreeSet input contract.
+pub struct DatomPairCodec;
 
-    buf.push(LEAF_CHUNK_TAG);
-    buf.push(CHUNK_FORMAT_VERSION);
-    buf.extend_from_slice(&(chunk.entries.len() as u32).to_le_bytes());
+impl LeafChunkCodec for DatomPairCodec {
+    /// `CODEC_TAG = 0x01`. The DatomPair codec is the first registered leaf
+    /// codec in §23.9.8 (Codec Discriminator Registry). Historically, this
+    /// byte value coincides with the pre-session-023.5 V1 format's
+    /// `format_version` byte at position 1 of the on-disk leaf chunk — the
+    /// layered redesign reinterprets that byte as the codec discriminator,
+    /// preserving on-disk byte content.
+    const CODEC_TAG: u8 = 0x01;
 
-    for (k, v) in &chunk.entries {
-        buf.extend_from_slice(&(k.len() as u32).to_le_bytes());
-        buf.extend_from_slice(k);
-        buf.extend_from_slice(&(v.len() as u32).to_le_bytes());
-        buf.extend_from_slice(v);
+    /// Encode a finite set of datoms as the DatomPair codec payload. The
+    /// output does NOT include the `CODEC_TAG` byte (added by
+    /// `LeafChunk::encode` in the framework dispatch layer per
+    /// INV-FERR-045c) or the `CHUNK_KIND_LEAF` byte (added by
+    /// `serialize_chunk` in the chunk-kind dispatch layer below).
+    fn encode(datoms: &BTreeSet<Datom>) -> Vec<u8> {
+        let chunk = datom_set_to_pair_chunk(datoms);
+        Self::encode_payload(&chunk)
     }
-    buf
+
+    /// Decode the codec's payload bytes back into the datom set. Validates
+    /// canonical ordering at the deserialization boundary (defense in depth
+    /// — see INV-FERR-045c T1 falsification class).
+    fn decode(bytes: &[u8]) -> Result<BTreeSet<Datom>, FerraError> {
+        let chunk = Self::decode_payload(bytes)?;
+        pair_chunk_to_datom_set(&chunk)
+    }
 }
 
-pub fn serialize_internal(chunk: &InternalChunk) -> Vec<u8> {
-    let cap = 7 + chunk.children.iter().map(|(s, _)| 4 + s.len() + 32).sum::<usize>();
+impl DatomPairCodec {
+    /// Encode a `DatomPairChunk` as the codec's payload bytes (no leading
+    /// codec_tag or chunk_kind — those are added by the framework dispatch
+    /// layers per INV-FERR-045c).
+    ///
+    /// Layout:
+    ///   [0..4]   entry_count: u32-le
+    ///   [4..]    entries[entry_count]:
+    ///              key_len: u32-le
+    ///              key: [u8; key_len]
+    ///              value_len: u32-le
+    ///              value: [u8; value_len]
+    ///
+    /// Direct entry-point for tree construction: the build path produces a
+    /// `DatomPairChunk` from sorted in-memory entries and skips the
+    /// `BTreeSet<Datom>` conversion that the trait-level `encode` performs.
+    /// Both paths produce identical payload bytes.
+    pub fn encode_payload(chunk: &DatomPairChunk) -> Vec<u8> {
+        let cap = 4 + chunk.entries.iter()
+            .map(|(k, v)| 8 + k.len() + v.len())
+            .sum::<usize>();
+        let mut buf = Vec::with_capacity(cap);
+        buf.extend_from_slice(&(chunk.entries.len() as u32).to_le_bytes());
+        for (k, v) in &chunk.entries {
+            buf.extend_from_slice(&(k.len() as u32).to_le_bytes());
+            buf.extend_from_slice(k);
+            buf.extend_from_slice(&(v.len() as u32).to_le_bytes());
+            buf.extend_from_slice(v);
+        }
+        buf
+    }
+
+    /// Decode the codec's payload bytes into a validated `DatomPairChunk`.
+    /// The constructor `DatomPairChunk::new` revalidates the canonical
+    /// predicate as defense in depth.
+    pub fn decode_payload(bytes: &[u8]) -> Result<DatomPairChunk, FerraError> {
+        let mut cur = Cursor::new(bytes);
+        let entry_count = cur.read_u32_le()? as usize;
+        let mut entries = Vec::with_capacity(entry_count);
+        for _ in 0..entry_count {
+            let key_len = cur.read_u32_le()? as usize;
+            let key = cur.read_bytes(key_len)?.to_vec();
+            let value_len = cur.read_u32_le()? as usize;
+            let value = cur.read_bytes(value_len)?.to_vec();
+            entries.push((key, value));
+        }
+        if !cur.is_empty() {
+            return Err(FerraError::TrailingChunkBytes { extra: cur.remaining() });
+        }
+        DatomPairChunk::new(entries)
+    }
+}
+
+/// Convert a `BTreeSet<Datom>` into a `DatomPairChunk` by extracting each
+/// datom's canonical sort key (per S23.9.0) and canonical value-payload
+/// bytes (per INV-FERR-086). Helper signature; concrete implementation
+/// lands in session 023.5 Phase 5 ("Fill in helper definitions").
+fn datom_set_to_pair_chunk(_datoms: &BTreeSet<Datom>) -> DatomPairChunk {
+    todo!("session 023.5 Phase 5 — Datom canonical key/value-payload split helper")
+}
+
+/// Inverse: rebuild a `BTreeSet<Datom>` from a `DatomPairChunk` by parsing
+/// each (key, value) entry into a `Datom`. Helper signature; concrete
+/// implementation lands in session 023.5 Phase 5.
+fn pair_chunk_to_datom_set(_chunk: &DatomPairChunk) -> Result<BTreeSet<Datom>, FerraError> {
+    todo!("session 023.5 Phase 5 — Datom canonical-parts → Datom helper")
+}
+
+// ==========================================================================
+// Internal node payload (currently the only internal node format)
+// ==========================================================================
+
+/// Encode an `InternalChunk` as its payload bytes (no leading
+/// `CHUNK_KIND_INTERNAL` byte — that is added by `serialize_chunk` in the
+/// chunk-kind dispatch layer below). The `INTERNAL_FORMAT_V1` byte stays
+/// inside the payload for now; future INV-FERR-045b will factor it into a
+/// per-codec namespace analogous to §23.9.8.
+pub fn serialize_internal_payload(chunk: &InternalChunk) -> Vec<u8> {
+    let cap = 6 + chunk.children.iter().map(|(s, _)| 4 + s.len() + 32).sum::<usize>();
     let mut buf = Vec::with_capacity(cap);
 
-    buf.push(INTERNAL_CHUNK_TAG);
-    buf.push(CHUNK_FORMAT_VERSION);
+    buf.push(INTERNAL_FORMAT_V1);
     buf.push(chunk.level);
     buf.extend_from_slice(&(chunk.children.len() as u32).to_le_bytes());
 
@@ -1696,60 +1900,12 @@ pub fn serialize_internal(chunk: &InternalChunk) -> Vec<u8> {
     buf
 }
 
-pub fn serialize_chunk(body: &ProllyChunkBody) -> Vec<u8> {
-    match body {
-        ProllyChunkBody::Leaf(l)     => serialize_leaf(l),
-        ProllyChunkBody::Internal(i) => serialize_internal(i),
-    }
-}
-
-// ==========================================================================
-// Deserialization
-// ==========================================================================
-
-pub fn deserialize_chunk(bytes: &[u8]) -> Result<ProllyChunkBody, FerraError> {
-    if bytes.is_empty() {
-        return Err(FerraError::TruncatedChunk { needed: 1, got: 0 });
-    }
-    match bytes[0] {
-        LEAF_CHUNK_TAG     => deserialize_leaf(bytes).map(ProllyChunkBody::Leaf),
-        INTERNAL_CHUNK_TAG => deserialize_internal(bytes).map(ProllyChunkBody::Internal),
-        tag => Err(FerraError::UnknownChunkTag { tag }),
-    }
-}
-
-fn deserialize_leaf(bytes: &[u8]) -> Result<LeafChunk, FerraError> {
+/// Decode the internal node payload (no leading `CHUNK_KIND_INTERNAL` byte).
+pub fn deserialize_internal_payload(bytes: &[u8]) -> Result<InternalChunk, FerraError> {
     let mut cur = Cursor::new(bytes);
-    let tag = cur.read_u8()?;
-    debug_assert_eq!(tag, LEAF_CHUNK_TAG);
     let version = cur.read_u8()?;
-    if version != CHUNK_FORMAT_VERSION {
-        return Err(FerraError::UnsupportedChunkVersion { version });
-    }
-    let entry_count = cur.read_u32_le()? as usize;
-    let mut entries = Vec::with_capacity(entry_count);
-    for _ in 0..entry_count {
-        let key_len = cur.read_u32_le()? as usize;
-        let key = cur.read_bytes(key_len)?.to_vec();
-        let value_len = cur.read_u32_le()? as usize;
-        let value = cur.read_bytes(value_len)?.to_vec();
-        entries.push((key, value));
-    }
-    if !cur.is_empty() {
-        return Err(FerraError::TrailingChunkBytes { extra: cur.remaining() });
-    }
-    // Defense in depth: revalidate the canonical predicate even though we constructed
-    // entries in deserialize order. A non-canonical on-disk chunk is a corruption signal.
-    LeafChunk::new(entries)
-}
-
-fn deserialize_internal(bytes: &[u8]) -> Result<InternalChunk, FerraError> {
-    let mut cur = Cursor::new(bytes);
-    let tag = cur.read_u8()?;
-    debug_assert_eq!(tag, INTERNAL_CHUNK_TAG);
-    let version = cur.read_u8()?;
-    if version != CHUNK_FORMAT_VERSION {
-        return Err(FerraError::UnsupportedChunkVersion { version });
+    if version != INTERNAL_FORMAT_V1 {
+        return Err(FerraError::UnsupportedInternalFormat { version });
     }
     let level = cur.read_u8()?;
     let entry_count = cur.read_u32_le()? as usize;
@@ -1765,6 +1921,54 @@ fn deserialize_internal(bytes: &[u8]) -> Result<InternalChunk, FerraError> {
         return Err(FerraError::TrailingChunkBytes { extra: cur.remaining() });
     }
     InternalChunk::new(level, children)
+}
+
+// ==========================================================================
+// Top-level chunk dispatch (chunk_kind layer)
+// ==========================================================================
+
+/// Encode a `ProllyChunkBody` to its on-disk byte representation. Prepends
+/// the `CHUNK_KIND_*` discriminator byte and dispatches to the appropriate
+/// inner encoder:
+///   - `Leaf` → `LeafChunk::encode` (045c framework, which prepends the
+///     `CODEC_TAG` byte and calls the codec's `encode_payload`)
+///   - `Internal` → `serialize_internal_payload` (no further codec dispatch)
+pub fn serialize_chunk(body: &ProllyChunkBody) -> Vec<u8> {
+    match body {
+        ProllyChunkBody::Leaf(leaf) => {
+            let inner = leaf.encode();
+            let mut buf = Vec::with_capacity(1 + inner.len());
+            buf.push(CHUNK_KIND_LEAF);
+            buf.extend(inner);
+            buf
+        }
+        ProllyChunkBody::Internal(inode) => {
+            let inner = serialize_internal_payload(inode);
+            let mut buf = Vec::with_capacity(1 + inner.len());
+            buf.push(CHUNK_KIND_INTERNAL);
+            buf.extend(inner);
+            buf
+        }
+    }
+}
+
+/// Decode an on-disk byte sequence into a `ProllyChunkBody`. Splits the
+/// leading `CHUNK_KIND_*` byte and dispatches to the appropriate inner
+/// decoder.
+pub fn deserialize_chunk(bytes: &[u8]) -> Result<ProllyChunkBody, FerraError> {
+    let (kind, rest) = bytes.split_first()
+        .ok_or(FerraError::TruncatedChunk { needed: 1, got: 0 })?;
+    match *kind {
+        CHUNK_KIND_LEAF => {
+            let leaf = LeafChunk::decode(rest)?;
+            Ok(ProllyChunkBody::Leaf(leaf))
+        }
+        CHUNK_KIND_INTERNAL => {
+            let inode = deserialize_internal_payload(rest)?;
+            Ok(ProllyChunkBody::Internal(inode))
+        }
+        kind => Err(FerraError::UnknownChunkKind { kind }),
+    }
 }
 
 // ==========================================================================
@@ -1789,7 +1993,7 @@ pub fn decode_child_addrs(chunk: &Chunk) -> Result<Vec<Hash>, FerraError> {
 
 #[kani::proof]
 #[kani::unwind(4)]
-fn leaf_chunk_roundtrip_bounded() {
+fn datom_pair_chunk_payload_roundtrip_bounded() {
     // Two entries, small keys and values.
     let k1: [u8; 2] = kani::any();
     let v1: [u8; 2] = kani::any();
@@ -1798,13 +2002,39 @@ fn leaf_chunk_roundtrip_bounded() {
     kani::assume(k1 != k2);
 
     let entries = vec![(k1.to_vec(), v1.to_vec()), (k2.to_vec(), v2.to_vec())];
-    let leaf = LeafChunk::new(entries).expect("distinct keys are canonical");
+    let chunk = DatomPairChunk::new(entries).expect("distinct keys are canonical");
 
-    let bytes = serialize_leaf(&leaf);
-    let body = deserialize_chunk(&bytes).expect("V1 bytes must round-trip");
-    match body {
-        ProllyChunkBody::Leaf(decoded) => assert_eq!(decoded, leaf),
-        ProllyChunkBody::Internal(_) => panic!("expected leaf"),
+    // Test the codec payload roundtrip directly. The full chunk roundtrip
+    // (including chunk_kind and codec_tag bytes) is exercised by the next
+    // harness via `serialize_chunk` / `deserialize_chunk`.
+    let payload = DatomPairCodec::encode_payload(&chunk);
+    let decoded = DatomPairCodec::decode_payload(&payload)
+        .expect("DatomPair payload must round-trip");
+    assert_eq!(decoded, chunk);
+}
+
+#[kani::proof]
+#[kani::unwind(4)]
+fn full_leaf_chunk_roundtrip_bounded() {
+    let k1: [u8; 2] = kani::any();
+    let v1: [u8; 2] = kani::any();
+    let k2: [u8; 2] = kani::any();
+    let v2: [u8; 2] = kani::any();
+    kani::assume(k1 != k2);
+
+    let entries = vec![(k1.to_vec(), v1.to_vec()), (k2.to_vec(), v2.to_vec())];
+    let dp = DatomPairChunk::new(entries).expect("distinct keys are canonical");
+    let body = ProllyChunkBody::Leaf(LeafChunk::DatomPair(dp.clone()));
+
+    let bytes = serialize_chunk(&body);
+    // Verify the leading bytes match the layered V1 layout.
+    assert_eq!(bytes[0], CHUNK_KIND_LEAF);
+    assert_eq!(bytes[1], DatomPairCodec::CODEC_TAG);
+
+    let decoded = deserialize_chunk(&bytes).expect("V1 bytes must round-trip");
+    match decoded {
+        ProllyChunkBody::Leaf(LeafChunk::DatomPair(d)) => assert_eq!(d, dp),
+        _ => panic!("expected Leaf::DatomPair"),
     }
 }
 
@@ -1822,11 +2052,15 @@ fn internal_chunk_roundtrip_bounded() {
         (s2.to_vec(), Hash::from_bytes(h2)),
     ];
     let inode = InternalChunk::new(1, children).expect("distinct separators are canonical");
+    let body = ProllyChunkBody::Internal(inode.clone());
 
-    let bytes = serialize_internal(&inode);
-    let body = deserialize_chunk(&bytes).expect("V1 bytes must round-trip");
-    match body {
-        ProllyChunkBody::Internal(decoded) => assert_eq!(decoded, inode),
+    let bytes = serialize_chunk(&body);
+    assert_eq!(bytes[0], CHUNK_KIND_INTERNAL);
+    assert_eq!(bytes[1], INTERNAL_FORMAT_V1);
+
+    let decoded = deserialize_chunk(&bytes).expect("V1 bytes must round-trip");
+    match decoded {
+        ProllyChunkBody::Internal(d) => assert_eq!(d, inode),
         ProllyChunkBody::Leaf(_) => panic!("expected internal"),
     }
 }
@@ -1834,37 +2068,44 @@ fn internal_chunk_roundtrip_bounded() {
 
 **Falsification**: Any one of the following witnesses falsifies INV-FERR-045a.
 
-1. **Round-trip failure**: a canonical `LeafChunk` (or `InternalChunk`) `c` such that
-   `deserialize_chunk(serialize(c)) != Ok(c)`. This indicates the V1 format encoding and
-   the V1 format decoding are inconsistent.
+1. **Round-trip failure**: a canonical `DatomPairChunk` (or `InternalChunk`) `c`
+   such that the corresponding `decode_payload(encode_payload(c)) != Ok(c)` (or
+   the equivalent through the top-level `serialize_chunk` / `deserialize_chunk`
+   layered path). This indicates the V1 format encoding and the V1 format
+   decoding are inconsistent.
 
-2. **Canonicality / injectivity failure**: two canonical chunks `c₁ ≠ c₂` (different
-   logical entries) such that `serialize(c₁) = serialize(c₂)`. This is a hash-collision-free
-   way to demonstrate that the encoding is not injective on canonical inputs.
+2. **Canonicality / injectivity failure**: two canonical chunks `c₁ ≠ c₂`
+   (different logical entries) such that
+   `DatomPairCodec::encode_payload(c₁) = DatomPairCodec::encode_payload(c₂)`
+   (or the equivalent for `InternalChunk`). This is a hash-collision-free way
+   to demonstrate that the encoding is not injective on canonical inputs.
 
-3. **Type-level escape**: a code path that constructs a `LeafChunk` or `InternalChunk` with
-   non-canonical entries (unsorted, duplicate keys, or — for internal — `level == 0`)
-   without going through `LeafChunk::new` / `InternalChunk::new`. The presence of such a
-   path means the type-level enforcement claim of Level 1 is false. The only sanctioned
-   bypass is `from_sorted_unchecked`, which is `debug_assert!`-checked and documented as
-   a hot-path optimization that requires upstream sortedness.
+3. **Type-level escape**: a code path that constructs a `DatomPairChunk` or
+   `InternalChunk` with non-canonical entries (unsorted, duplicate keys, or
+   — for internal — `level == 0`) without going through
+   `DatomPairChunk::new` / `InternalChunk::new`. The presence of such a path
+   means the type-level enforcement claim of Level 1 is false. The only
+   sanctioned bypass is `from_sorted_unchecked`, which is `debug_assert!`-
+   checked and documented as a hot-path optimization that requires upstream
+   sortedness.
 
-4. **Deserialize accepts non-canonical bytes**: an on-disk byte sequence whose decoded
-   entries are not in strict ascending key order, yet `deserialize_chunk` returns `Ok`.
-   This violates the defense-in-depth requirement for bytes received from untrusted sources.
+4. **Deserialize accepts non-canonical bytes**: an on-disk byte sequence whose
+   decoded entries are not in strict ascending key order, yet
+   `deserialize_chunk` returns `Ok`. This violates the defense-in-depth
+   requirement for bytes received from untrusted sources.
 
-5. **Cross-implementation divergence**: two implementations conforming to this spec that
-   produce different `serialize_leaf(c)` outputs for the same canonical input `c`.
+5. **Cross-implementation divergence**: two implementations conforming to this
+   spec that produce different `DatomPairCodec::encode_payload(c)` outputs (or
+   different `serialize_internal_payload(i)` outputs) for the same canonical
+   input.
 
 **proptest strategy**:
 ```rust
 proptest! {
-    /// Round-trip property: serialize then deserialize produces the original chunk.
-    /// Drives Falsification cases #1 and #4 (the latter implicitly: deserialize_chunk
-    /// must validate the canonical predicate, and re-serializing the validated result
-    /// must equal the original bytes).
+    /// Round-trip property at the codec payload level: encode_payload then
+    /// decode_payload produces the original chunk. Drives Falsification case #1.
     #[test]
-    fn leaf_chunk_roundtrip(
+    fn datom_pair_payload_roundtrip(
         raw_entries in prop::collection::btree_map(
             prop::collection::vec(any::<u8>(), 1..32),  // keys
             prop::collection::vec(any::<u8>(), 0..256), // values
@@ -1872,18 +2113,45 @@ proptest! {
         ),
     ) {
         let entries: Vec<_> = raw_entries.into_iter().collect();
-        let leaf = LeafChunk::new(entries).expect("BTreeMap iteration is canonical");
-        let bytes = serialize_leaf(&leaf);
+        let chunk = DatomPairChunk::new(entries)
+            .expect("BTreeMap iteration is canonical");
+        let payload = DatomPairCodec::encode_payload(&chunk);
+
+        let decoded = DatomPairCodec::decode_payload(&payload)
+            .expect("V1 DatomPair payload must round-trip");
+        prop_assert_eq!(decoded, chunk.clone());
+
+        // Re-encode must produce identical bytes (canonicality of the format).
+        let re_payload = DatomPairCodec::encode_payload(&chunk);
+        prop_assert_eq!(payload, re_payload);
+    }
+
+    /// Round-trip property at the full chunk level: serialize_chunk then
+    /// deserialize_chunk through the layered dispatch (chunk_kind +
+    /// LeafChunk::encode + DatomPairCodec::encode_payload) produces the
+    /// original ProllyChunkBody. Drives Falsification cases #1 and #4.
+    #[test]
+    fn full_leaf_chunk_roundtrip(
+        raw_entries in prop::collection::btree_map(
+            prop::collection::vec(any::<u8>(), 1..32),
+            prop::collection::vec(any::<u8>(), 0..256),
+            0..200,
+        ),
+    ) {
+        let entries: Vec<_> = raw_entries.into_iter().collect();
+        let dp = DatomPairChunk::new(entries).expect("BTreeMap is canonical");
+        let body = ProllyChunkBody::Leaf(LeafChunk::DatomPair(dp.clone()));
+
+        let bytes = serialize_chunk(&body);
+        // Verify the layered V1 prefix:
+        prop_assert_eq!(bytes[0], CHUNK_KIND_LEAF);
+        prop_assert_eq!(bytes[1], DatomPairCodec::CODEC_TAG);
 
         let decoded = deserialize_chunk(&bytes).expect("V1 bytes must round-trip");
         match decoded {
-            ProllyChunkBody::Leaf(d) => prop_assert_eq!(d, leaf),
-            ProllyChunkBody::Internal(_) => prop_assert!(false, "expected leaf"),
+            ProllyChunkBody::Leaf(LeafChunk::DatomPair(d)) => prop_assert_eq!(d, dp),
+            _ => prop_assert!(false, "expected Leaf::DatomPair"),
         }
-
-        // Re-serialize must produce identical bytes (canonicality of the format).
-        let re_bytes = serialize_leaf(&leaf);
-        prop_assert_eq!(bytes, re_bytes);
     }
 
     #[test]
@@ -1899,7 +2167,11 @@ proptest! {
             .map(|(s, h)| (s, Hash::from_bytes(h)))
             .collect();
         let inode = InternalChunk::new(level, children).expect("BTreeMap is canonical");
-        let bytes = serialize_internal(&inode);
+        let body = ProllyChunkBody::Internal(inode.clone());
+        let bytes = serialize_chunk(&body);
+
+        prop_assert_eq!(bytes[0], CHUNK_KIND_INTERNAL);
+        prop_assert_eq!(bytes[1], INTERNAL_FORMAT_V1);
 
         let decoded = deserialize_chunk(&bytes).expect("V1 bytes must round-trip");
         match decoded {
@@ -1908,10 +2180,10 @@ proptest! {
         }
     }
 
-    /// Canonicality / injectivity: two distinct canonical chunks must serialize to
-    /// distinct byte sequences. Drives Falsification case #2.
+    /// Canonicality / injectivity: two distinct canonical DatomPairChunks must
+    /// encode to distinct payload byte sequences. Drives Falsification case #2.
     #[test]
-    fn leaf_chunk_serialize_injective(
+    fn datom_pair_payload_injective(
         entries1 in prop::collection::btree_map(
             prop::collection::vec(any::<u8>(), 1..16),
             prop::collection::vec(any::<u8>(), 0..32),
@@ -1924,16 +2196,19 @@ proptest! {
         ),
     ) {
         prop_assume!(entries1 != entries2);
-        let l1 = LeafChunk::new(entries1.into_iter().collect()).unwrap();
-        let l2 = LeafChunk::new(entries2.into_iter().collect()).unwrap();
-        prop_assert_ne!(serialize_leaf(&l1), serialize_leaf(&l2),
-            "INV-FERR-045a: distinct canonical leaves must serialize differently");
+        let c1 = DatomPairChunk::new(entries1.into_iter().collect()).unwrap();
+        let c2 = DatomPairChunk::new(entries2.into_iter().collect()).unwrap();
+        prop_assert_ne!(
+            DatomPairCodec::encode_payload(&c1),
+            DatomPairCodec::encode_payload(&c2),
+            "INV-FERR-045a: distinct canonical DatomPair chunks must encode differently"
+        );
     }
 
-    /// Defense-in-depth: deserialize must reject non-canonical input even if the bytes
-    /// are syntactically valid. Drives Falsification case #4.
+    /// Defense-in-depth: deserialize must reject non-canonical input even if
+    /// the bytes are syntactically valid. Drives Falsification case #4.
     #[test]
-    fn deserialize_rejects_unsorted_leaf(
+    fn deserialize_rejects_unsorted_datom_pair(
         k1 in prop::collection::vec(any::<u8>(), 1..16),
         v1 in prop::collection::vec(any::<u8>(), 0..32),
         k2 in prop::collection::vec(any::<u8>(), 1..16),
@@ -1941,7 +2216,9 @@ proptest! {
     ) {
         prop_assume!(k1 > k2);  // Force descending order in the wire bytes.
         // Hand-craft non-canonical leaf bytes by writing entries in the wrong order.
-        let mut bytes = vec![LEAF_CHUNK_TAG, CHUNK_FORMAT_VERSION];
+        // The hand-crafted bytes go through the layered top-level path:
+        //   [CHUNK_KIND_LEAF][CODEC_TAG][entry_count][entries...]
+        let mut bytes = vec![CHUNK_KIND_LEAF, DatomPairCodec::CODEC_TAG];
         bytes.extend_from_slice(&2u32.to_le_bytes());
         bytes.extend_from_slice(&(k1.len() as u32).to_le_bytes());
         bytes.extend_from_slice(&k1);
@@ -1957,90 +2234,147 @@ proptest! {
             "INV-FERR-045a: deserialize must reject non-canonical bytes");
     }
 
-    /// Type-level enforcement: LeafChunk::new with duplicate keys must fail.
-    /// Drives Falsification case #3.
+    /// Type-level enforcement: DatomPairChunk::new with duplicate keys must
+    /// fail. Drives Falsification case #3.
     #[test]
-    fn leaf_chunk_rejects_duplicate_keys(
+    fn datom_pair_chunk_rejects_duplicate_keys(
         k in prop::collection::vec(any::<u8>(), 1..16),
         v1 in prop::collection::vec(any::<u8>(), 0..16),
         v2 in prop::collection::vec(any::<u8>(), 0..16),
     ) {
         let entries = vec![(k.clone(), v1), (k, v2)];
-        let result = LeafChunk::new(entries);
+        let result = DatomPairChunk::new(entries);
         prop_assert!(matches!(result, Err(FerraError::NonCanonicalChunk { .. })),
-            "INV-FERR-045a: LeafChunk::new must reject duplicate keys");
+            "INV-FERR-045a: DatomPairChunk::new must reject duplicate keys");
     }
 }
 ```
 
 **Lean theorem**:
 ```lean
-/-- Deterministic chunk serialization (INV-FERR-045a).
-    Modeled at the abstract level: serialize is a function on canonical chunks
-    and is injective. The concrete byte layout is verified by proptest + Kani. -/
+/-- DatomPair reference codec + standard internal node format (INV-FERR-045a).
+
+    Modeled at the abstract level: encode_payload is a function on canonical
+    chunks and is injective. The concrete byte layout is verified by proptest
+    and Kani. The trait-level conformance theorems live in INV-FERR-045c's
+    Lean section; this section discharges T1 (round-trip) for the DatomPair
+    codec specifically (which by `roundtrip_implies_injective` from 045c
+    automatically discharges T3 as well). -/
 
 inductive ProllyChunkBody where
   | leaf     (entries  : List (List UInt8 × List UInt8))
   | internal (level    : Nat) (children : List (List UInt8 × Hash))
 
-/-- A leaf chunk is canonical iff its entries are strictly ascending by key
-    (which implies duplicate-free). -/
-def canonicalLeaf (entries : List (List UInt8 × List UInt8)) : Prop :=
+/-- A DatomPair chunk's entries are canonical iff they are strictly ascending
+    by key (which implies duplicate-free). -/
+def canonicalDatomPair (entries : List (List UInt8 × List UInt8)) : Prop :=
   entries.Pairwise (fun a b => a.1 < b.1)
 
 def canonicalInternal (level : Nat) (children : List (List UInt8 × Hash)) : Prop :=
   level ≥ 1 ∧ children.Pairwise (fun a b => a.1 < b.1)
 
 def canonicalChunk : ProllyChunkBody → Prop
-  | .leaf entries     => canonicalLeaf entries
+  | .leaf entries     => canonicalDatomPair entries
   | .internal lvl chs => canonicalInternal lvl chs
 
-/-- Abstract serialization function. The concrete byte layout is given by
-    `serialize_leaf` / `serialize_internal` in Level 2; here we treat it as
-    an opaque function and prove the algebraic properties. -/
-axiom serializeChunk : ProllyChunkBody → List UInt8
+/-- Abstract DatomPair codec encode_payload function. The concrete byte
+    layout is given by `DatomPairCodec::encode_payload` in Level 2; here
+    we treat it as an opaque function and prove the algebraic properties
+    needed for downstream invariants. -/
+axiom datomPairEncodePayload : List (List UInt8 × List UInt8) → List UInt8
 
-/-- Round-trip: deserializing a serialized canonical chunk recovers the original.
-    Modeled as: there exists a deserialization function such that this holds. -/
-axiom deserializeChunk : List UInt8 → Option ProllyChunkBody
+/-- Abstract DatomPair codec decode_payload function. -/
+axiom datomPairDecodePayload :
+    List UInt8 → Option (List (List UInt8 × List UInt8))
 
-axiom roundtrip_canonical (c : ProllyChunkBody) (h : canonicalChunk c) :
-    deserializeChunk (serializeChunk c) = some c
+/-- Round-trip axiom for the DatomPair codec — this is the per-codec
+    discharge of INV-FERR-045c T1. The byte-level concretization is tracked
+    under bd-aqg9h. -/
+axiom datom_pair_roundtrip
+    (entries : List (List UInt8 × List UInt8))
+    (h : canonicalDatomPair entries) :
+    datomPairDecodePayload (datomPairEncodePayload entries) = some entries
 
-/-- Injectivity on canonical chunks: distinct canonical chunks have distinct bytes. -/
-theorem serialize_injective_canonical
-    (c₁ c₂ : ProllyChunkBody)
-    (h₁ : canonicalChunk c₁)
-    (h₂ : canonicalChunk c₂)
-    (h_eq : serializeChunk c₁ = serializeChunk c₂) :
-    c₁ = c₂ := by
-  have r₁ := roundtrip_canonical c₁ h₁
-  have r₂ := roundtrip_canonical c₂ h₂
+/-- Abstract internal node payload encode/decode functions and round-trip
+    axiom — same shape as the DatomPair pair, separate codec namespace. -/
+axiom internalEncodePayload : Nat → List (List UInt8 × Hash) → List UInt8
+
+axiom internalDecodePayload :
+    List UInt8 → Option (Nat × List (List UInt8 × Hash))
+
+axiom internal_roundtrip
+    (level : Nat) (children : List (List UInt8 × Hash))
+    (h : canonicalInternal level children) :
+    internalDecodePayload (internalEncodePayload level children) =
+      some (level, children)
+
+/-- Injectivity for the DatomPair codec on canonical entries — derived from
+    the round-trip axiom by the same `Option.some.inj` argument used in
+    INV-FERR-045c's `roundtrip_implies_injective`. -/
+theorem datom_pair_encode_injective_canonical
+    (e₁ e₂ : List (List UInt8 × List UInt8))
+    (h₁ : canonicalDatomPair e₁)
+    (h₂ : canonicalDatomPair e₂)
+    (h_eq : datomPairEncodePayload e₁ = datomPairEncodePayload e₂) :
+    e₁ = e₂ := by
+  have r₁ := datom_pair_roundtrip e₁ h₁
+  have r₂ := datom_pair_roundtrip e₂ h₂
   rw [h_eq] at r₁
-  -- Both r₁ and r₂ now state: deserializeChunk (serializeChunk c₂) = some <something>
-  -- Functional equality of deserializeChunk forces the somethings to agree.
-  have : some c₁ = some c₂ := by rw [← r₁, ← r₂]
+  -- r₁ : datomPairDecodePayload (datomPairEncodePayload e₂) = some e₁
+  -- r₂ : datomPairDecodePayload (datomPairEncodePayload e₂) = some e₂
+  have : some e₁ = some e₂ := by rw [← r₁, ← r₂]
   exact Option.some.inj this
 
-/-- Content-addressing stability: distinct canonical chunks have distinct addresses
-    (modulo BLAKE3 collision, which is treated as impossible in the abstract model). -/
-theorem chunk_addr_injective_canonical
-    (c₁ c₂ : ProllyChunkBody)
-    (h₁ : canonicalChunk c₁)
-    (h₂ : canonicalChunk c₂)
-    (h_addr : blake3 (serializeChunk c₁) = blake3 (serializeChunk c₂)) :
-    c₁ = c₂ := by
-  -- BLAKE3 is injective on the practical inputs of interest (collision resistance).
-  -- We axiomatize this in the foundation model; see 00-preamble.md §23.0.4.
-  have h_bytes : serializeChunk c₁ = serializeChunk c₂ :=
-    blake3_injective h_addr
-  exact serialize_injective_canonical c₁ c₂ h₁ h₂ h_bytes
+/-- Symmetric injectivity for internal nodes. -/
+theorem internal_encode_injective_canonical
+    (l₁ l₂ : Nat)
+    (c₁ c₂ : List (List UInt8 × Hash))
+    (h₁ : canonicalInternal l₁ c₁)
+    (h₂ : canonicalInternal l₂ c₂)
+    (h_eq : internalEncodePayload l₁ c₁ = internalEncodePayload l₂ c₂) :
+    l₁ = l₂ ∧ c₁ = c₂ := by
+  have r₁ := internal_roundtrip l₁ c₁ h₁
+  have r₂ := internal_roundtrip l₂ c₂ h₂
+  rw [h_eq] at r₁
+  have : some (l₁, c₁) = some (l₂, c₂) := by rw [← r₁, ← r₂]
+  have h_pair : (l₁, c₁) = (l₂, c₂) := Option.some.inj this
+  exact ⟨congrArg Prod.fst h_pair, congrArg Prod.snd h_pair⟩
 
--- The two `axiom` declarations above are tracked for replacement with concrete
--- definitions when the V1 byte layout is formalized at the byte level. The current
--- form proves the algebraic properties needed by INV-FERR-046 (history independence)
--- and INV-FERR-049 (snapshot identity) without depending on a specific layout.
--- Tracked: bd-aqg9h (INV-FERR-045a Lean concretization).
+/-- Content-addressing stability for the DatomPair codec: distinct canonical
+    chunks produce distinct BLAKE3 addresses (modulo collision). The address
+    here is computed over the FULL on-disk leaf bytes including the
+    `[CHUNK_KIND_LEAF][CODEC_TAG]` prefix, but since both prefix bytes are
+    fixed for a given codec they do not affect injectivity — distinct
+    payloads still produce distinct prefixed sequences, hence distinct
+    BLAKE3 hashes. -/
+theorem datom_pair_addr_injective_canonical
+    (e₁ e₂ : List (List UInt8 × List UInt8))
+    (h₁ : canonicalDatomPair e₁)
+    (h₂ : canonicalDatomPair e₂)
+    (h_addr :
+      blake3 ([0x01, 0x01] ++ datomPairEncodePayload e₁) =
+      blake3 ([0x01, 0x01] ++ datomPairEncodePayload e₂)) :
+    e₁ = e₂ := by
+  -- BLAKE3 is injective on the practical inputs of interest (collision
+  -- resistance). Axiomatized in the foundation model; see 00-preamble.md
+  -- §23.0.4 (`blake3_injective`).
+  have h_full : [0x01, 0x01] ++ datomPairEncodePayload e₁ =
+                [0x01, 0x01] ++ datomPairEncodePayload e₂ :=
+    blake3_injective h_addr
+  -- The leading `[0x01, 0x01]` is the same on both sides; List.append is
+  -- left-cancellative in Lean (List.append_cancel_left).
+  have h_payload :
+      datomPairEncodePayload e₁ = datomPairEncodePayload e₂ :=
+    List.append_cancel_left h_full
+  exact datom_pair_encode_injective_canonical e₁ e₂ h₁ h₂ h_payload
+
+-- The four `axiom` declarations above are tracked for replacement with
+-- concrete definitions when the V1 byte layout is formalized at the byte
+-- level. The current form proves the algebraic properties needed by
+-- INV-FERR-046 (history independence), INV-FERR-049 (snapshot identity),
+-- and INV-FERR-045c's per-codec discharge requirements without depending
+-- on a specific layout. Tracked: bd-aqg9h (INV-FERR-045a Lean
+-- concretization, already filed).
 ```
 
 ---
@@ -2319,8 +2653,11 @@ theorem prolly_merge_comm (a b : Finset (List UInt8 × List UInt8)) (pw : Nat) :
 
 ### INV-FERR-047: O(d) Diff Complexity
 
-**Traces to**: INV-FERR-045 (Chunk Content Addressing), INV-FERR-046 (History Independence),
-INV-FERR-022 (Anti-Entropy Convergence), section 23.8 (Federation)
+**Traces to**: INV-FERR-045 (Chunk Content Addressing), INV-FERR-045c (Leaf Chunk
+Codec Conformance — DiffIterator iterates leaf chunks via the `LeafChunkCodec`
+trait interface so any conforming codec is supported uniformly), INV-FERR-046
+(History Independence), INV-FERR-022 (Anti-Entropy Convergence),
+section 23.8 (Federation)
 **Verification**: `V:PROP`, `V:KANI`
 **Stage**: 1
 
@@ -2580,8 +2917,10 @@ proptest! {
 ### INV-FERR-048: Chunk-Based Federation Transfer
 
 **Traces to**: INV-FERR-022 (Anti-Entropy Convergence), INV-FERR-047 (O(d) Diff),
-INV-FERR-045 (Chunk Content Addressing), section 23.8 (Federation & Federated Query),
-INV-FERR-037 (Federated Query Correctness)
+INV-FERR-045 (Chunk Content Addressing), INV-FERR-045c (Leaf Chunk Codec
+Conformance — ChunkTransfer materializes leaf chunks via the `LeafChunkCodec`
+trait interface; mixed-codec stores transfer through the same protocol),
+section 23.8 (Federation & Federated Query), INV-FERR-037 (Federated Query Correctness)
 **Verification**: `V:PROP`, `V:KANI`
 **Stage**: 1
 
@@ -2865,9 +3204,12 @@ proptest! {
 
 ### INV-FERR-049: Snapshot = Root Hash
 
-**Traces to**: INV-FERR-045 (Chunk Content Addressing), INV-FERR-045a (Deterministic
-Chunk Serialization), S23.9.0 (Canonical Datom Key Encoding — RootSet manifest
-structure), INV-FERR-006 (Snapshot Isolation), C2 (Identity by Content)
+**Traces to**: INV-FERR-045 (Chunk Content Addressing), INV-FERR-045a (DatomPair
+Reference Codec), INV-FERR-045c (Leaf Chunk Codec Conformance — Snapshot
+resolution decodes leaf chunks via the `LeafChunkCodec` trait interface; the
+RootSet manifest hash is independent of which codec each leaf uses, by T4),
+S23.9.0 (Canonical Datom Key Encoding — RootSet manifest structure),
+INV-FERR-006 (Snapshot Isolation), C2 (Identity by Content)
 **Verification**: `V:PROP`, `V:LEAN`
 **Stage**: 1
 
