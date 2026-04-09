@@ -232,6 +232,22 @@ A novice system has low metabolic efficiency: it wastes dream cycles on low-valu
 
 The metabolic efficiency is itself stored as datoms (dream cycle effectiveness scores in Document 4, §7.5) and enters the flywheel. The system's metabolism improves over time.
 
+### 6.4 The Critical Attractor
+
+The dream cycle's job is not to minimize entropy in the monotone sense — it is to hold the system at a *critical point* between dogmatism and instability.
+
+**Subcritical drift** is the failure mode where retraction rates fall too low, cascades never propagate beyond their immediate neighborhood, and beliefs calcify. The system becomes internally consistent but closed to revision. It scores well on contradiction count and average taint but low on prediction accuracy — it has stopped learning because it has stopped being surprised. In information-theoretic terms, the system is *over-confident*: its model of the world is too tight to admit new data.
+
+**Supercritical drift** is the opposite failure: retractions propagate so widely that every perturbation re-derives large fractions of the store. The system is maximally plastic but never accumulates structure. It scores low on contradiction count (because it never stabilizes long enough to contradict itself) and low on ground truth density (because everything is tentative). In information-theoretic terms, the system is *under-confident*: its model never commits enough to be useful.
+
+**Criticality** is the narrow ridge between these. At the critical point, the cascade size distribution follows a power law: most retractions affect a few derivations, occasional retractions affect many, rare retractions restructure large regions. The distribution has no characteristic scale — it is scale-invariant. This is not a property the system can be tuned into by setting a dial; it is an *attractor* that emerges when the feedback loops (retraction pressure, cascade absorption rate, rule evolution) balance each other.
+
+The concrete diagnostic is the power-law exponent of the cascade size distribution. In systems governed by self-organized criticality, cascade sizes obey `P(s ≥ S) ∝ S^(-τ)` with τ in a narrow universal range (τ ≈ 1.5 for the BTW sandpile, τ ≈ 1 for many biological networks). Deviation from this range is the drift signal. An exponent steeper than critical (large τ) indicates subcritical drift — the tail is too thin, large cascades are rare. An exponent flatter than critical (small τ) indicates supercritical drift — the tail is too fat, large cascades dominate.
+
+A second empirical signature is the temporal *shape* of dream cycle activity. Critical systems show **1/f power spectral density** in their activity time series — long quiet periods punctuated by bursts, with no characteristic timescale. A flat spectrum (white noise) indicates uncorrelated activity and subcritical drift. A steep spectrum (Brownian) indicates avalanche dominance and supercritical drift. 1/f is the signature of criticality and is measurable without any new engine primitive — just record the cascade processing rate over time and compute its PSD.
+
+The reframing this gives us: the dream cycle's Phases 1–4 (§6.2) should not be understood as "make entropy go down." They should be understood as "hold the critical exponent in the narrow range where the system is maximally informative and maximally adaptive at the same time." The §6.3 metabolic efficiency framing is corrected accordingly: efficiency is not measured by how much cascade cost the system avoids, it is measured by how stably the system maintains criticality under varying loads. A system that *minimizes* cascades is failing subcritically; a healthy system *expects* rare large cascades and budgets for them. The empirical test of all of this lives in `bd-imwb` (Cascade Debt Simulation) — the simulator already generates the time series this subsection requires.
+
 ---
 
 ## Part VII: Measuring Epistemic Entropy in Practice

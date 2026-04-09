@@ -316,6 +316,20 @@ Phase 4 (Projection eval): Optimize the value function itself
 
 Each phase targets a different dimension. Together, they perform gradient ascent on the composite value landscape.
 
+### 5.4 Value-from-Cascade (A Posteriori Grounding)
+
+The four a priori dimensions (§5.1) are *predictors* of a single a posteriori ground truth: the expected size of the truth-maintenance cascade that a datom's retraction would trigger under the current rule set (D20).
+
+```
+V_post(d) := E[ |cascade(retract(d))| | current rule set ]
+```
+
+Structural centrality, information gain, derivation depth, and access frequency are all estimators of this quantity — each captures a different slice of "how much would the system move if this datom went away." A high-centrality datom in a dense region with many downstream derivations is predicted to trigger a large cascade; a leaf datom with no dependents is predicted to trigger none. `V_post` is the thing the four dimensions are *trying to predict*, and the four-dimensional function in §5.1 is validated by how well it tracks observed cascade sizes over time.
+
+This reframes the engineering picture. The four a priori metrics are cheap to compute (available at write time). `V_post` is expensive to compute (requires simulating a retraction) but is the ground truth. The right architecture is: compute the cheap metrics always, compute `V_post` occasionally during dream cycles, and use the `V_post` measurements to *refit* the weights in the composite function over time. Value assessment becomes a supervised learning problem where the labels come from actual cascade observations.
+
+`V_post` is directly measurable in `bd-imwb`'s cascade debt simulator without any new infrastructure: the simulator already generates retraction events and records the resulting cascade sizes. Fitting the per-datom distribution of `E[|cascade|]` against each datom's a priori dimension vector gives the first validation of whether the §5.1 composite is predictive or only plausible. If the a priori metrics correlate poorly with `V_post`, §5.1 is wrong as stated and needs revision before any meta-value datoms get stored in production.
+
 ---
 
 ## Part VI: Value Is Contextual

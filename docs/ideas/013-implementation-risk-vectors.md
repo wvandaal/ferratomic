@@ -342,6 +342,8 @@ Truth maintenance defers cascade processing to the dream cycle. If the rate of r
 
 **Mitigation**: Backpressure on retractions. Priority-based cascade processing (high-value derivations cascade first, low-value ones can be stale longer). Explicit "stale tolerance" parameter for query consumers (some queries accept stale-by-N-seconds results, others require fresh).
 
+**Important distinction**: Backpressure targets *sustained* cascade debt, not individual large cascades. Under the criticality lens (doc 010 §6.4), rare large cascades are not pathological — they are the expected tail of a power-law distribution and carry most of the information-theoretic value per event. The health metric is the *shape* of the cascade size distribution (power-law exponent τ in a narrow range), not the maximum cascade size. A system that throttles individual large cascades is failing subcritically; a system that lets sustained debt grow unboundedly is failing supercritically. Backpressure must distinguish the two.
+
 **Status**: NEEDS DESIGN. The cascade debt problem has not been formally identified in the spec; the backpressure mechanism does not exist.
 
 ### 6.5 Federation Mesh Size
@@ -582,7 +584,7 @@ Total budget: 9 days of focused work, derisks 4 phases of speculative commitment
 
 **Goal**: Determine how truth maintenance behaves under sustained retraction load.
 
-**Hypothesis**: With incremental cascade processing and value-weighted prioritization, the cascade debt stabilizes (does not grow without bound) at retraction rates up to 100/sec.
+**Hypothesis**: With incremental cascade processing and value-weighted prioritization, the cascade debt stabilizes (does not grow without bound) at retraction rates up to 100/sec. Additionally, the per-retraction cascade size distribution is expected to be power-law in form (`P(s ≥ S) ∝ S^(-τ)`, Gutenberg-Richter equivalent) with τ in a narrow range; a τ far from that range is a diagnostic of subcritical drift (too steep, dogmatic) or supercritical drift (too shallow, runaway). See doc 010 §6.4 for the criticality framing.
 
 **Methodology**:
 1. Build a mock dependency graph with 1M derivations.
@@ -590,13 +592,16 @@ Total budget: 9 days of focused work, derisks 4 phases of speculative commitment
 3. Measure: cascade processing rate, cascade debt over time, query result staleness.
 4. Test with and without value-weighted prioritization.
 5. Identify the breaking point where debt grows unboundedly.
+6. Fit a power-law exponent τ to the cascade size histogram using Clauset-Shalizi-Newman maximum-likelihood methodology. Compare against lognormal and exponential-with-cutoff alternatives (report Kolmogorov-Smirnov distances).
+7. Compute the 1/f power spectral density of the cascade processing rate time series.
 
 **Success criteria**:
 - At 100 retractions/sec: cascade debt stays bounded (oscillates around steady state)
 - Query result staleness for high-value derivations: <1 second
 - Query result staleness for low-value derivations: <60 seconds
+- Cascade size distribution is distinguishable from lognormal and exponential-with-cutoff at p < 0.05 (i.e., power-law is the best-supported model)
 
-**Failure response**: If cascade debt grows at 100/sec, we need backpressure (reject retractions when debt is high). If staleness exceeds tolerances, we need a different cascade strategy entirely.
+**Failure response**: If cascade debt grows at 100/sec, we need backpressure (reject retractions when debt is high). If staleness exceeds tolerances, we need a different cascade strategy entirely. If the cascade size distribution is NOT power-law, the criticality framing in doc 010 §6.4 is falsified at this scale — update doc 010 accordingly. Rare multi-million-derivation cascades are NOT failures as long as the distribution stays power-law; only thickening of the tail into supercritical runaway counts as a failure.
 
 **Time budget**: 1 day.
 
