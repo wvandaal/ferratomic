@@ -123,15 +123,19 @@ After Pattern H authoring, run lifecycle/17 Phases 1-5 on `spec/06` INV-FERR-045
 - ✅ Git committed and pushed
 - ✅ Session 024 handoff written with pickup point at "Spec audit Section 8 (spec/09 perf architecture, INV-FERR-070..085) + Pattern F perf-side resolution"
 
-### Deferred from session 022 (DO NOT attempt to fold into session 023)
+### Deferred from session 022
 
-These items are CRITICAL/significant but should NOT be added to session 023's scope. File as **session 022.5** (a focused mini-session) OR session 026 verification work:
+**Session 022.5 RESOLVED both deferred CRITICAL findings** (commit `40a1fc4`, immediately after session 022 main pass). FINDING-219 (Transport scope leak) and FINDING-206 + 207 (INV-FERR-029 spec amendment) are no longer deferred — both are EXECUTED. See audit doc §6.4.5 + §6.4.6 for full execution details.
 
-| Finding | What | Why deferred from 023 |
-|---------|------|------------------------|
-| **FINDING-219** | INV-FERR-025b Level 2 contains Transport trait scope leak (lines 6495-6552 belong to INV-FERR-038) | Session 023 is already substantial (Pattern H authoring 90-135 min). Adding a 30-45 min relocation pushes 023 over budget. |
-| **FINDING-206 + 207** | INV-FERR-029 in spec/03 needs Level 0 tie-breaking amendment + Level 2 enumerating all 3 paths (the bd-l64y semantic gap) | This is a SEMANTIC DECISION lock — needs explicit user authorization on the canonical tie-breaking rule. Should go through the locked-decision process like §18.2. |
-| **Pattern I sweep** | Search labeled phase-4a/4b cleanroom-finding beads for additional Pattern I victims | Filed as session 026 follow-up per §5.6.3 |
+After session 022.5, ALL 5 §23.8.5 CRITICAL findings are RESOLVED ✅. Session 023 starts from a clean CRITICAL slate at the spec layer.
+
+Remaining deferred items:
+
+| Item | What | Why deferred |
+|------|------|--------------|
+| **Pattern I sweep** | Search labeled phase-4a/4b cleanroom-finding beads for additional Pattern I victims (beyond bd-fcta + bd-8rvz already confirmed) | Filed as session 026 follow-up per §5.6.3 |
+| **FINDING-200** | spec/05 §23.8.5 section number collision (line 2092 vs 4951) | Recorded; requires §23.8.x renumbering decision (low priority) |
+| **Lean tautology/sorry findings** (210, 221, 223, 224) | 4 INV-FERR Lean theorems that are tautologies or have sorry without tracked bead | Defer to dedicated Lean proof work session |
 
 Also deferred to session 025 Phase 3 reconciliation (per §6.4.2):
 - FINDING-204, 205 (Pattern D bead citation fixes)
