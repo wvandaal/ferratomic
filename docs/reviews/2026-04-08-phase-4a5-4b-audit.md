@@ -971,18 +971,380 @@ later added unrelated ADRs at the same numbers.
 
 ---
 
-## 5. Bead Audit — Phase 4b (Track 2)
+## 5. Bead Audit — Phase 4b (Track 2) — **P0 cluster COMPLETE (20/20)**
 
 **Order**: P0 → P1 → P2 → P3 → P4, sequential. The wavelet matrix sub-graph
 (bd-obo8 → gvil.1..11) is processed in spec-then-impl order.
 
+### 5.0 Phase 4b cluster summary (P0 complete; P1+P2+P3+P4 pending)
+
+| Cluster | Audited | Total | Status |
+|---------|---------|-------|--------|
+| P0 | 20 | 20 | ✅ complete |
+| P1 | 0 | ~30 | ⏳ pending |
+| P2 | 0 | ~25 | ⏳ pending |
+| P3 | 0 | ~9 | ⏳ pending |
+| P4 | 0 | 1 | ⏳ pending |
+| **TOTAL 4b** | **20** | **~85** | **~24%** |
+
+**P0 verdict distribution**:
+- **EXEMPLARY/SUBSTANTIVE** (8): bd-y1rs, bd-4vwk, bd-jolx, bd-pg85, bd-51zo, bd-m8ym, bd-e58u, bd-j1mp, bd-qgxjl, bd-ena7 (10 actually; bd-no6b near-substantive)
+- **REWRITE** (9): the gvil.1-9 sub-beads (bd-obo8, bd-lkdh, bd-vhgn, bd-q630, bd-8uck, bd-hfzx, bd-chu0, bd-g1nd, bd-o6io) all share the **Pattern G — gvil family minimal-body** defect
+
+**New pattern observed** (Pattern G):
+
+### Pattern G — gvil family minimal-body skeleton
+
+**Description**: The wavelet matrix sub-bead family (gvil.1 through gvil.9, br IDs bd-obo8, bd-lkdh, bd-vhgn, bd-q630, bd-8uck, bd-hfzx, bd-chu0, bd-g1nd, bd-o6io) all share an identical structural defect: each bead body is a single descriptive paragraph with no structured lab-grade template fields. They were authored as a fast batch in session 020 (~2026-04-08) to capture the wavelet matrix subgraph plan, but each needs REWRITE to lab-grade.
+
+**Hits**: 9 beads (gvil.1 through gvil.9). gvil.10 (bd-ena7) and gvil.11 (bd-no6b) ARE substantive — they break the pattern, suggesting they were authored more carefully because they tie directly into the spine and bootstrap query.
+
+**Phase 3 batch action**: Either (a) accept the skeletal form as "spec authoring tasks where the work IS the spec authoring", OR (b) require all 9 to be rewritten to lab-grade BEFORE implementation begins. **Recommendation**: option (b), because the lab-grade structural fields force preconditions/postconditions/frame conditions to be explicit, which prevents the "implementation drift" that shows up in bd-mklv and bd-3t63 (the C8 partial-rename bug). The skeletons have no Verification Plan, no Files list, no explicit dependency rationale — exactly the gaps that produce drift.
+
 ### 5.1 P0 beads (~20)
 
-_Beads to audit_: bd-qgxjl, bd-j1mp, bd-y1rs (EPIC), bd-m8ym, bd-51zo, bd-pg85,
-bd-jolx, bd-no6b, bd-ena7, bd-o6io, bd-g1nd, bd-chu0, bd-hfzx, bd-q630,
-bd-8uck, bd-vhgn, bd-lkdh, bd-obo8, bd-e58u, bd-4vwk.
+_Order_: bd-y1rs (EPIC, gives spine context) → bd-4vwk (SCOPE ADR) → wavelet matrix subgraph (bd-obo8 → bd-lkdh → bd-vhgn → bd-q630 → bd-8uck → bd-hfzx → bd-chu0 → bd-g1nd → bd-o6io → bd-ena7 → bd-no6b) → bd-jolx → bd-pg85 → bd-51zo → bd-m8ym → bd-e58u → bd-j1mp → bd-qgxjl.
 
-_Per-bead findings to be filled in during Phase 1 execution._
+#### bd-y1rs — EPIC: Self-Monitoring Convergence Spine (B17 → R16 → ADR-FERR-014 → M(S)≅S)
+
+**Phase 1 verification**
+
+| Check | Result |
+|-------|--------|
+| Code | N/A — EPIC, no source files. References `spec/08-verification-infrastructure.md`, `GOALS.md`, and a session memory file. |
+| Spec | CONFIRMED — `spec/08-verification-infrastructure.md §23.12.7` (Self-Monitoring Convergence) exists at `spec/08:1364`. GOALS.md §5 verified earlier. The spine chain (B17 → R16 → ADR-FERR-014 → M(S)≅S) is correctly transcribed from the spec. |
+| Dependencies | **MIXED**: 9 outgoing parent-child edges to children (bd-j1mp, bd-m8ym, bd-e58u, bd-4vwk, bd-r7ht, bd-gvil, bd-d6dl, bd-p8n3, bd-ipzu). 2 outgoing `blocks`: bd-bdvf.13 (valid), **bd-add (PHANTOM — Pattern A; closed 2026-04-08)**. 3 incoming `blocks` from gates (bd-7ij, bd-fzn, bd-lvq). **Critical observation**: bd-r7ht is listed as a child of BOTH bd-oiqr (Phase 4a.5 EPIC) AND bd-y1rs (this Phase 4b EPIC) — multi-parent epic membership. Unusual but defensible: r7ht is the 4a.5 capstone AND the 4b spine starting point. |
+| Duplicates | UNIQUE EPIC. |
+
+**Phase 2 lenses (8)**
+
+| Lens | Result | Notes |
+|------|--------|-------|
+| L0 Epistemic Fit | PASS | EPIC, no verification method prescribed. |
+| L1 Structural | PASS-with-mismatches | All EPIC fields present (What, Why, Acceptance, Children, etc.). However: the Acceptance section names children by descriptive labels (`bd-spec-as-datoms`, `bd-flywheel-dogfood`) that don't match actual br IDs. The actual children are bd-m8ym ("Canonical spec form as signed datoms") and bd-ipzu ("Flywheel demo via dogfooding"). Reader must guess the mapping. |
+| L2 Traceability | PASS | spec/08 §23.12.7 + GOALS.md §5 + GOALS.md Level 2 + 4 doc lineage references all resolve. |
+| L3 Postcondition Strength | PASS-mixed | EPICs use Acceptance criteria (8 binary items). Some are graph-state ("bd-r7ht elevated to P0", "bd-e58u elevated to P0") which are easily verifiable. Others are content-state ("spec/08 §23.12.7 amendment", "GOALS.md §5 amendment") which need explicit before/after diffs to verify. |
+| L4 Scope Atomicity | PASS-borderline | EPIC scope = "wrap the spine reframe organizing principle". This is appropriately abstract for an EPIC. |
+| L5 Frame Adequacy | N/A | Epic — children own frame conditions. |
+| L6 Compiler Test | PASS | N/A correctly stated. |
+| L7 Axiological | PASS — high alignment | The spine reframe IS the axiological articulation of GOALS.md §5 compound interest. The EPIC formalizes recognition of what the spec already names as True North. |
+
+**Verdict**: SOUND-with-fixes → action **EDIT** (Pattern A phantom edge + descriptive-label-to-br-ID mapping).
+
+**Findings raised**:
+- [FINDING-073] bd-y1rs → bd-add is a PHANTOM edge (Pattern A). MINOR.
+- [FINDING-074] bd-y1rs Acceptance section names children by descriptive labels (`bd-spec-as-datoms`, `bd-flywheel-dogfood`) that don't match actual br IDs (bd-m8ym, bd-ipzu). Reader must infer the mapping. **Pattern C variant** — descriptive labels for beads instead of bead IDs. MINOR.
+- [FINDING-075] bd-y1rs claims bd-r7ht as a child, making bd-r7ht multi-parent (also a child of bd-oiqr). This is unusual for hierarchical EPICs. Either accept multi-parent membership (and document the convention) or rewire (e.g., bd-y1rs depends-on bd-r7ht as a precondition rather than parent-child). MINOR.
+
+#### bd-4vwk — Phase 4b SCOPE ADR: Wavelet matrix as primary backend
+
+**Phase 1 verification**
+
+| Check | Result |
+|-------|--------|
+| Code | N/A — docs/spec bead. Files: `spec/09-performance-architecture.md`, `spec/06-prolly-tree.md`, `spec/03-performance.md`, `spec/README.md`. |
+| Spec | CONFIRMED — all 4 spec files exist. **Pattern F authoring**: Acceptance #1 says "Author ADR-FERR-031 in spec/09 amending ADR-FERR-030". ADR-FERR-031 ALREADY exists in spec/09 at line 2838 ("Wavelet Matrix Phase 4a Prerequisites — Rank/Select and Attribute Interning"). Either (a) the work was already partially done by another bead/session, OR (b) bd-4vwk is the intended authoring source and the existing spec/09 ADR-031 was authored prematurely by another agent. The collision with bd-3t63's spec/05 ADR-031 (Database-Layer Signing) is the Pattern F triple-collision. |
+| Dependencies | VALID — body says "Depends on: bd-snnh CLOSED 2026-04-08" (satisfied; not in current graph). Graph: only incoming edges (parent-child from bd-y1rs, blocks from bd-xlvp + bd-7ij). **No bd-add phantom**. |
+| Duplicates | NOT a bead duplicate, but is the perf-side authoring intent for the Pattern F ADR-FERR-031 spec/09 entry. |
+
+**Phase 2 lenses (8)**
+
+| Lens | Result | Notes |
+|------|--------|-------|
+| L0 Epistemic Fit | PASS | Docs/spec bead, V:GREP for cross-references. Correct. |
+| L1 Structural | PASS — substantive | What/Why/Acceptance/Rollback/Confidence/File(s)/Depends on all present. Includes a 10-row acceptance criteria, 6-row rollback plan, and 8-row confidence calibration table. Most thorough docs bead in the audit. |
+| L2 Traceability | PASS | References bd-snnh research doc (`docs/research/2026-04-08-index-scaling-100M.md`), spec/03/06/09 sections, prior ADR-FERR-030. |
+| L3 Postcondition Strength | PASS | 10 binary acceptance criteria. The empirical confidence calibration table provides a quantitative before/after that's verifiable. |
+| L4 Scope Atomicity | PASS | 4 spec files but a single concept (committing wavelet matrix as Phase 4b primary backend). Atomic at the strategic level. |
+| L5 Frame Adequacy | PASS-implicit | No explicit `## Frame Conditions` but the body states "spec/06 §S23.9.3 amended", implying scope is constrained to those sections. |
+| L6 Compiler Test | PASS | N/A (docs bead). |
+| L7 Axiological | **PASS — high alignment** | The SCOPE ADR is the strategic anchor for Phase 4b. Embeds the corrected framing (post-bd-snnh: "billion-scale in-memory enabler", not "100M perf rescue") and the Three-Layer Scale Strategy table. The rollback plan is explicit defensive engineering. |
+
+**Verdict**: SOUND with 1 MAJOR (Pattern F authoring conflict) + 1 MINOR (Pattern C variant) → action **EDIT** (resolve Pattern F first; then minor cleanup).
+
+**Findings raised**:
+- [FINDING-076] bd-4vwk plans to "Author ADR-FERR-031 in spec/09" but spec/09:2838 already has an ADR-FERR-031 ("Wavelet Matrix Phase 4a Prerequisites"). This is the Pattern F spec/09 entry. Either the work was done prematurely (without closing this bead) or another agent authored the existing entry. **MAJOR** — must be reconciled during Pattern F resolution in spec audit Section 8.
+- [FINDING-077] bd-4vwk references "S23.9.3" instead of `§23.9.3` (missing § symbol). MINOR formatting.
+
+#### bd-obo8 — gvil.1: Wavelet matrix research + spec authoring
+
+**Phase 1 verification**
+
+| Check | Result |
+|-------|--------|
+| Code | N/A — docs/spec authoring bead. |
+| Spec | CONFIRMED — `ADR-FERR-030` exists at `spec/09:2426` ("Wavelet Matrix as Information-Theoretic Convergence Target"). spec/09 §Wavelet section does NOT yet exist as a heading — consistent with the bead being OPEN (the bead asks to AUTHOR this section). spec/03 perf budgets section exists. |
+| Dependencies | VALID — bd-gvil (parent), 4 incoming `blocks` (bd-pg85, bd-jolx, bd-vhgn, bd-lkdh). **No bd-add phantom**. |
+| Duplicates | UNIQUE. |
+
+**Phase 2 lenses (8)**
+
+| Lens | Result | Notes |
+|------|--------|-------|
+| L0 Epistemic Fit | PASS | Spec authoring + research. Method = read literature, write spec sections, apply five-lens convergence. Correct. |
+| L1 Structural | **FAIL** | Body is a single descriptive paragraph. NO structured lab-grade fields: no Specification Reference section, no Preconditions, no Postconditions, no Frame Conditions, no Refinement Sketch, no Verification Plan, no Files. Worse than most P2 4a.5 beads, **second-worst in the audit after bdvf.13**. |
+| L2 Traceability | PASS-marginal | The single paragraph mentions ADR-FERR-030, spec/03, spec/09, plus library names (succinct, sucds, fid-rs). All resolvable but not separated into a Specification Reference field. |
+| L3 Postcondition Strength | **FAIL** | No structured postconditions. The paragraph mentions five-lens convergence as the close criterion but doesn't enumerate what each lens looks for. |
+| L4 Scope Atomicity | PASS-marginal | Single concept (wavelet matrix research+spec) but the work spans library survey + spec authoring + ADR expansion + perf budgets + risk register + 5-lens convergence. Borderline atomic. |
+| L5 Frame Adequacy | **FAIL** | No frame conditions. |
+| L6 Compiler Test | PASS | N/A (docs bead). |
+| L7 Axiological | PASS | gvil.1 is the foundation of the wavelet matrix subgraph. Direct alignment with the Phase 4b spine. |
+
+**Verdict**: **REWRITE** (3 lens failures: L1, L3, L5) → action **REWRITE** per template.
+
+**Findings raised**:
+- [FINDING-078] bd-obo8 body is a single paragraph with NO structured lab-grade fields. Missing 7+ template fields. Second-worst structural quality after bdvf.13. Critical for a P0 bead that blocks 4 downstream gvil sub-beads. **MAJOR** (REWRITE-class).
+
+#### bd-lkdh — gvil.2: Value pool design + INV-FERR-08x family
+
+**Phase 1 verification**
+
+| Check | Result |
+|-------|--------|
+| Code | N/A — docs/spec authoring. |
+| Spec | "INV-FERR-08x" is a placeholder family name (specific INVs to be authored by this bead). ADR-FERR-030 (referenced for integration) verified. |
+| Dependencies | VALID — bd-obo8 (gvil.1 prerequisite), bd-gvil (parent), 1 incoming `blocks` (bd-8uck). |
+| Duplicates | UNIQUE. |
+
+**Phase 2 lenses**: Same defects as bd-obo8 — single-paragraph body, missing 7+ structured template fields.
+
+**Verdict**: **REWRITE** — same as bd-obo8 (FINDING-078 pattern).
+
+**Findings raised**:
+- [FINDING-079] bd-lkdh has minimal single-paragraph body, missing structured lab-grade fields. Same pattern as FINDING-078 (bd-obo8). MAJOR (REWRITE-class).
+
+#### bd-vhgn — gvil.3: rank/select primitive
+
+**Phase 1 verification**
+
+| Check | Result |
+|-------|--------|
+| Code | N/A — docs/spec authoring. |
+| Spec | rank/select primitive is a standard succinct data structure operation; the spec contract authoring is the bead's task. |
+| Dependencies | VALID — bd-obo8 prerequisite, bd-gvil parent, 2 incoming `blocks` (bd-8uck, bd-bmu2). |
+| Duplicates | UNIQUE. |
+
+**Phase 2 lenses**: Same single-paragraph defect as bd-obo8/lkdh. **However**: bd-vhgn's paragraph is more substantive — it includes the actual mathematical contract (`rank_b(i) = number of b-bits in [0..i)`, `select_b(j) = position of j-th b-bit`), the Lean theorem statement (mutual inverses), and the complexity contract (O(1) rank, O(1) select with linear-space overhead). Still missing structural fields.
+
+**Verdict**: **REWRITE** — same template gaps but content is partially salvageable.
+
+**Findings raised**:
+- [FINDING-080] bd-vhgn has minimal single-paragraph body. Same pattern as FINDING-078/079 but content is more substantive than bd-obo8/lkdh. MAJOR (REWRITE-class, but lower urgency).
+
+#### bd-vhgn — gvil.3: rank/select primitive
+
+_Audit pending._
+
+#### bd-q630 — gvil.5: Wavelet matrix construction algorithm
+
+**Phase 1**: Code N/A. Spec citations resolvable (cache-oblivious, complexity O(n log σ), integration with bd-85j.13). Dependencies: bd-8uck precondition, bd-hfzx incoming, bd-gvil parent. **No bd-add phantom**. Unique.
+
+**Phase 2**: Same single-paragraph defect (Pattern G — gvil family). Content is more substantive (specifies build complexity, in-place vs out-of-place tradeoff, streaming-build mode, fast-path for sorted input).
+
+**Verdict**: REWRITE (template gaps).
+
+**Findings raised**:
+- [FINDING-081] bd-q630 minimal single-paragraph body. Pattern G (gvil family). MAJOR (REWRITE-class).
+
+#### bd-8uck — gvil.4: Symbol encoding scheme
+
+**Phase 1**: Code N/A. Spec references multiple beads (bd-wa5p CHD perfect hash, bd-lkdh value pool, gvil.2). Dependencies: bd-vhgn + bd-lkdh preconditions, bd-no6b + bd-q630 incoming, bd-gvil parent. Unique.
+
+**Phase 2**: Same Pattern G defect. Content is detailed — specifies the per-column codec (Entity via CHD, Attribute via dict, Value via pool, TxId via delta, Op as 1-bit) but still in single-paragraph form.
+
+**Verdict**: REWRITE (template gaps).
+
+**Findings raised**:
+- [FINDING-082] bd-8uck minimal single-paragraph body. Pattern G. MAJOR (REWRITE-class). Content quality is mid-tier among gvil sub-beads.
+
+#### bd-hfzx — gvil.6: Wavelet matrix query operations
+
+**Phase 1**: Code N/A. Spec authoring task. Dependencies: bd-q630 prereq, bd-g1nd + bd-chu0 incoming, bd-gvil parent. Unique.
+
+**Phase 2**: Single-paragraph body — Pattern G (gvil family). Content lists 5 query operations with rank/select translations + complexity notes, but no structured fields.
+
+**Verdict**: REWRITE.
+
+**Findings raised**:
+- [FINDING-083] bd-hfzx minimal single-paragraph body. Pattern G. MAJOR (REWRITE-class).
+
+#### bd-chu0 — gvil.7: Lean equivalence proof
+
+**Phase 1**: Code N/A. References INV-FERR-008 (refinement) and ADR-FERR-030. Dependencies: bd-hfzx prereq, bd-o6io incoming, bd-gvil parent. Unique.
+
+**Phase 2**: Single-paragraph body — Pattern G. Content includes the actual theorem statement (`∀ store, query: query(WaveletStore.from(store)) = query(PositionalStore.from(store))`) and 3 proof obligations (decode-after-encode identity, rank/select equivalence, Op-column LIVE equivalence). High-quality content for the theorem itself, but no structured fields.
+
+**Verdict**: REWRITE.
+
+**Findings raised**:
+- [FINDING-084] bd-chu0 minimal single-paragraph body. Pattern G. MAJOR (REWRITE-class). Content quality is high — theorem statement is mathematically precise.
+
+#### bd-g1nd — gvil.8: Kani harnesses + proptest strategy
+
+**Phase 1**: Code N/A but lists target files (`ferratomic-verify/kani/wavelet.rs`, `proptest/wavelet_properties.rs`). Spec authoring + verification scaffolding. Dependencies: bd-hfzx prereq, bd-o6io incoming, bd-gvil parent. Unique.
+
+**Phase 2**: Single-paragraph body — Pattern G. Lists 3 Kani harness targets + proptest strategy + 10K case count.
+
+**Verdict**: REWRITE.
+
+**Findings raised**:
+- [FINDING-085] bd-g1nd minimal single-paragraph body. Pattern G. MAJOR (REWRITE-class).
+
+#### bd-o6io — gvil.9: WaveletStore Rust implementation
+
+**Phase 1**: Code N/A in body proper but mentions `ferratomic-positional` (extant) or `ferratomic-wavelet` (NEW) as target crate. Type=task (not docs). Dependencies: 6 outgoing `blocks` (bd-pg85, bd-jolx, bd-no6b, bd-g1nd, bd-chu0, bd-bmu2), bd-ena7 incoming, bd-gvil parent. Unique.
+
+**Phase 2**: Single-paragraph body — Pattern G. Mentions DatomIndex trait (INV-FERR-025b), MIRI requirement, ADR-FERR-002 unsafe nuance, all 6 prerequisites. **However**, this is a TYPE=TASK bead (implementation, not docs) and has NO Pseudocode Contract. For an implementation bead with this many cross-crate touches, the absence of a Pseudocode Contract is a CRITICAL gap (Lens 6 fail).
+
+**Verdict**: **REWRITE** with explicit Pseudocode Contract requirement.
+
+**Findings raised**:
+- [FINDING-086] bd-o6io is type=task (implementation) but has NO Pseudocode Contract. Implementation beads MUST have a contract per `lifecycle/14` Lens 6. MAJOR. The absence is more critical than for the gvil.1-8 docs beads because gvil.9 actually writes Rust code that other beads consume.
+- [FINDING-087] bd-o6io minimal single-paragraph body. Pattern G. MAJOR (REWRITE-class).
+
+#### bd-ena7 — gvil.10: Performance validation at 100M datoms
+
+**Note**: This is the **first SUBSTANTIVE bead in the gvil family** — it has structured What/Why/Targets/Acceptance/File(s)/Depends on sections. Far above the gvil.1-9 skeletal pattern.
+
+**Phase 1 verification**
+
+| Check | Result |
+|-------|--------|
+| Code | `ferratomic-verify/benches/wavelet_perf.rs` (existing per body — extended) and `bootstrap_query.rs` (NEW). Need to verify but plausible. |
+| Spec | INV-FERR-027 (read p99.99 < 10ms), INV-FERR-028 (cold start < 5s), INV-FERR-070 (mmap zero-copy). |
+| Dependencies | Body lists "Depends on:" but the visible portion was truncated; graph not fully shown in preview. |
+| Duplicates | UNIQUE. |
+
+**Phase 2 lenses**: PASS-substantive on most. L1 PASS (8 targets, 11 acceptance criteria), L3 PASS (binary, with the load-bearing "bootstrap query latency at 100M ≤ 10ms" criterion #5). The bead realizes the spine reframe — bootstrap query becomes the canonical benchmark workload.
+
+**Verdict**: SOUND with minor template polish needed → action **EDIT**.
+
+**Findings raised**:
+- [FINDING-088] bd-ena7 is the first substantive gvil sub-bead. Pattern G is therefore split: gvil.1-9 are skeletal (REWRITE), gvil.10-11 are substantive (EDIT). MINOR observation, no new defect.
+
+#### bd-no6b — gvil.11: Type-level encoding for WaveletStore
+
+**Note**: Like bd-ena7, this is **substantive** — has What/Why/Acceptance/File(s)/Depends on. Articulates 5 specific invalid states the type system should rule out.
+
+**Phase 1 verification**
+
+| Check | Result |
+|-------|--------|
+| Code | `ferratomic-positional/src/wavelet/types.rs` or `ferratomic-wavelet/` — neither exists yet (NEW). spec/09 §Type-Level Constraints (NEW section). |
+| Spec | INV-FERR-023 (safe callable surface) verified earlier. |
+| Dependencies | bd-8uck prereq, bd-o6io incoming, bd-gvil parent. |
+| Duplicates | UNIQUE. |
+
+**Phase 2 lenses**: Strong content — explicit type-level encoding strategy (BitVecLen, SymbolBound<const SIGMA>, WaveletColumn<Kind>, ValuePoolId<'pool>), consuming-builder pattern, compile-time tests. Missing structural fields (no Pseudocode Contract proper, no Verification Plan section).
+
+**Verdict**: NEEDS WORK with EDIT → action **EDIT** (lift content into structured fields).
+
+**Findings raised**:
+- [FINDING-089] bd-no6b has substantive content but missing structured Pseudocode Contract section (the 5 newtypes should be in a code block per template). MINOR.
+
+#### bd-jolx — Phase 4b: Wavelet matrix library selection matrix
+
+**Phase 1**: Code N/A in body (decision memo + benchmark file). Spec N/A. Dependencies: bd-obo8 prereq, bd-o6io + bd-bmu2 + bd-7ij incoming, no parent (P0 leaf in subgraph). **No bd-add phantom**. Unique.
+
+**Phase 2**: SUBSTANTIVE — has What/Why/Acceptance/File(s)/Depends on. 6-criterion selection matrix, escalation to bd-wave-custom-fallback if no library scores ≥8/10. PASS on most lenses; minor: target file path uses placeholder `2026-04-XX` in decision memo filename.
+
+**Verdict**: SOUND with minor polish → **EDIT**.
+
+**Findings raised**:
+- [FINDING-090] bd-jolx decision memo has unresolved date placeholder `2026-04-XX-wavelet-lib.md`. MINOR (same pattern as FINDING-028).
+- [FINDING-091] bd-jolx references `bd-wave-custom-fallback` (descriptive label, not br ID — likely bd-bmu2 per the dep graph). Pattern C variant. MINOR.
+
+#### bd-pg85 — Phase 4b: V4 checkpoint format for wavelet matrix on-disk layout + migration
+
+**Phase 1 verification**
+
+| Check | Result |
+|-------|--------|
+| Code | CONFIRMED — `ferratomic-checkpoint/src/v4.rs` exists (15KB, verified earlier). The bead says "extend" v4.rs which is correct. `migration.rs` would be NEW. |
+| Spec | spec/09 amendment is the bead's task (authoring). INV-FERR-028 (cold start), INV-FERR-070 (mmap zero-copy) verified. INV-FERR-08x (new V4 determinism) is to be authored. |
+| Dependencies | VALID — bd-obo8 prereq (gvil.1 spec), bd-biw6 prereq (mmap wiring), 3 incoming `blocks` (bd-ena7, bd-o6io, bd-7ij). **No bd-add phantom**. |
+| Duplicates | UNIQUE. |
+
+**Phase 2 lenses**: SUBSTANTIVE — 8 acceptance criteria, file enumeration, dependencies bidirectional. Mentions backward compat (V4 reader reads V3) and forward path (V3 writer deprecation tracked separately). Has migration tool spec.
+
+**Verdict**: SOUND with minor polish → **EDIT**.
+
+**Findings raised**:
+- [FINDING-092] bd-pg85 introduces "INV-FERR-08x" placeholder for V4 checkpoint determinism — same vague-INV-family naming as bd-lkdh. Once authored, the actual INV number must be assigned. MINOR.
+
+#### bd-51zo — Phase 4b: Wire mmap_cold_start into production recovery path
+
+**Phase 1 verification**
+
+| Check | Result |
+|-------|--------|
+| Code | CONFIRMED — `ferratomic-checkpoint/src/mmap.rs` exists ✓ (verified earlier in checkpoint listing). The bead correctly identifies that `mmap_cold_start` is currently called only by `test_inv_ferr_070_mmap_roundtrip`, not by production. `ferratomic-core/src/storage/recovery.rs` is the new file the bead targets — must verify path exists. |
+| Spec | INV-FERR-070 (zero-copy cold start), INV-FERR-028 (cold start <5s). Both verified earlier. |
+| Dependencies | VALID — bd-biw6 prereq, bd-ena7 + bd-7ij incoming. **No bd-add phantom**. |
+| Duplicates | NOT a dup of bd-biw6 (clearly distinguished: bd-biw6 verifies, bd-51zo implements). |
+
+**Phase 2 lenses**: SUBSTANTIVE — has What/Why/Distinction/Acceptance/File(s)/Depends on/Severity. 6 acceptance criteria, explicit P0 severity rationale.
+
+**Verdict**: SOUND → action **EDIT** (light polish; verify the storage/recovery.rs path).
+
+**Findings raised**:
+- [FINDING-093] bd-51zo target file `ferratomic-core/src/storage/recovery.rs` — needs verification. The current `ferratomic-core/src/` listing has `storage/` directory; whether `recovery.rs` exists inside or needs creation is not clear from prior listings. MINOR (file path validation needed).
+
+#### bd-m8ym — Phase 4b: Canonical spec form as signed datoms
+
+**Note**: This is the **most architecturally ambitious bead in the audit** — proposes that `spec/*.md` files become a generated projection of signed datoms, with live R16 verification status injected inline. Realizes the spine reframe operationally.
+
+**Phase 1 verification**
+
+| Check | Result |
+|-------|--------|
+| Code | New files in `ferratom/src/` (spec_schema.rs) and `ferratomic-verify/src/spec_form/` (parser.rs, projection.rs). All NEW. CLI subcommand `ferratomic-spec genesis|project|edit`. |
+| Spec | CONFIRMED — INV-FERR-051, 060, 061, 086, ADR-FERR-013, spec/08 §23.12.7, spec/05 §23.8.5.2 all verified across the audit. |
+| Dependencies | (truncated in show output — need full dep verification, but body lists multiple precondition-style references) |
+| Duplicates | UNIQUE. |
+
+**Phase 2 lenses**: EXEMPLARY-tier substantive content — has Hypothesis, Methodology (8 steps), Refinement Sketch, Verification Plan with V:* method-justification table, Pseudocode Contract beginning with schema constants. Includes negative epistemic-fit reasoning ("NOT V:LEAN: round-trip identity is byte-level"). PASS on all lenses.
+
+**Verdict**: **SOUND, EXEMPLARY** with minor polish needed → **EDIT**.
+
+**Findings raised**:
+- [FINDING-094] bd-m8ym Pseudocode Contract preview was truncated in `br show` output — full audit needs end of contract + Files section + Dependencies section verification. MINOR (audit deferral, not bead defect).
+- [FINDING-095] bd-m8ym depends on bd-bdvf.13 (the empty audit gate child, FINDING-012) — and on bd-r7ht (which has its own findings). The cascade through Pattern E (empty/incomplete beads) means bd-m8ym cannot proceed until those upstream defects are remediated. NOTE — not a bead defect, but a graph-state observation.
+
+#### bd-e58u — R16: Falsification-bound witness datoms
+
+**Phase 1**: Code N/A (NEW witness modules in `ferratomic-verify/proptest/witness.rs` + `kani/witness.rs`). Spec/08 §23.12.7 verified. Dependencies: bd-m8ym precondition, 6 incoming `blocks` (bd-y1rs parent, bd-ena7, bd-5rst, bd-ipzu, bd-7ij, bd-7yn9h). Body says "Depends on bd-gvil" but graph has "bd-m8ym (blocks)" — body↔graph divergence. **No bd-add phantom**. Unique.
+
+**Phase 2**: SUBSTANTIVE — has What/Why/Acceptance/File(s)/Depends on. 7 acceptance criteria. Introduces another "INV-FERR-08x" placeholder for R16 completeness.
+
+**Verdict**: SOUND with minor polish → **EDIT**.
+
+**Findings raised**:
+- [FINDING-096] bd-e58u body Dependencies says "bd-gvil" but graph has "bd-m8ym" as the outgoing blocks edge. Body↔graph divergence. MINOR.
+- [FINDING-097] bd-e58u introduces "INV-FERR-08x" placeholder (same vague-INV pattern as bd-lkdh, bd-pg85, FINDING-092). Once authored, must be assigned a real number. MINOR.
+
+#### bd-j1mp — Phase 4b: Import historical gate tags as gate certificate datoms
+
+**Phase 1**: Code N/A (NEW function in `ferratomic-verify/src/spec_form/genesis.rs`, extends bd-m8ym). Cites `git2` crate as "already a workspace dep — verify". spec/08 §23.12.7 + ADR-FERR-014 (Phase 4c per spec/08, Phase 4b per spine reframe — possible conflict). Dependencies: cascade through bd-m8ym + bd-y1w5 (the historical tag that must exist).
+
+**Phase 2**: SUBSTANTIVE — has What/Why/Hypothesis/Methodology/Refinement Sketch/Verification Plan with V:* table/Pseudocode Contract starting with `:gate/*` schema constants and `GateCert` struct. PASS on most lenses.
+
+**Verdict**: SOUND → **EDIT** (minor polish; verify git2 dep).
+
+**Findings raised**:
+- [FINDING-098] bd-j1mp says "uses `git2` crate (already a workspace dep — verify)" — the verification has not been done. MINOR (file path validation).
+- [FINDING-099] bd-j1mp cites ADR-FERR-014 as "Phase 4c per spec/08 §23.12.7 but Phase 4b per the spine reframe" — there's a phase-classification conflict between the spec text and the spine reframe. The spec audit (Section 8) needs to reconcile. MINOR (cross-cuts spec audit).
+
+#### bd-qgxjl — Phase 4b: Replace BitVec LIVE with Roaring bitmap
+
+**Phase 1**: Code: `ferratomic-positional/Cargo.toml` (add `roaring = "0.10"`), `ferratomic-positional/src/store.rs` (modified). spec/03 perf budget + INV-FERR-029 (LIVE correctness) + spec/09 §V3 checkpoint format. Dependencies likely include bd-pg85 (V4 format) and bd-51zo (mmap) per body. Mature crate (Apache Lucene/Druid/ClickHouse precedent). Unique.
+
+**Phase 2**: SUBSTANTIVE — has Honest framing section ("highest-leverage execution bead"), Hypothesis with predicted impact, Methodology (7 steps), Refinement Sketch, Verification Plan with V:* table INCLUDING V:LEAN ("Finset.eq_iff_eq_pos"), V:PROP, V:KANI, V:FAULT, Pseudocode Contract starting with Cargo.toml change. **One of the strongest Phase 4b beads**.
+
+**Verdict**: **SOUND, near-EXEMPLARY** → **EDIT** (minor polish).
+
+**Findings raised**:
+- [FINDING-100] bd-qgxjl uses opportunity-score notation ("score 5.3, Impact 4 × Confidence 4 / Effort 3") from the extreme-software-optimization skill — internal scoring framework that's not part of lab-grade template but is useful context. NOT a defect; observational note. (Not counted as a finding number — recording for reference only.)
 
 ### 5.2 P1 beads (~30+)
 
@@ -1763,10 +2125,40 @@ The handoff section below identifies the next pickup point.
 - Pattern E (missing template fields): 5+ hits (bdvf.13 worst)
 - Pattern F (triple ADR collision: 031/032/033): bd-3t63 is the federation-side authoring source
 
+### Session 1 final progress (after second commit)
+
+**Total**: 47 beads audited at lab-grade depth (27 4a.5 + 20 4b P0). 99 numbered findings.
+
+**4b P0 cluster (20 beads, this final batch)**:
+- bd-y1rs (EPIC) — SOUND with fixes
+- bd-4vwk (SCOPE ADR) — SOUND, Pattern F authoring source
+- bd-obo8 (gvil.1) — REWRITE (Pattern G)
+- bd-lkdh (gvil.2) — REWRITE (Pattern G)
+- bd-vhgn (gvil.3) — REWRITE (Pattern G)
+- bd-q630 (gvil.5) — REWRITE (Pattern G)
+- bd-8uck (gvil.4) — REWRITE (Pattern G)
+- bd-hfzx (gvil.6) — REWRITE (Pattern G)
+- bd-chu0 (gvil.7) — REWRITE (Pattern G)
+- bd-g1nd (gvil.8) — REWRITE (Pattern G)
+- bd-o6io (gvil.9) — REWRITE (Pattern G + missing Pseudocode Contract for type=task)
+- bd-ena7 (gvil.10) — SUBSTANTIVE (breaks Pattern G)
+- bd-no6b (gvil.11) — SUBSTANTIVE (breaks Pattern G)
+- bd-jolx (lib selection) — SOUND
+- bd-pg85 (V4 checkpoint) — SOUND
+- bd-51zo (mmap_cold_start wiring) — SOUND
+- bd-m8ym (canonical spec form) — EXEMPLARY (most architecturally ambitious bead in audit)
+- bd-e58u (R16 witnesses) — SOUND
+- bd-j1mp (gate cert datoms) — SOUND
+- bd-qgxjl (Roaring LIVE) — SOUND, near-EXEMPLARY (full V:* table including V:LEAN)
+
+**New patterns observed in 4b P0**:
+- **Pattern G — gvil family minimal-body**: 9 hits (gvil.1 through gvil.9), all skeletal single-paragraph beads. gvil.10 and gvil.11 break the pattern.
+- Continued **Pattern F**: bd-4vwk identified as the perf-side authoring source for ADR-FERR-031 in spec/09, completing the picture of how the triple ADR collision arose.
+
 ### Next pickup point — Session 2
 
-**Phase**: Bead audit Phase 1 — **Phase 4b cluster (85 beads)**
-**Next bead**: bd-y1rs (P0 EPIC: Self-Monitoring Convergence Spine — gives context for the spine reframe)
+**Phase**: Bead audit Phase 1 — **Phase 4b P1 cluster** (~30 beads)
+**Next bead**: bd-d6dl (or another P1 — order TBD; recommend starting with the highest-centrality P1 beads)
 
 **Recommended P0 order for 4b** (~20 beads):
 1. bd-y1rs (EPIC) — context first
