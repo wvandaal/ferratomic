@@ -2372,11 +2372,11 @@ INV-FERR-063 (provenance lattice), ADR-FERR-021 (signature storage), ADR-FERR-02
 > EXCLUDED from the signing message per ADR-FERR-021. Only user-asserted
 > datoms are signed.
 > **D19**: Predecessor ENTITY IDS (not TxIds) are used in the signing message.
-> EntityId = BLAKE3(tx_id_canonical_bytes) per ADR-FERR-032. Verification
+> EntityId = BLAKE3(tx_id_canonical_bytes) per ADR-FERR-035. Verification
 > reads tx/predecessor Ref values directly — zero TxId reconstruction needed.
-> **D17/ADR-FERR-033**: Store fingerprint (32 bytes, pre-transaction state)
+> **D17/ADR-FERR-036**: Store fingerprint (32 bytes, pre-transaction state)
 > included in the signing message as a cryptographic state commitment.
-> **ADR-FERR-031**: Signing happens at the Database layer via
+> **ADR-FERR-034**: Signing happens at the Database layer via
 > `Database::transact_signed(tx, &SigningKey)`, NOT at the Transaction builder.
 > The TxId is assigned by HLC tick before signing.
 
@@ -5096,9 +5096,20 @@ committing — it doesn't require schema validation to happen first.
 **Rejected**: Option A limits to single-agent stores. Option C puts key
 management in the engine, creating a dependency on key storage infrastructure.
 
-**Consequence**: The `Transaction<Building>` typestate gains an optional
-`sign(TxSignature, TxSigner)` method. Unsigned transactions remain valid
-(backward compatible). The Database does not store signing keys.
+**Consequence**: **Superseded by ADR-FERR-034 (Database-Layer Signing)**.
+Per ADR-FERR-034, signing happens inside `Database::transact_signed` AFTER
+the HLC tick assigns `tx_id`, NOT at the `Transaction<Building>` typestate.
+`Transaction<Building>` does **NOT** gain a `sign(TxSignature, TxSigner)` method.
+
+The original goal of ADR-FERR-023 (multi-agent support: different agents sign
+through the same Database) is **preserved** by the per-call `&SigningKey`
+parameter to `transact_signed`. The Database still does not store signing keys —
+they are passed as ephemeral borrows on each signed transaction.
+
+ADR-FERR-023's selection of "per-transaction" semantics is unchanged; only the
+mechanism layer changed (Database callsite vs Transaction typestate). See
+ADR-FERR-034 for the temporal-impossibility argument that motivated the
+mechanism change.
 
 **Source**: doc 003 (multi-agent cognition), GOALS.md §2 ("not an application
 framework").
@@ -5338,7 +5349,7 @@ incremental sync ("only transfer datoms newer than my last merge with you").
 
 ---
 
-### ADR-FERR-031: Database-Layer Signing
+### ADR-FERR-034: Database-Layer Signing
 
 **Traces to**: INV-FERR-051, ADR-FERR-023 (refined by this ADR)
 **Stage**: 0
@@ -5387,7 +5398,7 @@ consequence. INV-FERR-051 Level 0 (signing message includes tx_id).
 
 ---
 
-### ADR-FERR-032: TxId-Based Transaction Entity
+### ADR-FERR-035: TxId-Based Transaction Entity
 
 **Traces to**: INV-FERR-061 (predecessor Refs), INV-FERR-012 (content-addressed
 identity), C2 (content addressing)
@@ -5434,10 +5445,10 @@ metadata emission and predecessor construction.
 
 ---
 
-### ADR-FERR-033: Store Fingerprint in Signing Message
+### ADR-FERR-036: Store Fingerprint in Signing Message
 
 **Traces to**: INV-FERR-074 (homomorphic store fingerprint), INV-FERR-051
-(signing message), ADR-FERR-031 (Database-Layer Signing)
+(signing message), ADR-FERR-034 (Database-Layer Signing)
 **Stage**: 0
 
 **Problem**: The signing message binds datoms to their causal context (tx_id,
@@ -5501,9 +5512,10 @@ Let SK be an Ed25519 signing key and VK = public(SK).
 Let genesis_with_identity(SK) produce store S₀ containing identity transaction T_id.
 
 ∀ signed stores S created via genesis_with_identity(SK):
-  ∃! T_id ∈ transactions(S) such that (uniqueness is per genesis invocation;
-  after merge(S, S') where both are signed, TWO identity transactions coexist,
-  each independently self-verifiable):
+  ∃! T_id ∈ transactions_created_by_this_invocation(S) such that
+  (uniqueness is per genesis_with_identity invocation; after merge(S, S')
+  where both are signed, TWO identity transactions coexist — one per
+  signing key — each independently self-verifiable):
     1. T_id is the first signed transaction (min TxId among signed txns)
     2. T_id contains datom (store_entity, "store/public-key", bytes(VK))
     3. T_id.signer = VK  (self-signed: declares and uses same key)
@@ -5593,7 +5605,7 @@ pub fn genesis_with_identity(signing_key: &SigningKey) -> Result<Database, Ferra
                      Value::Instant(now_millis()));
 
     // Commit validates against schema (schema-as-data attrs are processed first)
-    let committed = tx_builder.commit(&db.schema())?;
+    let committed = tx.commit(&db.schema())?;
 
     // Sign: compute signing_message from committed datoms + tx_id + empty predecessors
     let (signature, signer) = sign_transaction(
@@ -5805,8 +5817,10 @@ fn emit_predecessors(
 ) -> Vec<Datom> {
     frontier.iter()
         .map(|(agent_id, latest_tx_id)| {
+            // INV-FERR-086 + ADR-FERR-035: use canonical TxId bytes,
+            // NOT raw to_le_bytes (which doesn't exist on TxId).
             let pred_entity = EntityId::from_content(
-                &latest_tx_id.to_le_bytes()
+                &tx_id_canonical_bytes(*latest_tx_id)
             );
             Datom::new(
                 tx_entity,
@@ -6009,9 +6023,9 @@ pub fn selective_merge(
     }
 
     // Emit receipt datoms (INV-FERR-062: all 4 fields required)
-    let merge_entity = EntityId::from_content(
-        &format!("merge-{}", now_millis()).as_bytes()
-    );
+    // Bind the temporary string to extend its lifetime; as_bytes() borrows it.
+    let merge_key = format!("merge-{}", now_millis());
+    let merge_entity = EntityId::from_content(merge_key.as_bytes());
 
     // Build receipt as a proper transaction so it gets TxId, predecessors,
     // and signing (FINDING-017: raw insert bypasses causal chain).
@@ -6700,7 +6714,7 @@ pub struct SignedTransactionBundle {
 /// See INV-FERR-063 Level 2 for full definition.
 
 /// Context for Store::transact. Bundles all metadata produced by the
-/// Database layer (ADR-FERR-031). Pairs signature+signer as single Option
+/// Database layer (ADR-FERR-034). Pairs signature+signer as single Option
 /// to prevent the invalid state (signature without signer).
 pub struct TransactContext<'a> {
     /// HLC-derived transaction ID (assigned by Database::transact).
@@ -6712,7 +6726,7 @@ pub struct TransactContext<'a> {
     pub signing: Option<(TxSignature, TxSigner)>,
     /// Epistemic confidence (INV-FERR-063). Default: Observed.
     pub provenance: ProvenanceType,
-    /// Store fingerprint BEFORE this transaction (INV-FERR-074/ADR-FERR-033).
+    /// Store fingerprint BEFORE this transaction (INV-FERR-074/ADR-FERR-036).
     pub store_fingerprint: [u8; 32],
 }
 ```
@@ -6722,8 +6736,8 @@ pub struct TransactContext<'a> {
 ### INV-FERR-086: Canonical Datom Format Determinism
 
 **Traces to**: C2 (Content-Addressed Identity), INV-FERR-012 (EntityId = BLAKE3),
-INV-FERR-051 (signing message), INV-FERR-074 (store fingerprint), ADR-FERR-032
-(TxId-based entity), ADR-FERR-033 (fingerprint in signing message)
+INV-FERR-051 (signing message), INV-FERR-074 (store fingerprint), ADR-FERR-035
+(TxId-based entity), ADR-FERR-036 (fingerprint in signing message)
 **Referenced by**: INV-FERR-051 (signing_message uses canonical_bytes),
 INV-FERR-074 (fingerprint = XOR of BLAKE3(canonical_bytes))
 **Verification**: `V:PROP`, `V:KANI`, `V:TYPE`
@@ -6766,7 +6780,7 @@ Without a canonical format, each computation could use a different
 serialization (bincode, JSON, protobuf), producing different hashes for
 the same datom. Signatures computed with one serialization would not verify
 with another. Fingerprints would diverge across implementations. The
-consensus-free blockchain (ADR-FERR-033) would break.
+consensus-free blockchain (ADR-FERR-036) would break.
 
 The canonical format also enables independent implementations. Any language
 that can compute BLAKE3 + Ed25519 + canonical_bytes can verify ferratomic
