@@ -976,16 +976,18 @@ later added unrelated ADRs at the same numbers.
 **Order**: P0 → P1 → P2 → P3 → P4, sequential. The wavelet matrix sub-graph
 (bd-obo8 → gvil.1..11) is processed in spec-then-impl order.
 
-### 5.0 Phase 4b cluster summary (P0+P1 complete; P2+P3+P4 pending)
+### 5.0 Phase 4b cluster summary — **COMPLETE (85/85)**
 
 | Cluster | Audited | Total | Status |
 |---------|---------|-------|--------|
 | P0 | 20 | 20 | ✅ complete |
-| P1 | 34 | ~34 | ✅ complete |
-| P2 | 0 | ~25 | ⏳ pending |
-| P3 | 0 | ~9 | ⏳ pending |
-| P4 | 0 | 1 | ⏳ pending |
-| **TOTAL 4b** | **54** | **~85** | **~64%** |
+| P1 | 34 | 34 | ✅ complete |
+| P2 | 21 | 21 | ✅ complete |
+| P3 | 9 | 9 | ✅ complete |
+| P4 | 1 | 1 | ✅ complete |
+| **TOTAL 4b** | **85** | **85** | **✅ 100%** |
+
+**ENTIRE BEAD AUDIT COMPLETE**: 27 (4a.5) + 85 (4b) = **112/112 beads audited**. ~170 findings.
 
 **P0 verdict distribution**:
 - **EXEMPLARY/SUBSTANTIVE** (8): bd-y1rs, bd-4vwk, bd-jolx, bd-pg85, bd-51zo, bd-m8ym, bd-e58u, bd-j1mp, bd-qgxjl, bd-ena7 (10 actually; bd-no6b near-substantive)
@@ -1803,20 +1805,330 @@ All four use the **experiment template** (Hypothesis / Methodology / Success Cri
 
 ### 5.3 P2 beads (~25+)
 
-_Beads to audit_: bd-o0suq, bd-xk2je, bd-j7akd, bd-wo07o, bd-dmqv, bd-iwz3,
-bd-q188, bd-a7i0, bd-p7ie, bd-pdns, bd-2crm, bd-xr1f, bd-7hmv, bd-i4k2,
-bd-f5hl, bd-keyt, bd-nhui, bd-2ac, bd-39r, bd-18a, bd-26q.
+#### bd-o0suq — Phase 4b/4c follow-up: Kani --unwind 2 feasibility
 
-_Per-bead findings to be filled in during Phase 1 execution._
+**Phase 1**: Code: NEW investigation report `docs/research/2026-04-XX-kani-unwind-2-investigation.md` (placeholder date — FINDING-028 pattern). Spec: spec/08 verification matrix update. Dependencies: bd-add (PHANTOM — Pattern A).
 
-### 5.4 P3 beads (~9)
+**Phase 2**: SUBSTANTIVE — has Hypothesis (3 plausible causes), Methodology (5 steps), Acceptance (3 binary), explicit honest scoring (1.5, below cutoff but filed for documentation). Phase 4a follow-up.
 
-_Beads to audit_: bd-hq78, bd-xsr1, bd-39qx, bd-gc5e, bd-3p2x, bd-z6yo,
-bd-12d2, bd-xopd, bd-l2v6.
+**Verdict**: SOUND → **EDIT** (Pattern A).
+
+**Findings raised**:
+- [FINDING-145] bd-o0suq → bd-add PHANTOM. Pattern A. MINOR.
+- [FINDING-146] bd-o0suq has placeholder date `2026-04-XX`. Pattern (FINDING-028). MINOR.
+
+#### bd-xk2je — Polar quantization of EntityId prefix (TurboQuant transposition)
+
+**Phase 1**: Code: NEW polar-form module in ferratomic-positional. Spec: INV-FERR-027 + INV-FERR-012. Cites Google Research TurboQuant 2025 paper + Johnson-Lindenstrauss + Indyk-Motwani + Krishna 1995. PASS — substantive citation.
+
+**Phase 2**: SUBSTANTIVE — has Hypothesis with quantitative predictions, "Honest framing" note (modest 1.2-1.4× improvement, NOT transformative — opportunity score 5.3). PASS on most lenses. Embeds the user's inflation discipline.
+
+**Verdict**: SOUND → **EDIT**.
+
+**Findings raised**:
+- None new — exemplary use of honest framing.
+
+#### bd-j7akd — PGM-index for EAVT canonical
+
+**Phase 1**: Code: NEW PGM-index integration. Spec: INV-FERR-027. Cites Ferragina-Vinciguerra 2020 VLDB + Rust crate `pgm`. PASS.
+
+**Phase 2**: SUBSTANTIVE — has Hypothesis with quantitative cost modeling (current 5-7 probes → PGM 1-2 + bounded scan), "Honest framing" note correcting an earlier inflated pitch (was 13× claim, corrected to 1.3-1.7×, score 4). PASS.
+
+**Verdict**: SOUND → **EDIT**.
+
+#### bd-wo07o — Software prefetch on canonical[perm[i]]
+
+**Phase 1**: Code: ferratomic-positional/src/perm.rs (modified). Spec: INV-FERR-027 + ADR-FERR-020 (unsafe policy — but ADR-FERR-020 has Pattern F collision, exists in BOTH spec/04 and spec/09). Cross-platform x86_64/aarch64 prefetch.
+
+**Phase 2**: SUBSTANTIVE — has Hypothesis with cost breakdown (step 2 dominates 5:1), "Honest framing" correcting inflated 16× original to honest 6 score. PASS.
+
+**Verdict**: SOUND → **EDIT**.
+
+**Findings raised**:
+- [FINDING-147] bd-wo07o cites ADR-FERR-020 — affected by Pattern F (ADR-020 collision in spec/04 + spec/09). MINOR (cross-cuts spec audit).
+
+#### bd-dmqv — Spec hygiene: Author global ADR registry section in spec/README.md
+
+**Phase 1**: Code: spec/README.md amendment + 2 NEW scripts (regenerate-adr-registry.sh, regenerate-inv-registry.sh). Dependencies: bd-d6dl + bd-s56i preconditions ("renumber duplicates first"). Body says depends on "bd-adr-renumber" — likely bd-s56i. Pattern C variant.
+
+**Phase 2**: SUBSTANTIVE — has 6 binary acceptance criteria including auto-generation script + CI check. PASS.
+
+**Verdict**: SOUND → **EDIT**.
+
+**Findings raised**:
+- [FINDING-148] bd-dmqv references "bd-adr-renumber" descriptive label which is bd-s56i. Pattern C variant. MINOR.
+
+#### bd-iwz3 — Spec hygiene: INV-FERR-070 Lean proof is rfl placeholder
+
+**Phase 1**: Code: spec/09 (INV-FERR-070 amendment), ferratomic-verify/lean/, spec/08 verification taxonomy. INV-FERR-070 verified. ADR-FERR-007 cited (need verify).
+
+**Phase 2**: SUBSTANTIVE bug bead with 3 fix options + recommendation (option 2: V:LEAN-MODEL relabel + footnote). The bead correctly identifies that the Lean proof is `rfl` on identity functions — tautological. PASS.
+
+**Verdict**: SOUND — identifies a real verification taxonomy gap → **EDIT**.
+
+**Findings raised**:
+- [FINDING-149] bd-iwz3 correctly identifies a real spec defect (V:LEAN tag covers tautological identity proof). NOT a bead defect. SPEC AUDIT preview — must determine which other invariants have placeholder Lean proofs.
+
+#### bd-q188 — DEFECT-012: Kani INV-FERR-024 only tests InMemoryBackend
+
+**Phase 1**: Code: bead body is **EMPTY** — only title + dependencies. Cannot verify code/spec citations because there are none.
+
+**Phase 2**: **CRITICAL FAIL on L1/L2/L3/L5/L6** — same defect as bdvf.13 (Pattern E worst form). Title implies the defect (Kani harness for INV-FERR-024 only covers one backend, needs multi-backend) but no body content explains observed/expected/fix.
+
+**Verdict**: **REWRITE** — empty body. Pattern E.
+
+**Findings raised**:
+- [FINDING-150] bd-q188 has empty body. Pattern E (worst form, like bdvf.13). MAJOR.
+
+#### bd-a7i0 — DEFECT-011: Kani INV-FERR-030 only tests AcceptAll
+
+**Phase 1**: Code: bead body is **EMPTY** — only title + dependencies.
+
+**Phase 2**: Same critical failure as bd-q188. Title implies the defect (Kani harness for INV-FERR-030 ReplicaFilter only covers AcceptAll, needs non-trivial filter) but no body.
+
+**Verdict**: **REWRITE** — empty body.
+
+**Findings raised**:
+- [FINDING-151] bd-a7i0 has empty body. Pattern E (worst form). MAJOR.
+
+#### bd-pdns — DEFECT-010: Stateright crash_recovery_model skips CrashAfterFsync
+
+**Phase 1**: Code: bead body is **EMPTY** — only title + dependencies.
+
+**Phase 2**: Same critical failure. Title implies the defect (Stateright model skips a fault injection point because FsyncWal is atomic) but no body.
+
+**Verdict**: **REWRITE** — empty body.
+
+**Findings raised**:
+- [FINDING-152] bd-pdns has empty body. Pattern E (worst form). MAJOR.
+
+**Pattern E expansion**: The DEFECT-010/011/012 bead trio (bd-pdns, bd-a7i0, bd-q188) all have empty bodies — title-only beads filed during a Phase 4a audit but never fleshed out. Same severity as bdvf.13. **Pattern E now has 4 worst-form hits**.
+
+#### bd-p7ie — Implement index configuration as datoms (:index/* namespace)
+
+**Phase 1**: Code: NEW `ferratomic-core/src/index_config.rs`. Spec: INV-FERR-025b verified. Dependencies: bd-3p2x + bd-12d2 (vector/text index traits) outgoing, 4 incoming `blocks` (bd-7ij, bd-908m, bd-cek9, bd-h5m6 — additional index traits).
+
+**Phase 2**: COMPACT — body is 6 lines (3 acceptance items, references "R01, R13" Pattern C labels). Below lab-grade but covers essential structure.
+
+**Verdict**: NEEDS WORK → **EDIT** (expand to lab-grade).
+
+**Findings raised**:
+- [FINDING-153] bd-p7ie body is compact 6-line description below lab-grade. Not empty (unlike Pattern E worst form), but missing Pseudocode Contract / Verification Plan / Frame Conditions. MINOR-MAJOR.
+- [FINDING-154] bd-p7ie references "R01, R13" internal labels. Pattern C. MINOR.
+
+#### bd-2crm — RESEARCH: Hierarchical fingerprint reconciliation
+
+**Phase 1**: Code: research bead — no concrete files. Spec: INV-FERR-079 cited (need verify). Dependencies: bd-7ij incoming.
+
+**Phase 2**: COMPACT but substantive — has Research Scope section + Epistemic Fit section. Provides cost analysis (O(delta × log_C(n)) vs O(n/C + delta × C)). Below lab-grade but mathematically rigorous.
+
+**Verdict**: SOUND for a research bead → **EDIT** (light polish if elevated to implementation).
+
+#### bd-xr1f — RESEARCH: Columnar datom decomposition
+
+**Phase 1**: Code: research. Spec: INV-FERR-078 cited (need verify in spec/09). Dependencies: bd-kt98 + bd-7ij.
+
+**Phase 2**: COMPACT — Research Scope + Epistemic Fit. PASS for research bead.
+
+**Verdict**: SOUND for research bead.
+
+#### bd-7hmv — ALIEN-OMEGA: Columnar datom store
+
+**Phase 1**: Code: research/design bead. Spec: INV-FERR-076 cited. **Important context**: bead has explicit RECLASSIFIED note ("Phase 4b — was Phase 4a"). Body explains the prior analysis (session 009 found columnar HARMFUL for Phase 4a in-memory but valuable for Phase 4b prolly tree compression). Dependencies: bd-85j.13 + bd-3gk (parent-child to spec EPIC).
+
+**Phase 2**: SUBSTANTIVE — has reclassification rationale, scope, dependencies. The historical RECLASSIFIED note is valuable continuity context. PASS.
+
+**Verdict**: SOUND → **EDIT**.
+
+#### bd-i4k2 — CR: Observer broadcast datom clone overhead
+
+**Phase 1**: Code: `ferratomic-core/src/observer.rs` (VALID — observer.rs stays in ferratomic-core). Compact body: 2 postconditions + Files + Dependencies. Below lab-grade but technically correct.
+
+**Phase 2**: COMPACT — perf optimization bead. Identifies the issue (Vec clone vs Arc<[Datom]>) but lacks Pseudocode Contract / Verification Plan / Frame Conditions.
+
+**Verdict**: NEEDS WORK → **EDIT** (expand to lab-grade).
+
+**Findings raised**:
+- [FINDING-155] bd-i4k2 body is compact 4-line description below lab-grade. MINOR.
+
+#### bd-f5hl — Implement streaming WAL recovery and checkpoint loading
+
+**Phase 1**: Code: `ferratomic-core/src/wal/recover.rs` and `ferratomic-core/src/checkpoint.rs` — **STALE PATHS (Pattern B)**. WAL moved to `ferratomic-wal/src/recovery.rs`. checkpoint.rs is split between `ferratomic-core/src/checkpoint.rs` (still exists) and `ferratomic-checkpoint/` crate. INV-FERR-028 verified.
+
+**Phase 2**: SUBSTANTIVE — has Spec Reference, Pre/Postconditions (3 binary), Frame Conditions, Refinement Sketch, Files, Dependencies. PASS on most lenses except L6 (paths stale).
+
+**Verdict**: NEEDS WORK → **EDIT** (Pattern B path fix).
+
+**Findings raised**:
+- [FINDING-156] bd-f5hl Files section references `ferratomic-core/src/wal/` (no `wal/` subdirectory in ferratomic-core post-decomp; moved to ferratomic-wal). Same Pattern B. MAJOR.
+
+#### bd-keyt — DEFERRED: INV-FERR-025 index backend interchangeability
+
+**Phase 1**: Code: documentation bead, no source files. INV-FERR-025 verified earlier. ADR-FERR-001 cited. Dependencies: bd-add (PHANTOM — Pattern A), 3 incoming `blocks` (bd-7ij, bd-85j.12, bd-q188).
+
+**Phase 2**: SUBSTANTIVE — has Deferral Rationale, What Exists, What Phase 4b Must Do, Spec Reference. Documentation-style bead with clear scope.
+
+**Verdict**: SOUND → **EDIT** (Pattern A).
+
+**Findings raised**:
+- [FINDING-157] bd-keyt → bd-add PHANTOM. Pattern A. MINOR.
+
+#### bd-nhui — DEFERRED: INV-FERR-017 shard equivalence implementation
+
+**Phase 1**: Code: documentation bead. INV-FERR-017 cited (need verify). Dependencies: bd-add (PHANTOM — Pattern A), 2 incoming `blocks` (bd-7ij, bd-85j.14).
+
+**Phase 2**: SUBSTANTIVE — same shape as bd-keyt (Deferral Rationale, What Exists, What Phase 4b Must Do, Spec Reference). PASS.
+
+**Verdict**: SOUND → **EDIT** (Pattern A).
+
+**Findings raised**:
+- [FINDING-158] bd-nhui → bd-add PHANTOM. Pattern A. MINOR.
+
+#### bd-2ac — Add overflow failure mode to transport frame serialization
+
+**Phase 1**: Code: spec/05 amendment only. INV-FERR-038a cited (need verify; likely a sub-INV not in spec/05 with that exact ID). Dependencies: bd-add (PHANTOM — Pattern A).
+
+**Phase 2**: SUBSTANTIVE bug bead — Bug Analysis (Observed/Expected/Root cause/Fix), 4 binary postconditions. PASS.
+
+**Verdict**: SOUND → **EDIT** (Pattern A).
+
+**Findings raised**:
+- [FINDING-159] bd-2ac → bd-add PHANTOM. Pattern A. MINOR.
+- [FINDING-160] bd-2ac cites INV-FERR-038a — need to verify whether this sub-INV exists. MINOR.
+
+#### bd-39r — Add prolly tree recovery invariant
+
+**Phase 1**: Code: spec/06 amendment for new invariant (root hash → im::OrdMap roundtrip). Spec: INV-FERR-049/013 cited (013 needs verify). Dependencies: bd-2cv + bd-18a precondition.
+
+**Phase 2**: SUBSTANTIVE — full Pre/Post/Frame/Refinement/Verification structure. New invariant authoring. PASS.
+
+**Verdict**: SOUND → **EDIT**.
+
+#### bd-18a — Add INV-FERR-050b: manifest CAS + INV-FERR-050c: journal replayability
+
+**Phase 1**: Code: spec/06 amendment (NEW invariants 050b + 050c after INV-FERR-050). Dependencies: bd-2cv precondition.
+
+**Phase 2**: SUBSTANTIVE — bundles 2 NEW invariants. Has Pre/Post/Frame/Refinement/Verification. PASS.
+
+**Verdict**: SOUND → **EDIT**.
+
+#### bd-26q — Add INV-FERR-050d: GC safety
+
+**Phase 1**: Code: spec/06 amendment (NEW invariant 050d after 050b/050c). Dependencies: bd-132 + INV-FERR-050/049 preconditions.
+
+**Phase 2**: SUBSTANTIVE — full structure with Stateright proposal for concurrent GC + reader interleaving. PASS.
+
+**Verdict**: SOUND → **EDIT**.
+
+### 5.4 P3 beads (9)
+
+#### bd-hq78 — Spec hygiene: ADR-FERR-030 references INV-FERR-078 as 'not yet authored'
+
+**Phase 1**: Code: spec/09 amendment lines ~2488-2495. ADR-FERR-030 verified at `spec/09:2426`. INV-FERR-078 cited as authored at line 2516 — need verify.
+
+**Phase 2**: SUBSTANTIVE — has 3 binary acceptance criteria. PASS.
+
+**Verdict**: SOUND → **EDIT**.
+
+#### bd-xsr1 — Implement DatomAccumulator trait
+
+**Phase 1**: Code: NEW `ferratomic-core/src/accumulator.rs`. Compact body. Has Notes section with detailed metric schema. Dependencies: bd-add (PHANTOM — Pattern A).
+
+**Phase 2**: COMPACT mini-format. Below lab-grade.
+
+**Verdict**: NEEDS WORK → **EDIT**.
+
+**Findings raised**:
+- [FINDING-161] bd-xsr1 → bd-add PHANTOM. Pattern A. MINOR.
+- [FINDING-162] bd-xsr1 compact mini-format below lab-grade. MINOR.
+
+#### bd-39qx — Implement SnapshotView for zero-copy temporal queries
+
+**Phase 1**: Code: `ferratomic-core/src/store/query.rs` — **STALE PATH (Pattern B)**, moved to ferratomic-store/src/query.rs. Dependencies: bd-add (PHANTOM).
+
+**Phase 2**: COMPACT mini-format.
+
+**Verdict**: NEEDS WORK → **EDIT** (Pattern A + B).
+
+**Findings raised**:
+- [FINDING-163] bd-39qx → bd-add PHANTOM + STALE PATH. Patterns A + B. MAJOR (Pattern B).
+
+#### bd-gc5e — Implement FBW witness datoms in self-verifying spec store
+
+**Phase 1**: Code: NEW `ferratomic-verify/src/witness.rs`. Dependencies: bd-r7ht (B17 bootstrap).
+
+**Phase 2**: COMPACT mini-format. References ADR-FERR-012 (Bayesian confidence). PASS for compact form.
+
+**Verdict**: NEEDS WORK → **EDIT** (expand to lab-grade).
+
+#### bd-3p2x — Implement VectorIndex trait and NullVectorIndex default
+
+**Phase 1**: Code: NEW `ferratomic-core/src/vector_index.rs` + `store/mod.rs` (STALE — moved to ferratomic-store). Dependencies: bd-bdvf.9 + bd-12d2.
+
+**Phase 2**: COMPACT mini-format. References INV-FERR-025b. References "R01" Pattern C.
+
+**Verdict**: NEEDS WORK → **EDIT** (Pattern B + C).
+
+**Findings raised**:
+- [FINDING-164] bd-3p2x Files reference `ferratomic-core/src/store/mod.rs` (stale, Pattern B). MAJOR.
+
+#### bd-z6yo — Add coherence gate to transact path
+
+**Phase 1**: Code: `ferratomic-core/src/store/apply.rs` (STALE — moved to ferratomic-store) + `ferratomic-core/src/writer/commit.rs` (STALE — moved to ferratomic-tx). Dependencies: bd-add (PHANTOM).
+
+**Phase 2**: COMPACT mini-format.
+
+**Verdict**: NEEDS WORK → **EDIT** (Patterns A + B).
+
+**Findings raised**:
+- [FINDING-165] bd-z6yo STALE paths (both store/apply.rs AND writer/commit.rs). Pattern B. MAJOR.
+
+#### bd-12d2 — Implement TextIndex trait and NullTextIndex default
+
+**Phase 1**: Code: NEW `ferratomic-core/src/text_index.rs` + `store/mod.rs` (STALE — Pattern B). Dependencies: bd-bdvf.9 + bd-r3um (Phase 4a.5 gate).
+
+**Phase 2**: COMPACT — has 4 acceptance criteria. References INV-FERR-025b + INV-FERR-005.
+
+**Verdict**: NEEDS WORK → **EDIT** (Pattern B).
+
+**Findings raised**:
+- [FINDING-166] bd-12d2 Files reference `ferratomic-core/src/store/mod.rs` (Pattern B). MAJOR.
+
+#### bd-xopd — Fix minor spec inconsistencies (C6 gap, 043/044 duplication, stage ambiguity)
+
+**Phase 1**: Code: spec/00 + spec/03 + spec/05 amendments. Multi-file spec hygiene. Cites INV-FERR-029/032 — Pattern D adjacent (043/044 duplication is also a Pattern D variant but in spec/05 not spec/03).
+
+**Phase 2**: SUBSTANTIVE — has 4 binary postconditions covering distinct spec defects (C6 gap, 043/044 dup, 029/032 boundary). PASS.
+
+**Verdict**: SOUND — identifies multiple real spec defects → **EDIT**.
+
+**Findings raised**:
+- [FINDING-167] bd-xopd identifies INV-FERR-043/044 duplication in spec/05 — additional Pattern D-adjacent defect (duplicate INV definition, not just title/number mismatch). NOT a bead defect; SPEC AUDIT preview for Section 6.
+
+#### bd-l2v6 — Replace observer full-store catchup with incremental replay
+
+**Phase 1**: Code: `ferratomic-core/src/observer.rs` (VALID). Spec: INV-FERR-011 + NEG-FERR-005. Dependencies: bd-add (PHANTOM).
+
+**Phase 2**: SUBSTANTIVE — Pre/Post/Frame/Refinement. PASS.
+
+**Verdict**: SOUND → **EDIT** (Pattern A).
+
+**Findings raised**:
+- [FINDING-168] bd-l2v6 → bd-add PHANTOM. Pattern A. MINOR.
 
 ### 5.5 P4 beads (1)
 
-_Beads to audit_: bd-sg59.
+#### bd-sg59 — Add ghost retraction warning
+
+**Phase 1**: Code: `ferratomic-core/src/store/apply.rs` (STALE — Pattern B, moved to ferratomic-store). Dependencies: bd-add (PHANTOM).
+
+**Phase 2**: COMPACT mini-format. Below lab-grade.
+
+**Verdict**: NEEDS WORK → **EDIT** (Patterns A + B).
+
+**Findings raised**:
+- [FINDING-169] bd-sg59 STALE path. Pattern B. MAJOR.
+- [FINDING-170] bd-sg59 → bd-add PHANTOM. Pattern A. MINOR.
 
 ---
 
@@ -2602,12 +2914,16 @@ The handoff section below identifies the next pickup point.
 
 ### Next pickup point — Session 2
 
-**Phase**: Bead audit Phase 1 — **Phase 4b P2 cluster** (~25 beads remaining)
-**Next bead**: bd-o0suq (P2 leaf), or by impact ordering at session start.
+**Phase 1 bead audit COMPLETE** (112/112 beads). All sub-clusters done.
 
-**4b P2 beads to audit** (~25): bd-o0suq, bd-xk2je, bd-j7akd, bd-wo07o, bd-dmqv, bd-iwz3, bd-q188, bd-a7i0, bd-p7ie, bd-pdns, bd-2crm, bd-xr1f, bd-7hmv, bd-i4k2, bd-f5hl, bd-keyt, bd-nhui, bd-2ac, bd-39r, bd-18a, bd-26q.
+**Next phase**: **Spec audit** (Sections 6, 7, 8 of this doc) per `lifecycle/17-spec-audit.md`.
 
-After 4b P2: P3 (~9 beads), P4 (1 bead). After 4b cluster: spec audits (Sections 6-8). Then Phase 3 reconciliation.
+**Recommended order**:
+1. **Section 6** — `spec/05 §23.8.5` (Phase 4a.5 federation invariants — INV-FERR-060..063, 025b, 086, ADR-FERR-021..029, 031, 032, 033). Resolve **Pattern F** (triple/quadruple ADR collision) and **Pattern D** (INV-029/032 mismatch) here.
+2. **Section 7** — `spec/06` (prolly tree, INV-FERR-045..050). Resolve **Pattern H** (fabricated INV-FERR-045a / S23.9.x citations) here.
+3. **Section 8** — `spec/09` (perf architecture, INV-FERR-070..085). Resolve duplicate ADRs in spec/09 (Pattern F continued).
+
+**After spec audits**: **Phase 3 reconciliation** (apply all 170 findings via `br update`/`br dep`/etc.). Then **Phase 4 graph integrity verification** (re-run `bv --robot-*` and confirm all alerts cleared).
 
 **Recommended P0 order for 4b** (~20 beads):
 1. bd-y1rs (EPIC) — context first
