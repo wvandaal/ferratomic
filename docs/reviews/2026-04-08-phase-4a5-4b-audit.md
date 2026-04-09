@@ -976,20 +976,27 @@ later added unrelated ADRs at the same numbers.
 **Order**: P0 → P1 → P2 → P3 → P4, sequential. The wavelet matrix sub-graph
 (bd-obo8 → gvil.1..11) is processed in spec-then-impl order.
 
-### 5.0 Phase 4b cluster summary (P0 complete; P1+P2+P3+P4 pending)
+### 5.0 Phase 4b cluster summary (P0+P1 complete; P2+P3+P4 pending)
 
 | Cluster | Audited | Total | Status |
 |---------|---------|-------|--------|
 | P0 | 20 | 20 | ✅ complete |
-| P1 | 0 | ~30 | ⏳ pending |
+| P1 | 34 | ~34 | ✅ complete |
 | P2 | 0 | ~25 | ⏳ pending |
 | P3 | 0 | ~9 | ⏳ pending |
 | P4 | 0 | 1 | ⏳ pending |
-| **TOTAL 4b** | **20** | **~85** | **~24%** |
+| **TOTAL 4b** | **54** | **~85** | **~64%** |
 
 **P0 verdict distribution**:
 - **EXEMPLARY/SUBSTANTIVE** (8): bd-y1rs, bd-4vwk, bd-jolx, bd-pg85, bd-51zo, bd-m8ym, bd-e58u, bd-j1mp, bd-qgxjl, bd-ena7 (10 actually; bd-no6b near-substantive)
 - **REWRITE** (9): the gvil.1-9 sub-beads (bd-obo8, bd-lkdh, bd-vhgn, bd-q630, bd-8uck, bd-hfzx, bd-chu0, bd-g1nd, bd-o6io) all share the **Pattern G — gvil family minimal-body** defect
+
+**P1 verdict distribution** (34 beads):
+- **SOUND/SUBSTANTIVE** (~25): bd-3gk, bd-7ij, bd-s56i, bd-d6dl, bd-p8n3, bd-ipzu, bd-9be8, bd-fw31, bd-bmu2, bd-biw6, bd-2cud, bd-ei8d, bd-v3gz, bd-9khc, bd-dwhr, bd-xlvp, bd-5bvd, bd-4k8s, bd-lzy2, bd-imwb (most rigorous experimental design in audit), bd-59dc, bd-lfgv, bd-2rq, bd-26x, bd-r2u, bd-85j.12 — all with minor polish needed (mostly Pattern A bd-add phantom + Pattern C internal labels)
+- **NEEDS WORK / Pattern H affected** (~7): bd-3gk, bd-t9h, bd-r2u, bd-f74, bd-14b, bd-132, bd-400, bd-85j.13 — all cite INV-FERR-045a or S23.9.x which DOESN'T EXIST in spec/06
+- **PATTERN B affected** (~2): bd-kt98 (stale ferratomic-core/src/positional.rs), bd-85j.14 (possible shard/ path)
+
+**Critical pattern from 4b P1**: **Pattern H — fabricated INV-FERR / spec citations**. 7+ beads cite content that doesn't exist in the current spec/06. Must be resolved by spec audit Section 7.
 
 **New pattern observed** (Pattern G):
 
@@ -1348,13 +1355,451 @@ _Audit pending._
 
 ### 5.2 P1 beads (~30+)
 
-_Beads to audit_: bd-d6dl, bd-p8n3, bd-ipzu, bd-s56i, bd-9be8, bd-fw31,
-bd-bmu2, bd-2cud, bd-ei8d, bd-v3gz, bd-9khc, bd-dwhr, bd-xlvp, bd-biw6,
-bd-5bvd, bd-4k8s, bd-lzy2, bd-imwb, bd-59dc, bd-lfgv, bd-kt98, bd-7ij,
-bd-t9h, bd-2rq, bd-26x, bd-r2u, bd-f74, bd-14b, bd-132, bd-400, bd-3gk,
-bd-85j.14, bd-85j.13, bd-85j.12.
+_Order_: bd-3gk (EPIC) → bd-7ij (Phase 4b gate) → high-impact P1 → leaf P1 beads.
 
-_Per-bead findings to be filled in during Phase 1 execution._
+#### bd-3gk — EPIC: Phase 4b specification expansion
+
+**Phase 1 verification**
+
+| Check | Result |
+|-------|--------|
+| Code | `spec/06-prolly-tree.md` exists ✓. `docs/design/FERRATOMIC_ARCHITECTURE.md` **DOES NOT EXIST** (same as FINDING-069 for bd-s4ne). |
+| Spec | INV-FERR-045 (`spec/06:119`), 046 (`spec/06:290`), 047 (`spec/06:530`), 048 (`spec/06:781`), 049 (`spec/06:1050`), 050 (`spec/06:1295`) all confirmed. **BUT**: bead claims "INV-FERR-045a" exists in spec/06 ("DONE: INV-FERR-045a chunk serialization (lines 433-632)"). Grep for `INV-FERR-045a` returns ZERO matches. The bead claims a spec entry that doesn't exist in current spec. Either (a) the entry was removed, (b) it was renumbered, (c) bead claim is stale. |
+| Dependencies | **PATTERN A HIT**: bd-3gk → bd-add is phantom (closed 2026-04-08). 2 outgoing graph edges visible, 17+ incoming `blocks` and parent-child edges. |
+| Duplicates | UNIQUE EPIC. |
+
+**Phase 2 lenses (8)**
+
+| Lens | Result | Notes |
+|------|--------|-------|
+| L0 Epistemic Fit | PASS | EPIC, no method prescribed. |
+| L1 Structural | PASS-mostly | All EPIC fields present (Specification Reference, Child Beads, Completion Criterion, Progress, Files, Dependencies). 9 children correctly enumerated. Progress section has 3 DONE + 6 OPEN. |
+| L2 Traceability | PASS-with-defect | INV-FERR-045..050 resolve. **INV-FERR-045a does NOT resolve** (FINDING-101 below). |
+| L3 Postcondition Strength | PASS | 10 binary completion criteria. |
+| L4 Scope Atomicity | PASS | EPIC scope = "Phase 4b spec expansion for prolly tree". Atomic at the EPIC level. |
+| L5 Frame Adequacy | N/A | Epic. |
+| L6 Compiler Test | N/A | Epic, no types. |
+| L7 Axiological | PASS | Prolly tree spec expansion is the foundation for federation diff and the wavelet matrix substrate. |
+
+**Verdict**: NEEDS WORK with 3 findings → action **EDIT** (Pattern A removal + Pattern B-style file fix + INV-045a resolution).
+
+**Findings raised**:
+- [FINDING-100b] bd-3gk → bd-add is a PHANTOM edge (Pattern A). MINOR.
+- [FINDING-101] bd-3gk Progress section says "DONE: INV-FERR-045a chunk serialization (lines 433-632)" but `INV-FERR-045a` does not exist in `spec/06-prolly-tree.md` (only `INV-FERR-045` at line 119). Either the spec was not actually amended, OR the amendment is in a different format (e.g., a sub-section under INV-FERR-045 without its own header). MAJOR — Progress claim is unverifiable.
+- [FINDING-102] bd-3gk Files section references `docs/design/FERRATOMIC_ARCHITECTURE.md` (same nonexistent file as FINDING-069 for bd-s4ne). MAJOR.
+
+#### bd-7ij — Close Phase 4b gate before Phase 4c (gate bead)
+
+**Phase 1 verification**
+
+| Check | Result |
+|-------|--------|
+| Code | N/A — routing bead, no files. |
+| Spec | References AGENTS.md phase ordering (resolvable). |
+| Dependencies | Has **60+ outgoing `blocks` edges** (massive aggregation). **Pattern A — TWO phantom edges**: `bd-add` (closed 2026-04-08, Phase 4a gate) AND `bd-snnh` (closed 2026-04-08 with HOLD verdict, fail-fast experiment satisfied). The bd-snnh phantom is a NEW Pattern A variant — not just bd-add but ALL closed-and-satisfied beads need edge cleanup. |
+| Duplicates | UNIQUE — only Phase 4b gate. |
+
+**Phase 2 lenses (8)**
+
+| Lens | Result | Notes |
+|------|--------|-------|
+| L0 Epistemic Fit | PASS | Gate bead, compositional verification (build + test + child closure). |
+| L1 Structural | PASS-minor | Same `Acceptance` shorthand as bd-r3um (FINDING-014). 3 acceptance items + 1 implicit. |
+| L2 Traceability | PASS | AGENTS.md phase ordering. |
+| L3 Postcondition Strength | PASS | 3 binary acceptance criteria. |
+| L4 Scope Atomicity | PASS | Gate scope is "all 60+ children closed". Atomic at the gate level. |
+| L5 Frame Adequacy | MISSING | No Frame Conditions section (same defect as bd-r3um FINDING-017). |
+| L6 Compiler Test | PASS | N/A. |
+| L7 Axiological | PASS | Phase ordering is the methodology backbone. |
+
+**Verdict**: SOUND with 4 findings → action **EDIT**.
+
+**Findings raised**:
+- [FINDING-103] bd-7ij → bd-add is PHANTOM (Pattern A). MINOR.
+- [FINDING-104] bd-7ij → bd-snnh is PHANTOM (Pattern A variant — bd-snnh closed 2026-04-08 with HOLD verdict, edge is satisfied). MINOR. **NEW Pattern A insight**: closed beads beyond bd-add can also be phantom — must check ALL outgoing edges in Phase 3, not just bd-add.
+- [FINDING-105] bd-7ij uses non-template `Acceptance` shorthand (same as FINDING-014). MINOR.
+- [FINDING-106] bd-7ij missing `## Frame Conditions` (same as FINDING-017). MINOR.
+
+#### bd-d6dl — Phase 4b: Operational spec edit workflow via ferratomic-spec edit
+
+**Phase 1**: Code N/A (NEW workflow + CI gate scripts). Spec/08 §23.12.7 verified. Dependencies: cascades through bd-m8ym + bd-r7ht + spec hygiene beads. Phase-label history (4a5 → 4b inversion fix) preserved in body.
+
+**Phase 2**: SUBSTANTIVE — has What/Why/Hypothesis/Methodology/Refinement Sketch/Verification Plan with V:* table. Documents the phase-label inversion correction. PASS on most lenses.
+
+**Verdict**: SOUND → **EDIT** (light polish).
+
+**Findings raised**:
+- [FINDING-109] bd-d6dl references "B17 / bd-bdvf.13 / bd-s56i / bd-iwz3 / bd-hq78 / bd-dmqv / bd-m8ym" — mostly br IDs (good). Pattern C light. MINOR.
+
+#### bd-p8n3 — Phase 4b: Build is the dashboard
+
+**Phase 1**: Code: workspace root `build.rs` (NEW or extending), `Makefile.toml` (NEW), workspace-level wrapper. Spec/08 §23.12.7 verified. Dependencies: bd-m8ym precondition (CLI subcommand), optional bd-gate-cert-genesis. Unique.
+
+**Phase 2**: SUBSTANTIVE — has What/Why/Hypothesis/Methodology/Refinement Sketch/Verification Plan with V:* table including graceful degradation test, Pseudocode Contract starting with `build.rs` snippet. Articulates the "10.0 Intuitiveness 9 → 10 move" — newcomers encounter the spine on first build. PASS on most lenses.
+
+**Verdict**: SOUND → **EDIT** (light polish).
+
+**Findings raised**:
+- [FINDING-110] bd-p8n3 references "bd-gate-cert-genesis" (descriptive label) which is likely bd-j1mp by content. Pattern C variant. MINOR.
+
+#### bd-ipzu — Phase 4b: Flywheel demo via dogfooding the canonical spec store
+
+**Phase 1**: Code: NEW module `ferratomic-verify/src/dogfood/{metrics,queries,ci_hook,runbook}.rs`, `docs/dogfood/RUNBOOK.md`. spec/08 §23.12.7 verified. Dependencies: bd-m8ym + bd-e58u + bd-r7ht. Spec citation includes 5 supporting refs (GOALS.md Tier 1, doc 005/008/010/012). Unique.
+
+**Phase 2**: SUBSTANTIVE — has Hypothesis with 6 quantitative trend predictions, Methodology (7 steps), Refinement Sketch, Verification Plan with V:* table including negative epistemic-fit ("NOT V:LEAN: metrics are statistical aggregates"), Pseudocode Contract starting with DogfoodMetrics struct definition. The 6-metric flywheel demonstration is quantitative and falsifiable. PASS on most lenses.
+
+**Verdict**: SOUND → **EDIT** (light polish).
+
+**Findings raised**:
+- [FINDING-111] bd-ipzu has detailed Hypothesis with 6 specific trend predictions but no explicit Files section enumerating every NEW file. The body mentions module structure inline. MINOR.
+
+#### bd-s56i — Spec hygiene: Resolve duplicate ADR numbers (Pattern F tracker)
+
+**Phase 1 verification**
+
+| Check | Result |
+|-------|--------|
+| Code | N/A — spec hygiene bead. |
+| Spec | bd-s56i is the canonical Pattern F tracker. **Pattern F is bigger than I confirmed**: bd-s56i flags **4 ADR collisions, not 3**. ADR-FERR-020 ("Localized Unsafe for Performance-Critical Cold Start") exists at BOTH `spec/04:507` AND `spec/09:48` with the **identical title**. This is a different defect kind than 031/032/033 (which had different content under the same number) — ADR-020 appears to be content duplication. |
+| Dependencies | bd-d6dl outgoing block (depends on spec edit workflow), bd-7ij + bd-dmqv incoming. |
+| Duplicates | UNIQUE — only Pattern F tracker. |
+
+**Phase 2 lenses**: PASS-substantive — 6 acceptance criteria, file enumeration, total ADR count after fix (36 = 33 unique + 3 dups). Has CI-gate proposal (script that scans for duplicate ADR headings).
+
+**Verdict**: SOUND → action **EDIT** (light polish — verify ADR-020 content vs collision distinction).
+
+**Findings raised**:
+- [FINDING-107] **Pattern F is QUADRUPLE collision, not triple**: bd-s56i flags ADR-FERR-020 ALSO duplicated (`spec/04:507` and `spec/09:48`), with the IDENTICAL title "Localized Unsafe for Performance-Critical Cold Start". Unlike 031/032/033 (different content under same number), ADR-020 may be verbatim content duplication. The spec audit (Section 8) must verify whether spec/04 ADR-020 and spec/09 ADR-020 are identical content, near-identical, or different. **MAJOR for Pattern F scope expansion**. (NOT a defect of bd-s56i itself — bd-s56i correctly identifies the issue.)
+- [FINDING-108] bd-s56i does not yet propose a renumbering scheme — only "renumber to ADR-FERR-034/035/036 if next available". The actual renumbering needs the spec/09 vs spec/04 chronology / authoring history to determine which ADR keeps each number. Defer to spec audit Section 8. MINOR.
+
+#### bd-9be8 — Phase 4b: WAL metadata loses tx.agent() in batch mode
+
+**Phase 1 verification**
+
+| Check | Result |
+|-------|--------|
+| Code | Files cited: `ferratomic-core/src/db/transact.rs` (VALID — db/ stays in core), `ferratomic-store/src/apply.rs` (VALID post-decomp), `ferratomic-wal/src/frame.rs` (VALID). All paths current. The line citation `transact.rs:141-146` and `transact.rs:52-57` are specific code locations the bead identifies as defective. |
+| Spec | INV-FERR-040 (`spec/05:881` Merge Provenance Preservation) verified. ADR-FERR-023 verified earlier. |
+| Dependencies | bd-7ij incoming. No outgoing. |
+| Duplicates | UNIQUE. |
+
+**Phase 2 lenses**: SUBSTANTIVE bug bead. Has Observed (with line citations), Why, Acceptance (5 binary criteria), Files, Severity, Phase. Uses "tx.agent()" in title — **C8 RENAME RESIDUE**: should be tx.node() or tx.origin per bd-k5bv. Pattern adjacent.
+
+**Verdict**: SOUND with 1 MINOR (C8 residue).
+
+**Findings raised**:
+- [FINDING-112] bd-9be8 title says "tx.agent()" — should be "tx.node()" or "tx.origin" per bd-k5bv C8 rename. Body also says "tx.agent()" multiple times. The bead is FOR the C8 rename context but uses pre-rename names. Once bd-k5bv lands, this bead's terminology must be updated. MINOR (or treat as a CASCADE finding from bd-k5bv).
+
+#### bd-fw31 — Phase 4b: batch_transact atomicity gap
+
+**Phase 1 verification**
+
+| Check | Result |
+|-------|--------|
+| Code | Files cited: `ferratomic-core/src/db/transact.rs` (VALID), `ferratomic-wal/src/frame.rs` (VALID), `ferratomic-wal/src/recovery.rs` (VALID), `spec/01-core-invariants.md` (VALID). All paths current. |
+| Spec | INV-FERR-008 (`spec/01:786` WAL Fsync Ordering) verified. |
+| Dependencies | bd-7ij incoming. No outgoing. |
+| Duplicates | UNIQUE. |
+
+**Phase 2 lenses**: SUBSTANTIVE bug bead with TWO fix options (option 1: implement batch-marker protocol; option 2: amend doc to be honest). Recommendation = option 1 with rationale (Tier 1 correctness). Has separate acceptance criteria for each option.
+
+**Verdict**: SOUND → **EDIT** (light polish; the bead is well-structured).
+
+**Findings raised**:
+- [FINDING-113] bd-fw31 introduces "INV-FERR-08x" placeholder for option 2 (at-most-once durability). Same vague-INV-family pattern as FINDING-092/097. MINOR.
+
+#### bd-bmu2 — Phase 4b: Custom rank/select implementation contingency
+
+**Phase 1**: Code N/A unless triggered. Files: `ferratomic-positional/src/wavelet/rankselect.rs` (NEW). References gvil.3 contract. Dependencies: bd-jolx + bd-vhgn outgoing, bd-o6io incoming. Body says "bd-wave-lib-pick" — likely bd-jolx. Pattern C variant.
+
+**Phase 2**: SUBSTANTIVE — has What/Why/Acceptance (6 binary criteria, including "within 2x of best library performance" + "MIRI clean" + "zero unsafe in our code"). Conditional contingency framing. PASS on most lenses.
+
+**Verdict**: SOUND → **EDIT** (light polish; verify "bd-wave-lib-pick" → bd-jolx).
+
+**Findings raised**:
+- [FINDING-114] bd-bmu2 references "bd-wave-lib-pick" descriptive label which is likely bd-jolx (Wavelet matrix library selection). Pattern C variant — descriptive label vs br ID. MINOR.
+
+#### bd-biw6 — Verify mmap-based zero-copy cold start
+
+**Phase 1 verification**
+
+| Check | Result |
+|-------|--------|
+| Code | Cited paths: `ferratomic-core/src/db/` (VALID), `ferratomic-checkpoint/src/v4.rs` (VALID — verified earlier), `ferratomic-verify/benches/cold_start.rs` (likely NEW). |
+| Spec | INV-FERR-028 (cold start latency, `spec/03:?`), INV-FERR-070 (mmap zero-copy, verified earlier). |
+| Dependencies | 2 incoming `blocks` (bd-51zo, bd-pg85, bd-7ij). No outgoing. **No bd-add phantom**. |
+| Duplicates | NOT a duplicate of bd-51zo (clearly distinguished: bd-biw6 verifies, bd-51zo implements). |
+
+**Phase 2 lenses**: SUBSTANTIVE bug bead — has Observed (5 specific verification points), Acceptance (5 binary criteria), Files, Severity. Specifically distinguishes "if mmap missing → file implementation bead; if present but slow → file perf bead" — branching contingency. Good defensive structure.
+
+**Verdict**: SOUND → **EDIT** (light polish).
+
+**Findings raised**:
+- [FINDING-115] bd-biw6 cites "spec/03 line 395" for cold start budget. Need to verify exact line. MINOR (file path verification deferred).
+
+#### bd-2cud — Phase 4b: Operational observability for wavelet matrix path
+
+**Phase 1**: Code: NEW `observability.rs` modules in ferratomic-store, ferratomic-positional, ferratomic-checkpoint. spec/09 amendment. Cargo feature gate. Dependencies: bd-7ij incoming. No outgoing. Unique.
+
+**Phase 2**: SUBSTANTIVE — has What/Why/Acceptance (6 binary criteria) including OpenTelemetry compatibility, Cargo feature gate (zero overhead by default), integration with bd-dwhr.
+
+**Verdict**: SOUND → **EDIT**.
+
+**Findings raised**:
+- [FINDING-116] bd-2cud OpenTelemetry dependency adds new transitive deps; should be cargo deny audited at integration time. Note, not a current defect. MINOR.
+
+#### bd-ei8d — Tier 4: Reflective rule convergence at billion-scale
+
+**Phase 1**: Code: NEW `ferratomic-verify/benches/cascade_billion.rs`, doc updates to docs/ideas/011. Dependencies: bd-imwb (1M baseline) + bd-gvil. Phase: 4b → 4c noted.
+
+**Phase 2**: SUBSTANTIVE — has 4 specific concerns (power-law amplification, working set, convergence under continuous load, CRDT convergence under cascade), 7 binary acceptance criteria. PASS.
+
+**Verdict**: SOUND → **EDIT**.
+
+#### bd-v3gz — Tier 4: Federation steady-state network bandwidth analysis
+
+**Phase 1**: Code: spec/06 amendment + NEW bench `federation_bandwidth.rs`. Dependencies: bd-85j.13 + bd-5bvd + bd-gvil. Phase: 4b → 4c noted.
+
+**Phase 2**: SUBSTANTIVE — has 5 specific concerns (write rate, chunk granularity, backpressure, multi-store mesh, compression), 6 binary acceptance criteria. References "spec/06 §S23.9.6" — section name should be `§23.9.6` (missing § per FINDING-077 pattern). PASS-minor.
+
+**Verdict**: SOUND → **EDIT**.
+
+**Findings raised**:
+- [FINDING-117] bd-v3gz references "spec/06 §S23.9.6" instead of `§23.9.6` (S vs §). Same pattern as FINDING-077. MINOR.
+
+#### bd-9khc — Tier 4: Sharding hardening at billion-scale
+
+**Phase 1**: Code: NEW `docs/ops/sharding.md`, ferratomic-store/src/sharding/. spec/02 amendment optional. Dependencies: bd-85j.14 (base sharding) + bd-gvil. Phase: 4b → 4c.
+
+**Phase 2**: SUBSTANTIVE — has 5 operational concerns (hot-spot detection, rebalancing, cross-shard latency, failure isolation, stress testing), 7 binary acceptance criteria including consistent-hashing strategy and 24h adversarial stress. Introduces another "INV-FERR-08x" placeholder.
+
+**Verdict**: SOUND → **EDIT**.
+
+**Findings raised**:
+- [FINDING-118] bd-9khc introduces another "INV-FERR-08x" placeholder for graceful degradation under shard loss. Pattern continues. MINOR.
+
+#### bd-dwhr — Phase 4b gate certification document
+
+**Phase 1**: Code: NEW `docs/gates/phase-4b-certification.md`. spec/09 + GOALS.md amendments. Dependencies: bd-ipzu outgoing, bd-7ij incoming. Body says "this document IS the closure artifact for bd-7ij" — meta-dependency. Unique.
+
+**Phase 2**: SUBSTANTIVE — has 8 evidence sections (scale validation, sharding multiplier, projected 1B feasibility, 6 fail-fast resolutions, risk beads addressed, Lean theorems, Kani harnesses, doc 013 confidence vector), 5 binary acceptance criteria including LITERAL signing (the gate cert is stored as signed datoms in the canonical store via bd-r7ht).
+
+**Verdict**: SOUND — strong axiological alignment with the spine reframe → **EDIT**.
+
+**Findings raised**:
+- [FINDING-119] bd-dwhr's literal signing requirement (acceptance #3) creates a circular dependency: bd-dwhr depends on bd-r7ht (B17 bootstrap test) for the signing capability, AND bd-dwhr is one of the deliverables that the gate cert is supposed to record. Phase 3 must verify this isn't actually circular. MINOR.
+
+#### bd-xlvp — Doc 013 calibrated confidence update
+
+**Phase 1**: Code: docs/ideas/013-implementation-risk-vectors.md (existing). Dependencies: cascades through 6 fail-fast experiments (bd-snnh, bd-0lk8, bd-lzy2, bd-imwb, bd-lfgv, bd-59dc). Has explicit "Recalibration Log" section.
+
+**Phase 2**: SUBSTANTIVE — has explicit DONE/PENDING tracking. **5 acceptance criteria marked DONE** (bd-snnh recalibration committed). 5 PENDING criteria (one per remaining fail-fast experiment). Bead remains OPEN until all 6 close.
+
+**Verdict**: SOUND — meta-bead with explicit progress tracking → **EDIT** (no defects).
+
+**Findings raised**:
+- [FINDING-120] bd-xlvp has 5 of 10 acceptance criteria marked DONE 2026-04-08 — partial closure pattern. The bead's open state is correct (waiting on 5 fail-fast experiments), but the explicit DONE/PENDING tracking is unusual and helpful. NOT a defect; observational note.
+
+#### bd-biw6 — Verify mmap-based zero-copy cold start
+
+_Audit pending._
+
+#### bd-5bvd — RESEARCH: Federation bootstrap protocol at billion-scale
+
+**Phase 1**: Code: spec/05 + spec/06 amendments + NEW `docs/research/bootstrap-options.md`. Dependencies: bd-gvil. bd-v3gz + bd-7ij incoming. Unique.
+
+**Phase 2**: SUBSTANTIVE — has 3 plausible designs (naive full-transfer, wavelet matrix shipping, lazy materialization), 6 binary acceptance criteria, INV-FERR-08x placeholder. References "spec/06 §S23.9.6" (S vs § issue, FINDING-077 pattern).
+
+**Verdict**: SOUND → **EDIT**.
+
+**Findings raised**:
+- [FINDING-121] bd-5bvd references "spec/06 §S23.9.6" instead of `§23.9.6`. Pattern (FINDING-077). MINOR.
+- [FINDING-122] bd-5bvd introduces another "INV-FERR-08x" placeholder. Pattern continues. MINOR.
+
+#### bd-4k8s — RESEARCH: Single-writer scalability ceiling
+
+**Phase 1**: Code: NEW `ferratomic-verify/benches/sustained_write.rs` + spec/09 amendment. Dependencies: bd-7ij incoming. Unique. INV-FERR-007 (Write Linearizability) cited — need verify. INV-FERR-017 (sharding) cited.
+
+**Phase 2**: SUBSTANTIVE — has Why with 3 quantitative concerns, 6 binary acceptance criteria, explicit Risk section ("if ceiling < 10K tx/s, agentic OS scale targets need revision OR we need a writer pool architecture").
+
+**Verdict**: SOUND → **EDIT**.
+
+#### bd-lzy2, bd-imwb, bd-59dc, bd-lfgv — Fail-fast experiment beads (sister to bd-0lk8)
+
+All four use the **experiment template** (Hypothesis / Methodology / Success Criteria / Failure Response / Time Budget) — same shape as bd-0lk8 which audited as SOUND. Each is well-developed:
+
+- **bd-lzy2** (Storage footprint cost model): Hypothesis with 3 quantitative predictions (20-50 GB at 100M, Ed25519 in top-3, model within 20% of prototype). Methodology enumerates 10 storage components with per-component cost derivation. Phase: 4b + 4c.
+
+- **bd-imwb** (Truth maintenance cascade debt): Hypothesis with 5 predictions including the **criticality hypothesis** (cascade size distribution power-law per Gutenberg-Richter form, tau in narrow range) and the **1/f hypothesis** (cascade processing rate PSD shows 1/f). Methodology specifies Clauset-Shalizi-Newman power-law fitting. **Most scientifically rigorous bead in audit**. Phase: 4b + 4d.
+
+- **bd-59dc** (Projection calculus cost model): Hypothesis on cache hit rate, dream cycle compute budget, query latency. Methodology mocks 5 cognitive nodes + 10 mechanical nodes. 6 acceptance criteria. Phase: 4b + 4d.
+
+- **bd-lfgv** (Reflective rule library hand-build): Hypothesis on internal consistency of 50-rule library across 3 trust tiers. Methodology uses Ferratomic's own bug triage as the test domain. Phase: 4b + 4d.
+
+**All four**: Phase 1 — code paths plausibly NEW, dependencies cascading through bd-gvil/bd-imwb/bd-7ij, deliverable filenames have placeholder dates (FINDING-028 pattern). All four reference `docs/ideas/013-implementation-risk-vectors.md` as the primary source.
+
+**Verdict**: All 4 SOUND → **EDIT** (light polish; resolve placeholder dates).
+
+**Findings raised**:
+- [FINDING-123] bd-lzy2/imwb/59dc/lfgv all have `2026-04-XX` placeholder dates in deliverable filenames (same pattern as FINDING-028 for bd-0lk8). MINOR (4× hits).
+- [FINDING-124] bd-imwb has the most rigorous experimental methodology in the audit (Clauset-Shalizi-Newman power-law fit + 1/f PSD analysis). NOT a defect — exemplary experimental design worth preserving. **Promote bd-imwb as the experiment-bead exemplar** alongside bd-qguw/bd-hcns (implementation exemplars).
+
+#### bd-kt98 — Value-pooled deduplicated storage
+
+**Phase 1**: Code: NEW `ferratomic-core/src/value_pool.rs` (or in ferratomic-positional?), modifications to ferratom/src/datom.rs and ferratomic-core/src/positional.rs. **Path validity**: ferratomic-core/src/positional.rs DOES NOT EXIST after the 11-crate decomp (positional logic moved to ferratomic-positional crate). STALE PATH (Pattern B). Cited INV-FERR-076 — need verify. Dependencies: bd-add (PHANTOM — Pattern A), bd-gvil + bd-7ij incoming.
+
+**Phase 2**: SUBSTANTIVE — has Specification Reference, What It Does, Performance Context table (1.4-1.7× reduction), Phase justification, Files. Missing some sections (Hypothesis, Pseudocode Contract, Verification Plan).
+
+**Verdict**: NEEDS WORK with 2 MAJOR (stale path + Pattern A phantom) → **EDIT**.
+
+**Findings raised**:
+- [FINDING-125] bd-kt98 → bd-add PHANTOM (Pattern A). MINOR.
+- [FINDING-126] bd-kt98 Files section references `ferratomic-core/src/positional.rs` which moved to `ferratomic-positional/src/` post-decomp. Same Pattern B. MAJOR.
+
+#### bd-t9h — Align primary prolly value encoding with datom round-trip claims
+
+**Phase 1**: Code: spec/06 amendment only. Spec citation: `INV-FERR-045a (Deterministic Chunk Serialization)` at `spec/06:433-632`. **CRITICAL FINDING**: INV-FERR-045a does NOT exist in spec/06 (only INV-FERR-045 at line 119, no 045a sub-INV). Same defect as FINDING-101 (bd-3gk). The bead is auditing a non-existent invariant. Either (a) the bead is referring to a sub-section of INV-FERR-045 (which would need section name not INV-FERR-045a), or (b) INV-FERR-045a was an aspiration that was never actually authored.
+
+**Phase 2**: SUBSTANTIVE bug bead — has Spec Reference, Pre/Postconditions, Frame Conditions, Bug Analysis (Observed/Expected/Root cause/Fix), Verification Plan, Files, Dependencies. PASS on most lenses except Lens 2 (citation mismatch).
+
+**Verdict**: NEEDS WORK → **EDIT** (resolve the INV-FERR-045a vs 045 mismatch + Pattern A).
+
+**Findings raised**:
+- [FINDING-127] bd-t9h cites `INV-FERR-045a` which does not exist in spec/06 (only INV-FERR-045 at line 119). Same defect as FINDING-101. Either bd-t9h is citing a sub-section by an invented INV ID, or the spec amendment that created 045a was never made. **MAJOR** — unverifiable claim.
+- [FINDING-128] bd-t9h → bd-add PHANTOM. Pattern A. MINOR.
+
+#### bd-2rq — Document V1 remote query boundary
+
+**Phase 1**: Code: spec/05-federation.md amendment only. INV-FERR-037 (`spec/05:38`) verified. **Pattern A**: bd-add PHANTOM. Cites INV-FERR-038a — need verify.
+
+**Phase 2**: SUBSTANTIVE bug bead with Bug Analysis (Observed/Expected/Root cause/Fix). 4 binary postconditions. PASS.
+
+**Verdict**: SOUND with 1 MINOR (Pattern A) → **EDIT**.
+
+**Findings raised**:
+- [FINDING-129] bd-2rq → bd-add PHANTOM (Pattern A). MINOR.
+- [FINDING-130] bd-2rq cites INV-FERR-038a — need to verify existence. MINOR (deferred verification).
+
+#### bd-26x — Unify TransportResult wire and API contracts
+
+**Phase 1**: Code: spec/05 amendment. INV-FERR-038 verified. INV-FERR-038a cited again (need verify). **Pattern A**: bd-add PHANTOM. The bead identifies TWO conflicting TransportResult definitions in spec/05 (line ~444 vs ~755) — a real spec internal contradiction.
+
+**Phase 2**: SUBSTANTIVE bug bead with detailed Bug Analysis showing the field-name conflict (`latency` vs `server_elapsed_micros`) and correct fix (definition B is canonical). PASS.
+
+**Verdict**: SOUND with 1 MINOR (Pattern A) + the bead describes a real spec defect → **EDIT**.
+
+**Findings raised**:
+- [FINDING-131] bd-26x → bd-add PHANTOM. Pattern A. MINOR.
+- [FINDING-132] bd-26x correctly identifies a real spec defect (TransportResult definition conflict in spec/05). The defect is in the spec, not in the bead. NOTE — this is a SPEC AUDIT preview.
+
+#### bd-r2u — Define manifest-root snapshot semantics end to end
+
+**Phase 1**: Code: spec/06 amendment. INV-FERR-049 verified (`spec/06:1050`), INV-FERR-047 verified (`spec/06:530`), INV-FERR-048 verified (`spec/06:781`). S23.9.0 (RootSet) — section verified at lines 119-137 by the bead's own line citations. **Pattern A**: bd-add PHANTOM.
+
+**Phase 2**: SUBSTANTIVE bug bead with detailed Bug Analysis showing a real spec drift: INV-FERR-049 was written before S23.9.0 introduced the multi-tree RootSet manifest model, so the Snapshot struct still treats root as a direct tree pointer instead of a manifest hash. PASS.
+
+**Verdict**: SOUND with 1 MINOR (Pattern A); identifies a real spec defect → **EDIT**.
+
+**Findings raised**:
+- [FINDING-133] bd-r2u → bd-add PHANTOM. Pattern A. MINOR.
+- [FINDING-134] bd-r2u correctly identifies INV-FERR-049 spec drift after the S23.9.0 RootSet manifest model was added. SPEC AUDIT preview.
+
+#### bd-f74 — Make chunk canonicality enforceable at the type boundary
+
+**Phase 1**: Code: spec/06 amendment for INV-FERR-045a Level 2. **CRITICAL**: bd-f74 cites `INV-FERR-045a` at `spec/06:433-656`. As established by FINDING-101 and FINDING-127, INV-FERR-045a does NOT exist in spec/06. The bead is auditing a non-existent invariant (or an unauthored sub-section). **Pattern A**: bd-add PHANTOM.
+
+**Phase 2**: SUBSTANTIVE bug bead with detailed Bug Analysis arguing for type-level enforcement of LeafChunk/InternalChunk canonicality (per AGENTS.md "invalid states unrepresentable" discipline). The bead's content is correct in spirit but the spec citation is broken.
+
+**Verdict**: NEEDS WORK → **EDIT** (resolve INV-FERR-045a citation; remove Pattern A).
+
+**Findings raised**:
+- [FINDING-135] bd-f74 cites INV-FERR-045a (third bead with this defect after FINDING-101 bd-3gk and FINDING-127 bd-t9h). **Pattern emerging**: 3 beads cite a non-existent INV-FERR-045a in spec/06. Either the spec amendment was planned, partially executed, or the INV ID was invented in beads but never landed in spec. **Cross-cuts spec audit Section 7** — must determine canonical state. MAJOR.
+- [FINDING-136] bd-f74 → bd-add PHANTOM. Pattern A. MINOR.
+
+#### bd-14b — Complete INV-FERR-048 Level 2: transfer algorithm and decode_child_addrs
+
+**Phase 1**: Code: spec/06 amendment for INV-FERR-048 Level 2 (lines 1151-1416 cited). Lines 1151-1416 plausibly within INV-FERR-048 (which starts at `spec/06:781`). **Spec citations**: cites INV-FERR-045a as a precondition — DOESN'T EXIST in spec/06 (FINDING-101 pattern). Cites bd-2cv as closed dependency — need verify.
+
+**Phase 2**: SUBSTANTIVE — has 4 binary postconditions, frame conditions, refinement sketch. PASS on most lenses except L2 (precondition references INV-FERR-045a which doesn't exist).
+
+**Verdict**: NEEDS WORK → **EDIT** (resolve INV-FERR-045a; remove Pattern A).
+
+**Findings raised**:
+- [FINDING-137] bd-14b cites INV-FERR-045a precondition — same defect as FINDING-101/127/135. MAJOR (cross-cuts).
+- [FINDING-138] bd-14b → bd-add PHANTOM. Pattern A. MINOR.
+
+#### bd-132 — Complete INV-FERR-047 Level 2: DiffIterator internal algorithm
+
+**Phase 1**: Code: spec/06 amendment for INV-FERR-047 Level 2 (lines 900-1147 cited). INV-FERR-047 starts at `spec/06:530`, so lines 900-1147 fall within. **Spec citations**: also cites INV-FERR-045a precondition (DOESN'T EXIST).
+
+**Phase 2**: SUBSTANTIVE — has 6 binary postconditions including memory bound, entry ordering, cancellation semantics. PASS on most lenses except L2.
+
+**Verdict**: NEEDS WORK → **EDIT**.
+
+**Findings raised**:
+- [FINDING-139] bd-132 cites INV-FERR-045a — pattern continues. MAJOR.
+- [FINDING-140] bd-132 → bd-add PHANTOM. Pattern A. MINOR.
+
+#### bd-400 — Add INV-FERR-046a: rolling hash determinism and algorithm specification
+
+**Phase 1**: Code: spec/06 amendment to ADD INV-FERR-046a after INV-FERR-046 (`spec/06:290-528`). The bead's task IS to author INV-FERR-046a — so unlike bd-14b/132/t9h/f74 which cite 045a as existing, bd-400 is the AUTHORING source for 046a (a different sub-INV). The bead also cites INV-FERR-045a as a precondition — pattern continues.
+
+**Phase 2**: SUBSTANTIVE — has 4 binary postconditions including a falsification condition and proptest strategy. The bead is authoring a new sub-INV. PASS.
+
+**Verdict**: SOUND → **EDIT** (Pattern A removal + verify INV-FERR-046a authoring path).
+
+**Findings raised**:
+- [FINDING-141] bd-400 cites INV-FERR-045a as precondition. Pattern continues. MAJOR.
+- [FINDING-142] bd-400 → bd-add PHANTOM. Pattern A. MINOR.
+
+### Critical systemic finding (6+ beads affected):
+
+**Pattern H — Fabricated INV-FERR / spec citations** (NEW pattern from 4b P1 audit):
+
+**Description**: Multiple Phase 4b prolly tree beads cite spec content that **does not exist** in `spec/06-prolly-tree.md`:
+
+- `INV-FERR-045a` — cited by bd-3gk, bd-t9h, bd-r2u, bd-f74, bd-14b, bd-132, bd-400 as if it exists. Grep returns ZERO matches in spec/06 (and spec/05 too).
+- `S23.9.0 "Canonical Datom Key Encoding"` — cited by bd-t9h, bd-r2u with specific line ranges (119-258 and 119-137). Grep returns ZERO matches.
+- bd-3gk's Progress section says "DONE: INV-FERR-045a chunk serialization (lines 433-632)" — but lines 433-632 in spec/06 are inside INV-FERR-046 (the proptest strategy), not a separate INV-FERR-045a section.
+
+**Hypothesis**: A planned spec amendment (likely from a session before 020) was supposed to add INV-FERR-045a and S23.9.0 to spec/06. The beads were authored against the planned spec, but the spec amendment was never committed. OR the spec was amended and then reverted. OR the IDs were renamed without updating the beads.
+
+**Severity**: **CRITICAL** for the affected 7 beads. Their core spec citations are unverifiable. Implementing agents would be unable to find the cited content.
+
+**Phase 3 / Spec audit (Section 7) action**:
+1. Determine canonical state: does INV-FERR-045a / S23.9.0 exist in any spec file or any branch?
+2. If yes (different file or branch): update bead citations to match.
+3. If no: either author the missing spec content (per the planned design) or rewrite the affected beads to cite existing INV-FERR-045 sub-sections.
+
+#### bd-85j.12 — FERR-P4B-BENCH: Scaling benchmarks
+
+**Phase 1**: Code: NEW Criterion benchmark suite. Spec citations: INV-FERR-026/027/028/025 (perf invariants — should verify). Dependencies: bd-85j.7 (closed Phase 4a Store), bd-85j.13 (Phase 4b prolly).
+
+**Phase 2**: SUBSTANTIVE — has 6 binary postconditions including criterion HTML reports + threshold assertions + baseline tracking. PASS.
+
+**Verdict**: SOUND → **EDIT**.
+
+#### bd-85j.13 — FERR-P4B-PROLLY: Prolly tree block store
+
+**Phase 1**: Code: NEW prolly tree implementation. **Pattern H hit**: postcondition #2 cites `INV-FERR-045a` ("Deterministic chunk serialization") which doesn't exist in spec/06. Postconditions reference "spec S23.9", "spec S23.9.1", "spec S23.9.2", "spec S23.9.3" — none of which exist as headings in spec/06. Dependencies: bd-85j.7 (closed).
+
+**Phase 2**: SUBSTANTIVE — has 10 binary postconditions covering all of INV-FERR-045..050 + chunking + manifest + journal. The spec citations are broken but the design intent is clear.
+
+**Verdict**: NEEDS WORK → **EDIT** (resolve Pattern H citations).
+
+**Findings raised**:
+- [FINDING-143] bd-85j.13 cites INV-FERR-045a + S23.9.x sections — Pattern H. The 10 postconditions are otherwise sound. MAJOR (cross-cuts).
+
+#### bd-85j.14 — FERR-P4B-SHARD: Entity-hash sharding
+
+**Phase 1**: Code: `ferratomic-core/src/shard/mod.rs` + `shard/query.rs` — **PATH POSSIBLY STALE post-decomp**. Sharding may have moved to ferratomic-store/. Need verification. Spec: INV-FERR-017 + INV-FERR-033 + ADR-FERR-006. Need verify all three.
+
+**Phase 2**: SUBSTANTIVE — has 4 binary postconditions, partition-theoretic refinement sketch (coverage/disjointness/union), Kani harness for bounded N. PASS on most lenses.
+
+**Verdict**: NEEDS WORK → **EDIT** (verify shard/ path; Pattern A check).
+
+**Findings raised**:
+- [FINDING-144] bd-85j.14 Files section references `ferratomic-core/src/shard/` — needs verification post-decomp. May have moved to ferratomic-store/. MINOR (path validation).
 
 ### 5.3 P2 beads (~25+)
 
@@ -2157,8 +2602,12 @@ The handoff section below identifies the next pickup point.
 
 ### Next pickup point — Session 2
 
-**Phase**: Bead audit Phase 1 — **Phase 4b P1 cluster** (~30 beads)
-**Next bead**: bd-d6dl (or another P1 — order TBD; recommend starting with the highest-centrality P1 beads)
+**Phase**: Bead audit Phase 1 — **Phase 4b P2 cluster** (~25 beads remaining)
+**Next bead**: bd-o0suq (P2 leaf), or by impact ordering at session start.
+
+**4b P2 beads to audit** (~25): bd-o0suq, bd-xk2je, bd-j7akd, bd-wo07o, bd-dmqv, bd-iwz3, bd-q188, bd-a7i0, bd-p7ie, bd-pdns, bd-2crm, bd-xr1f, bd-7hmv, bd-i4k2, bd-f5hl, bd-keyt, bd-nhui, bd-2ac, bd-39r, bd-18a, bd-26q.
+
+After 4b P2: P3 (~9 beads), P4 (1 bead). After 4b cluster: spec audits (Sections 6-8). Then Phase 3 reconciliation.
 
 **Recommended P0 order for 4b** (~20 beads):
 1. bd-y1rs (EPIC) — context first
