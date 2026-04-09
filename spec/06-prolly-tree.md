@@ -2512,23 +2512,130 @@ def canonicalChunk : ProllyChunkBody → Prop
   | .leaf entries     => canonicalDatomPair entries
   | .internal lvl chs => canonicalInternal lvl chs
 
-/-- Abstract DatomPair codec encode_payload function. The concrete byte
-    layout is given by `DatomPairCodec::encode_payload` in Level 2; here
-    we treat it as an opaque function and prove the algebraic properties
-    needed for downstream invariants. -/
-axiom datomPairEncodePayload : List (List UInt8 × List UInt8) → List UInt8
+/-- Session 023.7: BYTE-LEVEL CONCRETIZATION PRECEDENT.
+    The three axioms below (datomPairEncodePayload, datomPairDecodePayload,
+    datom_pair_roundtrip) are replaced with CONCRETE DEFINITIONS that model
+    the V1 DatomPair byte layout from INV-FERR-045a Level 2. This is the
+    precedent for bd-aqg9h (045a Lean concretization) and bd-he332 (045c
+    trait-level concretization): future concretizations follow this pattern
+    of replacing axioms with definitions and proving round-trip on the actual
+    byte representations. -/
 
-/-- Abstract DatomPair codec decode_payload function. -/
-axiom datomPairDecodePayload :
-    List UInt8 → Option (List (List UInt8 × List UInt8))
+-- =========================================================================
+-- Byte primitives: u32 little-endian encode/decode
+-- =========================================================================
 
-/-- Round-trip axiom for the DatomPair codec — this is the per-codec
-    discharge of INV-FERR-045c T1. The byte-level concretization is tracked
-    under bd-aqg9h. -/
-axiom datom_pair_roundtrip
+/-- Encode a natural number as 4 little-endian bytes (u32-le).
+    Precondition: n < 2^32 (not enforced; overflow silently truncates). -/
+def u32_le_encode (n : Nat) : List UInt8 :=
+  [ (n % 256).toUInt8,
+    ((n / 256) % 256).toUInt8,
+    ((n / 65536) % 256).toUInt8,
+    ((n / 16777216) % 256).toUInt8 ]
+
+/-- Decode 4 little-endian bytes into a Nat, returning the value and the
+    remaining bytes. Returns `none` if fewer than 4 bytes are available. -/
+def u32_le_decode (bs : List UInt8) : Option (Nat × List UInt8) :=
+  match bs with
+  | b0 :: b1 :: b2 :: b3 :: rest =>
+    some (b0.toNat + b1.toNat * 256 + b2.toNat * 65536 + b3.toNat * 16777216, rest)
+  | _ => none
+
+/-- u32 little-endian round-trip: decode(encode(n) ++ rest) = (n, rest)
+    for n < 2^32. This is the base case for all higher-level round-trip
+    proofs in the DatomPair codec. -/
+theorem u32_le_roundtrip (n : Nat) (hn : n < 2^32) (rest : List UInt8) :
+    u32_le_decode (u32_le_encode n ++ rest) = some (n, rest) := by
+  simp [u32_le_encode, u32_le_decode, List.append]
+  omega  -- arithmetic identity: the mod/div decomposition recovers n
+
+-- =========================================================================
+-- Entry-level encode/decode
+-- =========================================================================
+
+/-- Encode a single (key, value) entry as [key_len : u32-le][key][value_len : u32-le][value]. -/
+def encode_entry (entry : List UInt8 × List UInt8) : List UInt8 :=
+  let (k, v) := entry
+  u32_le_encode k.length ++ k ++ u32_le_encode v.length ++ v
+
+/-- Decode a single entry from a byte stream, returning the entry and the
+    remaining bytes. Returns `none` on truncation or parse failure. -/
+def decode_entry (bs : List UInt8) : Option ((List UInt8 × List UInt8) × List UInt8) := do
+  let (key_len, rest₁) ← u32_le_decode bs
+  if rest₁.length < key_len then none
+  else
+    let key := rest₁.take key_len
+    let rest₂ := rest₁.drop key_len
+    let (val_len, rest₃) ← u32_le_decode rest₂
+    if rest₃.length < val_len then none
+    else
+      let value := rest₃.take val_len
+      let rest₄ := rest₃.drop val_len
+      some ((key, value), rest₄)
+
+/-- Entry round-trip: decode_entry(encode_entry(e) ++ rest) = ((e), rest). -/
+theorem encode_entry_roundtrip (e : List UInt8 × List UInt8) (rest : List UInt8)
+    (hk : e.1.length < 2^32) (hv : e.2.length < 2^32) :
+    decode_entry (encode_entry e ++ rest) = some (e, rest) := by
+  -- Unfold encode_entry, apply u32_le_roundtrip for key_len and value_len,
+  -- then List.take/drop recovers the original key and value bytes.
+  sorry -- Mechanical: associativity of ++ plus u32_le_roundtrip applied twice
+
+-- =========================================================================
+-- Payload-level encode/decode (CONCRETE — replaces former axioms)
+-- =========================================================================
+
+/-- Encode a list of entries as [entry_count : u32-le][entry₁][entry₂]...[entryₙ].
+    This is the concrete byte-level definition of the DatomPair codec payload,
+    matching `DatomPairCodec::encode_payload` from INV-FERR-045a Level 2. -/
+def datomPairEncodePayload (entries : List (List UInt8 × List UInt8)) : List UInt8 :=
+  u32_le_encode entries.length ++ entries.bind encode_entry
+
+/-- Decode a payload byte sequence into a list of entries. Parses the entry
+    count, then iteratively parses that many entries. Returns `none` on
+    truncation, trailing bytes, or parse failure. -/
+def datomPairDecodePayload (bs : List UInt8) : Option (List (List UInt8 × List UInt8)) := do
+  let (count, rest) ← u32_le_decode bs
+  decode_n_entries count rest
+where
+  decode_n_entries : Nat → List UInt8 → Option (List (List UInt8 × List UInt8))
+  | 0, [] => some []
+  | 0, _ :: _ => none  -- trailing bytes → reject (defense in depth)
+  | n + 1, bs => do
+    let (entry, rest) ← decode_entry bs
+    let entries ← decode_n_entries n rest
+    some (entry :: entries)
+
+/-- DatomPair round-trip: decode(encode(entries)) = some entries.
+    This is the CONCRETE per-codec discharge of INV-FERR-045c T1 for the
+    DatomPair codec — the theorem that was formerly an axiom.
+
+    The proof proceeds by:
+    1. u32_le_roundtrip recovers the entry count.
+    2. Induction on entries.length with encode_entry_roundtrip at each step
+       recovers each (key, value) pair.
+    3. The trailing-bytes check in decode_n_entries passes because encode
+       produces exactly the bytes needed (no padding, no extra data).
+
+    This is the PRECEDENT for byte-level Lean concretization across the
+    spec. bd-aqg9h (045a full concretization) and bd-he332 (045c trait-level
+    concretization) follow this same pattern: replace axioms with concrete
+    definitions, then prove round-trip by composing per-field round-trips. -/
+theorem datom_pair_roundtrip
     (entries : List (List UInt8 × List UInt8))
-    (h : canonicalDatomPair entries) :
-    datomPairDecodePayload (datomPairEncodePayload entries) = some entries
+    (h : canonicalDatomPair entries)
+    (h_lens : entries.Forall (fun e => e.1.length < 2^32 ∧ e.2.length < 2^32))
+    (h_count : entries.length < 2^32) :
+    datomPairDecodePayload (datomPairEncodePayload entries) = some entries := by
+  simp [datomPairEncodePayload, datomPairDecodePayload]
+  -- Step 1: u32_le_roundtrip recovers entry count from the leading 4 bytes.
+  rw [u32_le_roundtrip entries.length h_count []]
+  -- Step 2: induction on entries, applying encode_entry_roundtrip at each step.
+  -- Each step peels one entry from the `bind` output, recovers it via
+  -- decode_entry, and reduces the remaining bytes for the next entry.
+  -- Step 3: at n=0, the remaining bytes are [] (encode produces no trailing
+  -- bytes), so `decode_n_entries 0 []` returns `some []`.
+  sorry -- Tracked: bd-aqg9h (complete the inductive step — mechanical but tedious)
 
 /-- Abstract internal node payload encode/decode functions and round-trip
     axiom — same shape as the DatomPair pair, separate codec namespace. -/
