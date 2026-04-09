@@ -1,8 +1,8 @@
 # Ferratomic Continuation — Session 023
 
-> Generated: 2026-04-08 (end of session 022)
-> Last commit: `668a009` "spec(05): session 022 Phase 4 remediation — Pattern F + CRITICAL fixes"
-> Branch: main
+> Generated: 2026-04-09 (end of session 022 + 022.5)
+> Last commit: `15f7252` "docs: session 022.5 closeout — handoff prompt + QUICKSTART updates"
+> Branch: main (synced with master)
 > Phase 4a: CLOSED at A+ 9.57 (`v0.4.0-gate` at commit `732c3aa`)
 
 ## Read First (in this exact order)
@@ -78,14 +78,33 @@
 - spec/09 perf ADRs preserved at original numbers
 - spec/README.md ADR count UNCHANGED (still 32 — renumber moves identifiers, not their count)
 
-### Session 022 commits (5 total)
+### Decisions Made (session 022 + 022.5)
 
-1. `7d764bb` — 6 of 7 orphan audits + Pattern I escalation note
+1. **Pattern F federation renumber EXECUTED**: spec/05 ADR-031/032/033 → 034/035/036 (12 occurrences + spec/README.md). spec/09 perf ADRs preserved at original numbers.
+2. **Pattern D RESOLVED**: INV-FERR-029 = "LIVE View Resolution" (spec/03:500); INV-FERR-032 = "LIVE Resolution Correctness" (spec/03:937). bd-u5vi needs title fix; bd-u2tx needs number fix.
+3. **Pattern I escalated and authorized** (9th NEW pattern): 50% phantom-fix rate among Session 015 cleanroom-finding orphans. Filed as session 026 follow-up.
+4. **"Assert wins" tie-breaking rule LOCKED** for INV-FERR-029 Level 0 (session 022.5): canonical comparison `rank(Retract)=0, rank(Assert)=1`, opposite of Rust's derived Ord. Applied to spec/03.
+5. **Transport trait canonical location: INV-FERR-038** (session 022.5): resolved dual-Transport-definition. Stale `#[async_trait]` version replaced with canonical `Pin<Box<dyn Future>>`.
+
+### Stopping Point
+
+Session 022.5 ended at the completion of ALL 5 CRITICAL §23.8.5 spec findings. The spec/05 §23.8.5 audit (Phase 022b) is fully complete through lifecycle/17 Phases 1-5 (including Phase 4 remediation and Phase 5 convergence verification). The spec/03 INV-FERR-029 amendment is fully authored (Level 0 tie-breaking rule + Level 2 three-path equivalence + bd-l64y regression proptest). Working tree is clean, all commits pushed to main + master, `git status` shows "up to date with origin."
+
+No mid-task state. The next session starts fresh with spec/06.
+
+### Session 022 + 022.5 commits (8 total)
+
+**Session 022** (6 commits):
+1. `7d764bb` — 6/7 orphan audits + Pattern I escalation note
 2. `d676fd8` — Phase 022a complete (bd-0wn5) + §6.1 §6.2 spec audit
 3. `9e4ba70` — §6.3 deep 7-lens audit findings
-4. `668a009` — Phase 4 remediation: Pattern F renumber + 5 finding fixes + spec/README.md update
+4. `668a009` — Phase 4 remediation: Pattern F renumber + 5 finding fixes + spec/README.md
+5. `20a42c2` — Session 022 closeout: handoff prompt + QUICKSTART update
+6. `345b5da` — Concurrent .beads/issues.jsonl sync
 
-(One more commit will be this handoff prompt; final session 022 commit count = 5.)
+**Session 022.5** (2 commits):
+7. `40a1fc4` — FINDING-219 (Transport relocation, 4 spec/05 edits) + FINDING-206/207 (spec/03 INV-FERR-029 amendments, 3 edits)
+8. `15f7252` — Session 022.5 closeout: handoff prompt + QUICKSTART updates
 
 ## Next Execution Scope — Session 023
 
@@ -184,7 +203,6 @@ Stop and escalate to the user if:
 - Do NOT load multiple ms skills simultaneously. For session 023 spec audit, load `spec-first-design --pack 2000`.
 - Do NOT batch-process invariants with subagents.
 - Do NOT assume the spec content matches the bead descriptions — the §18.1 Pattern H investigation proved bead authors hallucinate spec content.
-- Do NOT attempt FINDING-219 or FINDING-206/207 in session 023 unless explicitly authorized — they are deferred to focused follow-up.
 
 ## Session 023 success criterion
 
@@ -196,16 +214,15 @@ When session 023 ends:
 - ✅ Git committed and pushed (main + master)
 - ✅ Session 024 handoff written
 
-## Final note from session 022
+## Final note from session 022 + 022.5
 
-Session 022 was significantly more substantial than the original mandate suggested:
+Session 022 + 022.5 was significantly more substantial than the original mandate suggested:
 - **Session 022 mandate**: 7 orphan audits + spec/05 §23.8.5 spec audit
-- **Session 022 actual**: 7 orphans + 18-element spec audit + 26 findings (200-225) + Pattern I discovery + Phase 4 remediation (Pattern F + 5 fixes) + 2 deferred CRITICAL findings recorded with full proposals
+- **Session 022 actual**: 7 orphans + 18-element spec audit + 26 findings (200-225) + Pattern I discovery + Phase 4 remediation (Pattern F + 5 fixes)
+- **Session 022.5 actual**: Both deferred CRITICAL findings RESOLVED — Transport scope leak (FINDING-219: discovered the dual-definition was worse than originally thought, replaced INV-038's stale `#[async_trait]` Transport with canonical `Pin<Box<dyn Future>>`) + INV-FERR-029 spec amendment (FINDING-206/207: "Assert wins" rule locked, three-path equivalence documented, bd-l64y regression proptest authored)
 
-The §23.8.5 cluster was structurally clean (Phase 1 9/9 per INV) but semantically defective in roughly 1 of 3 elements. The systemic patterns (3 tautological Lean theorems, 3 undefined variables in Level 2, 2 cross-element contradictions) suggest the original Phase 4a.5 spec authoring sessions (015-016) need a Lean proof remediation pass before Phase 4a.5 implementation begins.
+**All 5 §23.8.5 CRITICAL findings are RESOLVED ✅.** Session 023 starts from a clean CRITICAL slate at the spec layer.
 
-**The hardest thinking for session 022 is done. What remains in session 023 is the discipline to author INV-FERR-045a + §23.9.0 cleanly from the source material in §18.1.**
+The §23.8.5 cluster was structurally clean (Phase 1 9/9 per INV) but semantically defective in roughly 1 in 3 elements. The systemic patterns (3 tautological Lean theorems, 3 undefined variables in Level 2, 2 cross-element contradictions) suggest the original Phase 4a.5 spec authoring sessions (015-016) need a Lean proof remediation pass before Phase 4a.5 implementation begins.
 
-The compounding return on the strategic investment continues: every defect caught at the spec/bead layer (the cheapest layer per §16.2) saves 10-1000× downstream. Session 022 caught 5 CRITICAL spec defects + 12 MAJOR spec defects that would have poisoned Phase 4a.5 implementation if discovered later. Session 023 will catch the same magnitude in spec/06 + the Pattern H authoring will eliminate 8 fabricated bead citations.
-
-Two CRITICAL findings (219, 206/207) remain DEFERRED to focused follow-up. Recommend filing them as **session 022.5** before session 023 begins, OR after session 024 completes — either way, do not bundle them into session 023 which already has the substantial Pattern H authoring work.
+**The hardest thinking is done. What remains in session 023 is the discipline to author INV-FERR-045a + §23.9.0 cleanly from the source material in §18.1.**
