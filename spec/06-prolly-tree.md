@@ -151,10 +151,16 @@ INV-FERR-005:
 | `vaet` | `(value ‖ attribute ‖ entity ‖ tx ‖ op)` | Reverse-reference scan: all datoms whose value is `Ref(target)` |
 | `avet` | `(attribute ‖ value ‖ entity ‖ tx ‖ op)` | Attribute-value lookup: unique-attribute and equality-predicate queries |
 
-Each tree's leaves contain `(key_bytes, value_bytes)` entries sorted lexicographically by
-`key_bytes`. The five trees are content-addressed independently: each has its own root hash
-and its own chunk set. Identical chunks across trees ARE physically deduplicated (by content
-addressing, INV-FERR-045) but the tree roots are distinct because the keys are distinct.
+Each tree's leaves contain datom entries sorted lexicographically by each tree's key
+ordering. The physical encoding of entries within a leaf chunk is determined by the
+`LeafChunkCodec` in use (INV-FERR-045c) — the DatomPair reference codec (INV-FERR-045a)
+stores `(key_bytes, value_bytes)` pairs, while future codecs (e.g., WaveletMatrix) may
+use column-major or compressed representations. The canonical KEY ORDERING is codec-
+independent: all codecs must produce leaf chunks whose `boundary_key` (INV-FERR-045c)
+respects the tree's sort order. The five trees are content-addressed independently: each
+has its own root hash and its own chunk set. Identical chunks across trees ARE physically
+deduplicated (by content addressing, INV-FERR-045) but the tree roots are distinct
+because the keys are distinct.
 
 **Why five and not four**: INV-FERR-005 names four secondary indexes (EAVT, AEVT, VAET,
 AVET) and identifies EAVT as primary. The prolly tree storage layer separates the two
@@ -167,7 +173,15 @@ to coincide with EAVT order for naturally-encoded datoms but is conceptually dis
 the primary tree's encoding (e.g., attribute-interned form per INV-FERR-085) diverges from
 the `eavt` tree's display-friendly form without losing index bijection.
 
-#### S23.9.0.2: Key and Value Encodings
+#### S23.9.0.2: Key and Value Encodings (DatomPair Codec)
+
+> The encodings in this sub-section describe the DatomPair reference codec's
+> (INV-FERR-045a) interpretation of leaf chunk entries. Other codecs
+> conforming to INV-FERR-045c may use different internal representations
+> (e.g., column-major compressed format for WaveletMatrix) as long as they
+> satisfy the five conformance theorems. The canonical datom field encodings
+> from INV-FERR-086 are shared across all codecs; only the entry-level
+> structure (how fields are packed into key/value pairs) varies.
 
 Every tree uses the same canonical building blocks defined in INV-FERR-086:
 
@@ -210,11 +224,15 @@ value sizes that would otherwise dominate.
 
 #### S23.9.0.3: Round-Trip Semantics
 
-> **Datom reconstruction comes from the KEY, not the value.**
+> **In the DatomPair codec**: datom reconstruction comes from the KEY, not the
+> value. In other codecs (e.g., WaveletMatrix), round-trip may work differently
+> — the codec's `decode` method (INV-FERR-045c T1) is the authoritative
+> reconstruction path, regardless of internal encoding.
 
-Every tree's key contains the complete datom in serialized form. Decoding `key_bytes`
-through the inverse of `sort_prefix` (or `canonical_bytes` for the primary tree) yields
-the original five-tuple `(e, a, v, tx, op)`:
+For the DatomPair reference codec (INV-FERR-045a), every tree's key contains the
+complete datom in serialized form. Decoding `key_bytes` through the inverse of
+`sort_prefix` (or `canonical_bytes` for the primary tree) yields the original
+five-tuple `(e, a, v, tx, op)`:
 
 ```
 ∀ d : Datom, ∀ tree ∈ {primary, eavt, aevt, vaet, avet}:
@@ -378,9 +396,55 @@ chunk addresses, different tree roots, and different snapshot hashes for the sam
 datom set. Version transitions are governed by the same migration discipline as
 INV-FERR-086 and require an explicit ADR.
 
-The `Chunk` discriminator byte specified in INV-FERR-045a includes a `format_version` field
-that allows future encodings to coexist. Until that field is bumped, all implementations
-MUST use the V1 encoding defined here.
+The on-disk leaf chunk format uses a **layered discriminator** (see INV-FERR-045a and
+INV-FERR-045c): byte 0 is the chunk-kind discriminator (`CHUNK_KIND_LEAF = 0x01` vs
+`CHUNK_KIND_INTERNAL = 0x02`), and byte 1 is the codec discriminator from the **§23.9.8
+Codec Discriminator Registry** (for leaves) or the internal format version (for internal
+nodes). New leaf codecs (e.g., WaveletMatrix, Verkle/KZG) register a new `CODEC_TAG` in
+§23.9.8 rather than bumping a format version. The DatomPair codec's `CODEC_TAG = 0x01`
+is byte-identical to the pre-session-023.5 `format_version = 0x01`, preserving on-disk
+byte compatibility.
+
+#### S23.9.8: Codec Discriminator Registry
+
+The codec discriminator is the second byte of every on-disk leaf chunk (byte 1, after the
+`CHUNK_KIND_LEAF = 0x01` chunk-kind byte). It identifies which `LeafChunkCodec`
+implementation (INV-FERR-045c) was used to encode the chunk's payload. The
+`deserialize_chunk` top-level function (INV-FERR-045a Level 2) dispatches on the first
+byte (chunk-kind); `LeafChunk::decode` (INV-FERR-045c Level 2) dispatches on the second
+byte (codec discriminator) to select the codec's `decode` method.
+
+**Registry allocation**:
+
+| Range | Namespace | Governance |
+|-------|-----------|------------|
+| `0x01..=0x7F` | Spec-registered leaf codecs | Each allocation requires a new INV-FERR-NNN authoring + conformance discharge of INV-FERR-045c |
+| `0x80..=0xFF` | Experimental / implementation-private | May be used for prototyping without spec evolution; MUST NOT appear in persisted stores shared across implementations |
+
+**Current allocations**:
+
+| Tag | Codec | Spec entry | Status |
+|-----|-------|------------|--------|
+| `0x01` | DatomPair (reference) | INV-FERR-045a | Active — the only registered codec as of session 023.5 |
+
+**Reserved (future)**:
+
+| Tag | Intended codec | Tracking |
+|-----|---------------|----------|
+| `0x02` | WaveletMatrix | `bd-gvil` epic (spec authoring `bd-obo8`) |
+| `0x03` | Verkle/KZG commitment-based | Exploratory in `docs/ideas/014` §4.1 |
+| `0x04` | BP+RMM succinct internal nodes | Future INV-FERR-045d (internal node codec trait) |
+
+Tag `0x00` is permanently reserved (never allocated) — it serves as a sentinel for
+corruption detection (a chunk that starts with `[0x01][0x00]` is definitively malformed
+rather than ambiguously "unknown codec").
+
+**Adding a new codec**: requires authoring a new spec invariant in `spec/06` that (1)
+defines the exact byte layout, (2) adds a `DatomPairChunk`-equivalent validated type,
+(3) provides an `impl LeafChunkCodec` block with `CODEC_TAG` set to the allocated tag,
+(4) discharges all five conformance theorems of INV-FERR-045c via the
+`codec_conformance_tests!` macro, and (5) provides Lean theorem(s) discharging
+`isRoundTrip` for the codec's encode/decode pair.
 
 ---
 
@@ -1586,6 +1650,23 @@ a peer over the wire or read from a file written by a different implementation
 (deserialize-time validation is required because the type system cannot
 constrain bytes that haven't been parsed yet).
 
+**Performance budgets** (DatomPair codec, Phase 6 of session 023.5):
+- `DatomPairCodec::encode_payload`: O(n) in entry count, single-pass
+  sequential write. At 100M datoms with ~1K entries per leaf chunk, expected
+  latency <50 μs per chunk on commodity hardware (bounded by `memcpy` of
+  ~40 KB average payload).
+- `DatomPairCodec::decode_payload`: O(n) in entry count, single-pass
+  sequential read. Same order-of-magnitude as encode — dominated by
+  allocation of the `Vec<(Vec<u8>, Vec<u8>)>` entries vector.
+- `serialize_chunk` (full layered path): constant overhead beyond
+  `encode_payload` — one `Vec::push` for the chunk_kind byte, one for the
+  codec_tag byte. Both are sub-microsecond.
+- `deserialize_chunk`: one byte-match for chunk_kind, one for codec_tag,
+  then `decode_payload`. Same order as decode plus ~2 ns for the dispatch.
+- These budgets are for the DatomPair reference codec only. Future codecs
+  (e.g., WaveletMatrix) will have their own per-codec performance budgets
+  documented in their respective invariant entries.
+
 **Relationship to INV-FERR-045c**: INV-FERR-045a is the per-codec discharge of
 INV-FERR-045c's conformance theorems for the DatomPair codec specifically. The
 trait `LeafChunkCodec` is generic over codec implementations; `DatomPairCodec`
@@ -1860,19 +1941,34 @@ impl DatomPairCodec {
     }
 }
 
-/// Convert a `BTreeSet<Datom>` into a `DatomPairChunk` by extracting each
-/// datom's canonical sort key (per S23.9.0) and canonical value-payload
-/// bytes (per INV-FERR-086). Helper signature; concrete implementation
-/// lands in session 023.5 Phase 5 ("Fill in helper definitions").
-fn datom_set_to_pair_chunk(_datoms: &BTreeSet<Datom>) -> DatomPairChunk {
-    todo!("session 023.5 Phase 5 — Datom canonical key/value-payload split helper")
+/// Convert a `BTreeSet<Datom>` into a `DatomPairChunk` using the primary
+/// tree encoding from S23.9.0.2: key = `canonical_bytes(d)` per
+/// INV-FERR-086, value = `content_hash(d).as_bytes()` (32 bytes).
+///
+/// `BTreeSet<Datom>` iteration is sorted by `Datom`'s `Ord`, which matches
+/// `canonical_bytes` lexicographic ordering — entries are therefore in
+/// strict ascending key order by construction. Secondary trees (EAVT,
+/// AEVT, VAET, AVET) bypass this helper and call
+/// `DatomPairCodec::encode_payload` directly with a `DatomPairChunk`
+/// pre-sorted by the tree's `sort_prefix` ordering (see S23.9.0.2).
+fn datom_set_to_pair_chunk(datoms: &BTreeSet<Datom>) -> DatomPairChunk {
+    let entries: Vec<(Vec<u8>, Vec<u8>)> = datoms
+        .iter()
+        .map(|d| (d.canonical_bytes(), d.content_hash().as_bytes().to_vec()))
+        .collect();
+    DatomPairChunk::from_sorted_unchecked(entries)
 }
 
 /// Inverse: rebuild a `BTreeSet<Datom>` from a `DatomPairChunk` by parsing
-/// each (key, value) entry into a `Datom`. Helper signature; concrete
-/// implementation lands in session 023.5 Phase 5.
-fn pair_chunk_to_datom_set(_chunk: &DatomPairChunk) -> Result<BTreeSet<Datom>, FerraError> {
-    todo!("session 023.5 Phase 5 — Datom canonical-parts → Datom helper")
+/// each key as `canonical_bytes → Datom` (S23.9.0.3 round-trip semantics).
+/// The value field (`content_hash`) is cross-reference only and is NOT used
+/// for reconstruction — see S23.9.0.3.
+fn pair_chunk_to_datom_set(chunk: &DatomPairChunk) -> Result<BTreeSet<Datom>, FerraError> {
+    chunk
+        .entries()
+        .iter()
+        .map(|(key, _value)| Datom::from_canonical_bytes(key))
+        .collect()
 }
 
 // ==========================================================================
