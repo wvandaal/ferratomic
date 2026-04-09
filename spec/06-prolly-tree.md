@@ -2341,32 +2341,46 @@ theorem internal_encode_injective_canonical
   exact ⟨congrArg Prod.fst h_pair, congrArg Prod.snd h_pair⟩
 
 /-- Content-addressing stability for the DatomPair codec: distinct canonical
-    chunks produce distinct BLAKE3 addresses (modulo collision). The address
-    here is computed over the FULL on-disk leaf bytes including the
-    `[CHUNK_KIND_LEAF][CODEC_TAG]` prefix, but since both prefix bytes are
-    fixed for a given codec they do not affect injectivity — distinct
-    payloads still produce distinct prefixed sequences, hence distinct
-    BLAKE3 hashes. -/
+    chunks produce distinct BLAKE3 addresses (modulo collision). Stated at
+    the payload level — the on-disk address includes a fixed
+    `[CHUNK_KIND_LEAF][CODEC_TAG]` prefix that is identical for every
+    DatomPair leaf chunk and therefore does not affect injectivity. The
+    full-bytes statement (with the prefix) follows trivially because BLAKE3
+    is a function and the prefix is the same on both sides. -/
 theorem datom_pair_addr_injective_canonical
     (e₁ e₂ : List (List UInt8 × List UInt8))
     (h₁ : canonicalDatomPair e₁)
     (h₂ : canonicalDatomPair e₂)
     (h_addr :
-      blake3 ([0x01, 0x01] ++ datomPairEncodePayload e₁) =
-      blake3 ([0x01, 0x01] ++ datomPairEncodePayload e₂)) :
+      blake3 (datomPairEncodePayload e₁) =
+      blake3 (datomPairEncodePayload e₂)) :
     e₁ = e₂ := by
   -- BLAKE3 is injective on the practical inputs of interest (collision
   -- resistance). Axiomatized in the foundation model; see 00-preamble.md
   -- §23.0.4 (`blake3_injective`).
-  have h_full : [0x01, 0x01] ++ datomPairEncodePayload e₁ =
-                [0x01, 0x01] ++ datomPairEncodePayload e₂ :=
-    blake3_injective h_addr
-  -- The leading `[0x01, 0x01]` is the same on both sides; List.append is
-  -- left-cancellative in Lean (List.append_cancel_left).
   have h_payload :
       datomPairEncodePayload e₁ = datomPairEncodePayload e₂ :=
-    List.append_cancel_left h_full
+    blake3_injective h_addr
   exact datom_pair_encode_injective_canonical e₁ e₂ h₁ h₂ h_payload
+
+/-- Symmetric content-addressing stability for the standard internal node
+    format. Same structure as `datom_pair_addr_injective_canonical`,
+    operating on internal node payloads. Together they discharge the
+    content-addressing pillar of INV-FERR-045 for both chunk kinds covered
+    by this invariant. -/
+theorem internal_addr_injective_canonical
+    (l₁ l₂ : Nat)
+    (c₁ c₂ : List (List UInt8 × Hash))
+    (h₁ : canonicalInternal l₁ c₁)
+    (h₂ : canonicalInternal l₂ c₂)
+    (h_addr :
+      blake3 (internalEncodePayload l₁ c₁) =
+      blake3 (internalEncodePayload l₂ c₂)) :
+    l₁ = l₂ ∧ c₁ = c₂ := by
+  have h_payload :
+      internalEncodePayload l₁ c₁ = internalEncodePayload l₂ c₂ :=
+    blake3_injective h_addr
+  exact internal_encode_injective_canonical l₁ l₂ c₁ c₂ h₁ h₂ h_payload
 
 -- The four `axiom` declarations above are tracked for replacement with
 -- concrete definitions when the V1 byte layout is formalized at the byte
