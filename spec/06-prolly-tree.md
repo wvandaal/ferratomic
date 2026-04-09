@@ -1333,6 +1333,122 @@ proptest! {
         );
     }
 }
+
+// ==========================================================================
+// Edge-case hardening (session 023.5.5)
+// ==========================================================================
+
+proptest! {
+    /// Empty chunk: boundary_key must return EmptyChunk error, not panic.
+    /// An empty BTreeSet is a valid input to encode (produces a zero-entry
+    /// payload). The resulting bytes decode to an empty set (T1), but
+    /// boundary_key on those bytes has no "first" datom to return.
+    #[test]
+    fn empty_chunk_boundary_key_fails(_dummy in 0u8..1) {
+        let empty: BTreeSet<Datom> = BTreeSet::new();
+        let bytes = DatomPairCodec::encode(&empty);
+        let result = DatomPairCodec::boundary_key(&bytes);
+        prop_assert!(matches!(result, Err(FerraError::EmptyChunk)),
+            "INV-FERR-045c: boundary_key on empty chunk must return EmptyChunk");
+    }
+
+    /// Empty chunk round-trip: encode(∅) decodes back to ∅.
+    #[test]
+    fn empty_chunk_round_trip(_dummy in 0u8..1) {
+        let empty: BTreeSet<Datom> = BTreeSet::new();
+        let bytes = DatomPairCodec::encode(&empty);
+        let decoded = DatomPairCodec::decode(&bytes)
+            .expect("empty chunk must decode");
+        prop_assert!(decoded.is_empty(),
+            "INV-FERR-045c T1: decode(encode(∅)) must be ∅");
+    }
+
+    /// Single-element chunk: round-trip + boundary_key equals the sole
+    /// datom's canonical key. This is the simplest non-empty case and
+    /// exercises the min-finding path without multi-element sorting.
+    #[test]
+    fn single_element_round_trip_and_boundary_key(d in arb_datom()) {
+        let mut set = BTreeSet::new();
+        set.insert(d.clone());
+
+        let bytes = DatomPairCodec::encode(&set);
+        let decoded = DatomPairCodec::decode(&bytes)
+            .expect("INV-FERR-045c T1: single-element decode");
+        prop_assert_eq!(&decoded, &set);
+
+        let bk = DatomPairCodec::boundary_key(&bytes)
+            .expect("INV-FERR-045c: boundary_key on 1-element chunk must succeed");
+        prop_assert_eq!(bk, d.canonical_key(),
+            "INV-FERR-045c: boundary_key must equal the sole datom's canonical key");
+    }
+
+    /// Large chunk: 500+ entries, no truncation. Verifies u32-le entry_count
+    /// handles realistic chunk sizes and that no field is lost or truncated
+    /// during encode/decode. Drives T1 falsification: "encode loses
+    /// information (e.g., truncating large values)."
+    #[test]
+    fn large_chunk_round_trip(
+        datoms in arb_datom_set(500..1024),
+    ) {
+        assert_round_trip::<DatomPairCodec>(&datoms);
+        assert_deterministic::<DatomPairCodec>(&datoms);
+    }
+}
+
+// Codec discriminator dispatch edge cases — tested at the LeafChunk enum
+// level (045c framework), not at the individual codec level.
+#[test]
+fn codec_tag_0x00_sentinel_rejected() {
+    // Tag 0x00 is permanently reserved per §23.9.8.
+    let bytes = vec![0x00, 0x01, 0x00, 0x00, 0x00, 0x00]; // tag 0x00 + payload
+    let result = LeafChunk::decode(&bytes);
+    assert!(matches!(result, Err(FerraError::UnknownCodec { tag: 0x00 })),
+        "§23.9.8: codec tag 0x00 must be rejected as corruption sentinel");
+}
+
+#[test]
+fn codec_tag_unknown_rejected() {
+    // Tag 0x42 is not registered.
+    let bytes = vec![0x42, 0x01, 0x00, 0x00, 0x00, 0x00];
+    let result = LeafChunk::decode(&bytes);
+    assert!(matches!(result, Err(FerraError::UnknownCodec { tag: 0x42 })),
+        "§23.9.8: unregistered codec tags must be rejected");
+}
+
+#[test]
+fn codec_tag_experimental_range_rejected_without_registration() {
+    // Tag 0x80 (first experimental) — not registered in this implementation.
+    let bytes = vec![0x80, 0x01, 0x00, 0x00, 0x00, 0x00];
+    let result = LeafChunk::decode(&bytes);
+    assert!(matches!(result, Err(FerraError::UnknownCodec { tag: 0x80 })),
+        "§23.9.8: experimental tags must fail unless explicitly registered");
+}
+
+/// Mixed-codec fingerprint stability: the framework fingerprint (INV-FERR-074
+/// XOR homomorphism) depends only on the LOGICAL datom set, not on the codec.
+/// This test constructs a DatomPair chunk, recovers the datom set, then
+/// verifies the fingerprint computed directly from the datoms equals the
+/// fingerprint computed via the codec round-trip. When a second codec is
+/// registered, this test extends to cross-codec comparison.
+#[test]
+fn mixed_codec_fingerprint_stability() {
+    // Build a chunk via DatomPair.
+    let datoms = test_datom_set(50);
+    let bytes = DatomPairCodec::encode(&datoms);
+    let recovered = DatomPairCodec::decode(&bytes).unwrap();
+
+    let fp_direct = codec_conformance::framework_fingerprint(&datoms);
+    let fp_via_codec = codec_conformance::framework_fingerprint(&recovered);
+    assert_eq!(fp_direct, fp_via_codec,
+        "INV-FERR-045c T4: fingerprint must survive codec round-trip");
+
+    // When a second codec is registered, add:
+    //   let bytes2 = WaveletCodec::encode(&datoms);
+    //   let recovered2 = WaveletCodec::decode(&bytes2).unwrap();
+    //   let fp_via_wavelet = framework_fingerprint(&recovered2);
+    //   assert_eq!(fp_direct, fp_via_wavelet,
+    //       "T4: fingerprint must be codec-invariant across DatomPair and Wavelet");
+}
 ```
 
 **Lean theorem**:
