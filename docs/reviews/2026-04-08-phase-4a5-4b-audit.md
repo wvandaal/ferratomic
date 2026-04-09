@@ -2709,7 +2709,208 @@ bd-u2tx is correctly open as a "verify the absence" bead, not an unfixed bug. Ve
 
 ### 6.3 Deep quality audit
 
-_Per-INV findings via 7 lenses to be filled in during Phase 3 of spec audit._
+> Per `lifecycle/17` Phase 3, applying 7 audit lenses sequentially to each of
+> the 18 §23.8.5 elements. Sequential, orchestrator-only. Findings recorded
+> per-element with severity class (CRITICAL/MAJOR/MINOR).
+
+#### 6.3.1 INV-FERR-060 — Store Identity Persistence
+
+**Lens 1 (Algebraic Soundness)**: 4 properties (uniqueness, content match, self-signing, signature verifies) with proof sketches citing real mechanisms. **L1 CONCERN** — `∃! T_id` quantifier line 5504 is contradicted by parenthetical line 5505-5506 ("two identity transactions coexist after merge"). Self-contradictory algebraic notation.
+
+**Lens 2 (L0 ↔ L2)**: **2 CRITICAL DEFECTS**:
+- Line 5596 references undefined variable `tx_builder.commit(&db.schema())?` — the variable declared on line 5574 is `tx`, not `tx_builder`. Spec is **non-compilable as written**.
+- Lines 5567, 5574 use pre-C8 variable name `agent` (per bd-k5bv C8 compliance, should be `node`). C8 rename never reached this Level 2 contract.
+
+**Lens 3 (Falsification)**: PASS — clear negation of Level 0 properties.
+
+**Lens 4 (proptest)**: PASS — generates random `other_datoms`, verifies identity persistence + signature datom presence.
+
+**Lens 5 (Lean ↔ L0)**: **MAJOR DEFECT**:
+- `identity_unique_per_key` theorem is `entity_from_content vk = entity_from_content vk := rfl` — **TAUTOLOGY**. The intended claim ("two stores from same SK produce same identity datom") would require showing all genesis_with_identity operations are deterministic, NOT `f vk = f vk` (which is reflexivity). Per `lifecycle/17`: "Is it a tautology? (e.g., `∀ x: f(x) = f(x)` proves nothing about f's behavior)."
+- The other two theorems (`identity_persists_merge`, `both_identities_survive_merge`) are correct but trivial (`Finset.mem_union_left/right`).
+
+**Lens 6 (Stage)**: Stage 0, all layers present. PASS.
+
+**Lens 7 (Internal Contradiction)**: Lens 1 finding (∃! vs parenthetical) is also a Lens 7 hit (self-contradictory notation within the same INV).
+
+**Findings**:
+- [FINDING-208] **CRITICAL** — INV-FERR-060 Level 2 line 5596 references undefined variable `tx_builder.commit(...)` — should be `tx.commit(...)`. Spec is non-compilable as written. Lens 2.
+- [FINDING-209] **MAJOR** — INV-FERR-060 Level 2 lines 5567, 5574 use pre-C8 variable name `agent` instead of `node`. C8 partial-rename did not reach spec/05 INV-FERR-060 Level 2. Same root pattern as bd-mklv FINDING-042 / bd-3t63 FINDING-049. Lens 2.
+- [FINDING-210] **MAJOR** — INV-FERR-060 Lean theorem `identity_unique_per_key` is `entity_from_content vk = entity_from_content vk := rfl` — TAUTOLOGY. Doesn't prove the intended claim. Lens 5.
+- [FINDING-211] **MINOR** — INV-FERR-060 Level 0 uses `∃!` quantifier on line 5504 but parenthetical on lines 5505-5506 says two identities coexist post-merge. Self-contradictory algebraic notation. Should be `∃! T_id : T_id was created by genesis_with_identity(SK_S)` (per-genesis-invocation, not global). Lens 1 + Lens 7.
+
+#### 6.3.2 INV-FERR-061 — Causal Predecessor Completeness
+
+**Lens 1**: 4 properties (completeness, accuracy, signing inclusion, DAG acyclicity) with proof sketches citing INV-FERR-015 monotonicity. PASS.
+
+**Lens 2 (L0 ↔ L2)**: **2 CRITICAL DEFECTS**:
+- Line 5809: `EntityId::from_content(&latest_tx_id.to_le_bytes())` — TxId is a struct `(physical, logical, agent)`, NOT an integer. **`to_le_bytes()` does NOT exist on TxId** — type error. The correct call is `tx_id_canonical_bytes(latest_tx_id)` per ADR-FERR-032 + INV-FERR-086.
+- This Level 2 directly **CONTRADICTS ADR-FERR-032** (TxId-Based Transaction Entity). ADR-032 mandates `EntityId::from_content(&tx_id_canonical_bytes(tx_id))` as the canonical computation. INV-061 uses raw `to_le_bytes` which (a) doesn't compile and (b) wouldn't match ADR-032's content-addressing scheme even if it did.
+
+**Lens 3**: PASS — specific failure modes (count mismatch, missing TxId, cycle).
+
+**Lens 4 (proptest)**: **MAJOR DEFECT**:
+- Lines 5905-5913 (DAG acyclicity check): Loop body is empty (`for (child_entity, parent_entity) in &all_pred_edges {  /* ... */  }` — only comments inside, no actual cycle detection runs). Ends with `prop_assert!(true, "INV-FERR-061: predecessor DAG acyclicity verified")`. This is the EXACT pattern lifecycle/17 warns against: "Do not accept proptest strategies that test weaker properties than Level 0 states." The acyclicity property (Level 0 property 4) is claimed to be tested but isn't.
+
+**Lens 5 (Lean)**: **MAJOR**:
+- Theorem `predecessor_complete` proof references undefined helper lemma `emit_predecessors_injective`. The theorem statement is correct but the proof obligation is shifted to an undefined helper.
+- Theorem `predecessor_acyclic` proof references undefined helper lemma `frontier_entries_lt_new_txid`. Same shifting.
+- `predecessor_dag_merge` is the trivial `Finset.mem_union_left` (acceptable).
+
+**Lens 6**: Stage 0, all layers present. PASS.
+
+**Lens 7**: Cross-element contradiction with ADR-FERR-032 (already captured in Lens 2).
+
+**Findings**:
+- [FINDING-212] **CRITICAL** — INV-FERR-061 Level 2 line 5809 has type error: `latest_tx_id.to_le_bytes()` — TxId is a struct, doesn't have `to_le_bytes()`. Non-compilable. Lens 2.
+- [FINDING-213] **CRITICAL** — INV-FERR-061 Level 2 directly contradicts ADR-FERR-032 (TxId-Based Transaction Entity). ADR-032 mandates `tx_id_canonical_bytes(tx_id)`; INV-061 uses raw `to_le_bytes`. Cross-element semantic contradiction. Lens 7.
+- [FINDING-214] **MAJOR** — INV-FERR-061 proptest acyclicity check (lines 5905-5913) has empty loop body and ends with `prop_assert!(true)`. The Level 0 property 4 (DAG acyclicity) is claimed to be tested but the assertion is vacuous. Lens 4.
+- [FINDING-215] **MAJOR** — INV-FERR-061 Lean theorems `predecessor_complete` and `predecessor_acyclic` depend on undefined helper lemmas (`emit_predecessors_injective`, `frontier_entries_lt_new_txid`). Theorems are not self-contained proofs. Lens 5.
+
+#### 6.3.3 INV-FERR-062 — Merge Receipt Completeness
+
+**Lens 1**: 4 receipt fields enumerated, preservation cited via INV-FERR-004. PASS.
+
+**Lens 2**: **MAJOR + MINOR**:
+- Lines 6018, 6020 use undefined variables `local_agent` and `source_id` — not in `selective_merge` function signature. Caller would need to provide them but the spec doesn't show how.
+- Line 6013: `&format!("merge-{}", now_millis()).as_bytes()` — leading `&` produces `&&[u8]` instead of `&[u8]`. Type error.
+
+**Lens 3**: PASS.
+
+**Lens 4**: PASS — proptest checks all 4 receipt fields + transferred count accuracy.
+
+**Lens 5**: PASS — Lean theorems prove receipt subset relationship. Trivial but correct (acceptable for set-membership properties).
+
+**Lens 6**: Stage 0, all layers present. PASS.
+
+**Lens 7**: No internal contradictions.
+
+**Findings**:
+- [FINDING-216] **MAJOR** — INV-FERR-062 Level 2 lines 6018, 6020 use undefined variables `local_agent` and `source_id`. Function signature only takes `local`, `remote`, `filter`. Lens 2.
+- [FINDING-217] **MINOR** — INV-FERR-062 Level 2 line 6013 has spurious leading `&`: `&format!(...).as_bytes()` produces `&&[u8]`. Lens 2.
+
+#### 6.3.4 INV-FERR-063 — Provenance Lattice Total Order
+
+**Lens 1**: 5 properties (totality, transitivity, antisymmetry, weight monotonicity, LWW composition). All with brief proof sketches. PASS.
+
+**Lens 2**: PASS — but Level 2 uses `expect("confidence values are non-NaN")` in `Ord::cmp`. Per NEG-FERR-001 (no expect in lib), this would be a violation if ported literally. The spec is illustrative, not production code, but the pattern could mislead implementers.
+
+**Lens 3**: PASS — 3 specific failure modes.
+
+**Lens 4**: PASS — proptest tests totality, weight monotonicity, antisymmetry. Note: doesn't explicitly test transitivity (only Kani harness does).
+
+**Lens 5 (Lean)**: PASS — `provenance_total` and `weight_monotone` are CORRECT and meaningful (cases analysis on a 4-element inductive type, no tautologies). Best Lean section in §23.8.5.
+
+**Lens 6**: Stage 0, all layers present. PASS.
+
+**Lens 7**: No internal contradictions.
+
+**Findings**:
+- [FINDING-218] **MINOR** — INV-FERR-063 Level 2 uses `expect()` in `Ord::cmp` impl. Violates NEG-FERR-001 if ported literally. Spec illustrative; recommend rewriting as a const lookup table. Lens 2.
+
+(INV-FERR-063 is the cleanest INV in §23.8.5 — only 1 minor finding.)
+
+#### 6.3.5 INV-FERR-025b — Universal Index Algebra & Graceful Degradation
+
+**Lens 1**: PASS — homomorphism property well-stated, proof cites per-datom decomposition.
+
+**Lens 2**: **CRITICAL DEFECT**:
+- Lines 6495-6552 contain the **`Transport` trait + `LocalTransport` impl** which belong to INV-FERR-038 (Federation Substrate Transparency), NOT INV-FERR-025b (index algebra). Level 2 contract for index algebra has been padded with federation transport types. **Scope leak** — one INV's Level 2 contract contains another INV's content. An implementer reading INV-025b Level 2 to understand index trait shape would be confused by the unrelated Transport trait.
+
+**Lens 3**: PASS — two specific failure modes (homomorphism violation, optional index affecting non-index ops).
+
+**Lens 4**: **MAJOR DEFECT**:
+- proptest tests (1) NullTextIndex returns empty, (2) optional index doesn't affect merge. **Neither tests the actual homomorphism property** `I(S₁ ∪ S₂) = I(S₁) ⊕ I(S₂)`. The Level 0 claim is not exercised by any proptest. A non-trivial index implementation could break the homomorphism and the spec proptests would not catch it.
+
+**Lens 5**: **MAJOR DEFECT**:
+- `index_distributes_over_union` proves `(S₁ ∪ S₂).biUnion i = S₁.biUnion i ∪ S₂.biUnion i` via `Finset.biUnion_union` — CORRECT, this is the essential homomorphism.
+- `optional_index_identity` proves `S = S := rfl` — **TAUTOLOGY**, same vice as INV-FERR-060 FINDING-210. Doesn't prove the intended claim ("removing an optional index doesn't change the datom set"). The intended claim would need a more complex statement like `(S, with_index).datoms = (S, without_index).datoms`.
+
+**Lens 6**: Stage 1 with note "specification now, implementation Phase 4b". All layers present. PASS.
+
+**Lens 7**: Verification tags (`V:PROP, V:LEAN`) don't cover the Transport trait scope leak (which would need V:STATERIGHT for distributed properties). Minor.
+
+**Findings**:
+- [FINDING-219] **CRITICAL** — INV-FERR-025b Level 2 contains scope leak: Transport trait + LocalTransport impl (lines 6495-6552) belong to INV-FERR-038, not INV-FERR-025b. Move them to INV-FERR-038 Level 2 (or wherever Transport is canonically defined). Lens 2.
+- [FINDING-220] **MAJOR** — INV-FERR-025b proptest doesn't test the actual homomorphism property `I(S₁ ∪ S₂) = I(S₁) ⊕ I(S₂)`. Only the null index case + optional-index-doesn't-affect-merge are tested. Add a proptest that constructs a non-trivial index function and verifies the homomorphism explicitly. Lens 4.
+- [FINDING-221] **MAJOR** — INV-FERR-025b Lean theorem `optional_index_identity` is `S = S := rfl` (TAUTOLOGY). Same vice as FINDING-210. Lens 5.
+
+#### 6.3.6 INV-FERR-086 — Canonical Datom Format Determinism
+
+**Lens 1**: PASS — determinism + injectivity stated clearly. Proof cites the TLV format.
+
+**Lens 2**: PASS — Level 2 specifies the byte layout in detail (entity 32 bytes, attribute u16-le len + UTF-8, value u8 tag + payload, tx 28 bytes, op u8). 11 value tags enumerated. `Datom::canonical_bytes` and `tx_id_canonical_bytes` shown. **MINOR**: helper `value_canonical_bytes(self.value())` is called but its implementation is not defined in the spec — only the value tag table (in the doc comment) describes the format. A complete Level 2 contract should show or formally reference the function body.
+
+**Lens 3**: PASS — three specific failure modes (non-determinism, collision, cross-implementation disagreement).
+
+**Lens 4**: PASS — proptest tests determinism + injectivity directly.
+
+**Lens 5 (Lean)**: **MAJOR + MAJOR**:
+- `canonical_deterministic` is `canonical_bytes d = canonical_bytes d := rfl` — **TAUTOLOGY**. The spec comment even acknowledges this: "In the Lean model, canonical_bytes is a pure function, so this is tautological." This is exactly the pattern `lifecycle/17` warns against. The intended claim is "two implementations of canonical_bytes produce the same bytes for the same datom" — that is NOT what `f x = f x` proves.
+- `canonical_injective` has `sorry` with informal "Tracked: bead for Lean proof of INV-FERR-086 injectivity" — **but no specific bead ID is cited**. Per `lifecycle/17`: "If the proof has `sorry`: is there a tracking bead?" The bead ID is missing. Stage 0 with `sorry` requires a tracked bead with explicit ID.
+
+**Lens 6**: Stage 0, all layers present, but Lean has 1 sorry without tracked bead. PARTIAL FAIL.
+
+**Lens 7**: No internal contradictions. INV-FERR-086 is the canonical definition cited by INV-FERR-051, INV-FERR-074, ADR-FERR-032, ADR-FERR-033 — and the cross-cuts are CONSISTENT (all use `canonical_bytes` / `tx_id_canonical_bytes`). The contradiction with INV-FERR-061 (FINDING-213) is on INV-061's side — INV-061 uses `to_le_bytes` instead of `canonical_bytes`. The fix is to amend INV-061 to use the canonical function from INV-086.
+
+**Findings**:
+- [FINDING-222] **MINOR** — INV-FERR-086 Level 2 helper function `value_canonical_bytes` is called but not defined in the spec. Only the value tag table in the doc comment specifies the per-value byte layout. A complete contract should show the function body or formally reference an external definition. Lens 2.
+- [FINDING-223] **MAJOR** — INV-FERR-086 Lean theorem `canonical_deterministic` is `canonical_bytes d = canonical_bytes d := rfl` — TAUTOLOGY. Spec comment acknowledges "this is tautological" but does not file a tracking bead or replace with a meaningful theorem. Lens 5.
+- [FINDING-224] **MAJOR** — INV-FERR-086 Lean theorem `canonical_injective` has `sorry` with informal "Tracked: bead for Lean proof of INV-FERR-086 injectivity" but **no specific bead ID is cited**. Stage 0 sorry requires a tracked bead with ID per `lifecycle/17`. Lens 5.
+
+#### 6.3.7 ADR audit — condensed pass
+
+For ADRs (decision documents), the relevant lenses are 1 (decision soundness) and 7 (internal contradiction). The structural template (Problem/Options/Decision/Rejected/Consequence/Source) is present in all 12 ADRs per Phase 1 inventory.
+
+**Per-ADR findings** (sound unless noted):
+
+| ADR | Lens 1 | Lens 7 | Notes |
+|-----|--------|--------|-------|
+| 021 (Signature Storage as Datoms) | PASS | PASS | Sound |
+| 022 (DatomFilter Scope) | PASS | PASS | Sound; CALM theorem grounding |
+| 023 (Per-Transaction Signing) | PASS | **FAIL** | **Contradicts ADR-031** — see FINDING-225 below |
+| 024 (Async Transport) | PASS | PASS | Sound; zero-deps justification |
+| 025 (Transaction Bundles) | PASS | PASS | Sound; Braid alignment |
+| 026 (Predecessor Datoms) | PASS | PASS | Sound; INV-061 implementation |
+| 027 (Self-Signed Identity) | PASS | PASS | Sound; X.509 pattern |
+| 028 (ProvenanceType Lattice) | PASS | PASS | Sound; Braid kernel basis |
+| 029 (Merge Receipts as Datoms) | PASS | PASS | Sound; INV-062 implementation. (Was missing from session 022 mandate per FINDING-201.) |
+| 031 (Database-Layer Signing → ADR-034) | PASS | **FAIL** | **Contradicts ADR-023** + Pattern F renumber |
+| 032 (TxId-Based Entity → ADR-035) | PASS | **FAIL** | **Contradicted BY INV-FERR-061 Level 2** (FINDING-213) — see Pattern F renumber |
+| 033 (Store Fingerprint → ADR-036) | PASS | PASS | Sound; Pattern F renumber only |
+
+**Finding**:
+- [FINDING-225] **MAJOR** — ADR-FERR-023 ("Per-Transaction Signing") and ADR-FERR-031 ("Database-Layer Signing") have contradictory **Consequence** sections. ADR-023's Consequence (line 5099-5101) says: *"The `Transaction<Building>` typestate gains an optional `sign(TxSignature, TxSigner)` method."* ADR-031's Consequence (line 5380-5382) says: *"`Transaction<Building>` does **NOT** gain any signing-related fields or methods."* ADR-031 frames itself as a "REFINEMENT of ADR-FERR-023, not a contradiction" but does not amend ADR-023's Consequence section. Both ADRs remain in the spec with directly opposed claims about the same type. Lens 7 (Internal Contradiction).
+  - **Fix**: Amend ADR-FERR-023 Consequence to add: *"**Superseded by ADR-FERR-031/034**: signing happens at the Database layer via `Database::transact_signed`, not at the Transaction<Building> typestate. Transaction<Building> does NOT gain a `sign` method."* Or move ADR-023 to a "Superseded" status.
+  - **Action**: Phase 4 remediation in spec/05.
+
+#### 6.3.8 Phase 3 result summary
+
+**Total findings from Phase 3 (deep audit)**: 18 new findings (208-225) on top of 8 from Phase 1+2 (200-207).
+
+**Severity distribution**:
+- **CRITICAL**: 5 findings
+  - FINDING-208 (INV-060 undefined variable)
+  - FINDING-212 (INV-061 type error on TxId.to_le_bytes)
+  - FINDING-213 (INV-061 contradicts ADR-032)
+  - FINDING-219 (INV-025b Transport scope leak)
+  - FINDING-206 (Phase 2 — INV-029 spec gap)
+  - Plus FINDING-207 (Phase 2 — INV-029 Level 2 incomplete) — borderline CRITICAL/MAJOR
+- **MAJOR**: 12 findings (209, 210, 214, 215, 216, 220, 221, 223, 224, 225 + Phase 2's 204, 205)
+- **MINOR**: 5 findings (211, 217, 218, 222 + Phase 1's 200 + Phase 2 ones)
+
+**Theme analysis**:
+1. **Tautological Lean theorems** (3 instances): FINDING-210 (INV-060), FINDING-221 (INV-025b), FINDING-223 (INV-086). All use the pattern `f x = f x := rfl`, which proves nothing about `f`. Spec/05 has a systemic Lean-tautology problem.
+2. **Undefined variables/typos in Level 2** (3 instances): FINDING-208 (INV-060 `tx_builder`), FINDING-212 (INV-061 `to_le_bytes`), FINDING-216 (INV-062 `local_agent`/`source_id`). Spec Level 2 contracts are not compilable as written.
+3. **Cross-element contradictions** (2 instances): FINDING-213 (INV-061 vs ADR-032), FINDING-225 (ADR-023 vs ADR-031). The §23.8.5 cluster has internal inconsistency.
+4. **Vacuous proptests** (1 instance): FINDING-214 (INV-061 acyclicity assertion is `prop_assert!(true)`).
+5. **Pre-C8 variable names** (1 instance): FINDING-209 (INV-060 uses `agent` instead of `node`). bd-k5bv C8 rename did not reach this Level 2.
+6. **Stage 0 sorry without tracked bead** (1 instance): FINDING-224 (INV-086 canonical_injective). Per `lifecycle/17`, Stage 0 sorry must have a bead ID.
+7. **Scope leak in Level 2** (1 instance): FINDING-219 (INV-025b includes Transport trait).
+
+**Overall §23.8.5 quality**: Structurally complete (Phase 1 9/9 layers per INV) but semantically defective in roughly 1 in 3 elements. The cluster needs Phase 4 remediation before Phase 4a.5 implementation begins (else implementing agents will encounter spec contradictions and non-compilable Level 2 contracts).
+
+### 6.4 Remediation log
 
 ### 6.4 Remediation log
 
