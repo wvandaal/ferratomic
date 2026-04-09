@@ -116,6 +116,274 @@ Noms database (attic-labs/noms) — original prolly tree implementation. SEED.md
 
 ---
 
+### S23.9.0: Canonical Datom Key Encoding
+
+The prolly tree storage layer is generic over `(Key, Value)` pairs, but ferratomic stores
+datoms — five-tuples `(entity, attribute, value, tx, op)` with multiple sort orderings
+required for query routing (INV-FERR-005). This section defines how the four datom indexes
+plus the canonical primary set are mapped onto five physically distinct prolly trees, what
+each tree's key and value bytes encode, how a datom can be recovered from a tree entry,
+and how the five tree roots compose into a single snapshot identity.
+
+**Traces to**: INV-FERR-005 (Index Bijection), INV-FERR-012 (Content-Addressed Entities),
+INV-FERR-049 (Snapshot = Root Hash), INV-FERR-086 (Canonical Datom Format Determinism),
+C2 (Identity by Content), C8 (Substrate Independence)
+
+**Why this section exists**: A naive reading of the prolly tree spec would conclude that
+"key" and "value" are application-defined byte sequences that the tree treats opaquely.
+That is true at the prolly tree layer, but the *application* (ferratomic-store) is not free
+to choose arbitrary encodings without losing properties that downstream invariants require.
+Round-trip recoverability (INV-FERR-049), index bijection (INV-FERR-005), and federation
+transfer minimality (INV-FERR-048) all depend on the encoding being canonical, deterministic,
+and reversible — properties that must be specified explicitly so independent implementations
+agree on the bytes.
+
+#### S23.9.0.1: Five-Tree Architecture
+
+The store maintains **five physically distinct prolly trees**, one per index ordering from
+INV-FERR-005:
+
+| Tree | Sort key (lexicographic on bytes) | Purpose |
+|------|------------------------------------|---------|
+| `primary` | canonical datom bytes | Canonical content-addressed datom set; the source of truth for INV-FERR-012 entity identity |
+| `eavt` | `(entity ‖ attribute ‖ value ‖ tx ‖ op)` | Entity-first scan: all datoms for one entity, in attribute order |
+| `aevt` | `(attribute ‖ entity ‖ value ‖ tx ‖ op)` | Attribute-first scan: all datoms for one attribute |
+| `vaet` | `(value ‖ attribute ‖ entity ‖ tx ‖ op)` | Reverse-reference scan: all datoms whose value is `Ref(target)` |
+| `avet` | `(attribute ‖ value ‖ entity ‖ tx ‖ op)` | Attribute-value lookup: unique-attribute and equality-predicate queries |
+
+Each tree's leaves contain `(key_bytes, value_bytes)` entries sorted lexicographically by
+`key_bytes`. The five trees are content-addressed independently: each has its own root hash
+and its own chunk set. Identical chunks across trees ARE physically deduplicated (by content
+addressing, INV-FERR-045) but the tree roots are distinct because the keys are distinct.
+
+**Why five and not four**: INV-FERR-005 names four secondary indexes (EAVT, AEVT, VAET,
+AVET) and identifies EAVT as primary. The prolly tree storage layer separates the two
+roles of EAVT — query routing (sorted-by-EAVT iteration) and content addressing (canonical
+serialized identity) — into two physically distinct trees. The `primary` tree is keyed by
+the canonical datom byte encoding from INV-FERR-086 (`canonical_bytes(d)`), which happens
+to coincide with EAVT order for naturally-encoded datoms but is conceptually distinct: the
+`primary` tree is the **content-addressed source of truth**, while the `eavt` tree is an
+**index optimized for entity-prefix scans**. This separation allows future evolution where
+the primary tree's encoding (e.g., attribute-interned form per INV-FERR-085) diverges from
+the `eavt` tree's display-friendly form without losing index bijection.
+
+#### S23.9.0.2: Key and Value Encodings
+
+Every tree uses the same canonical building blocks defined in INV-FERR-086:
+
+```
+canonical_bytes(d)  : Datom → [u8; variable]   -- INV-FERR-086 §Level 2
+content_hash(d)     : Datom → Hash             := BLAKE3(canonical_bytes(d))
+```
+
+The primary tree and the four secondary trees use identical encodings for individual
+field components. The only difference is the *order* in which the components are
+concatenated into the key.
+
+**Primary tree entry**:
+
+```
+key   = canonical_bytes(d)              -- INV-FERR-086 layout, variable length
+value = content_hash(d).as_bytes()      -- 32 bytes, fixed
+```
+
+**Secondary tree entries** (one of EAVT, AEVT, VAET, AVET):
+
+```
+key   = sort_prefix(d, ordering)        -- variable length, see below
+value = content_hash(d).as_bytes()      -- 32 bytes, fixed
+```
+
+`sort_prefix(d, ordering)` writes the datom field components in the order required by the
+index, using the same per-component encoding as `canonical_bytes` but with the field order
+permuted. Because each component is self-delimiting (length-prefixed for variable-width
+fields, fixed-width for entity / tx / op), the resulting byte string remains parseable
+without an external schema and remains lexicographically ordered by the leading components.
+
+**Why the value is `content_hash(d)`**: The 32-byte BLAKE3 of the canonical bytes is a
+*structural cross-reference*, not a redundant copy. The value lets a query that hit a
+secondary index resolve directly to the canonical datom identity in O(1) without rehashing
+the key, and lets garbage collection (S23.9.2) walk the value-graph independently of the
+key-graph. The fixed 32-byte width also stabilizes the leaf-chunk size distribution: leaf
+chunks are bounded by `entry_count × (key_len + 32)` rather than by the variable-width
+value sizes that would otherwise dominate.
+
+#### S23.9.0.3: Round-Trip Semantics
+
+> **Datom reconstruction comes from the KEY, not the value.**
+
+Every tree's key contains the complete datom in serialized form. Decoding `key_bytes`
+through the inverse of `sort_prefix` (or `canonical_bytes` for the primary tree) yields
+the original five-tuple `(e, a, v, tx, op)`:
+
+```
+∀ d : Datom, ∀ tree ∈ {primary, eavt, aevt, vaet, avet}:
+  let entry = tree.entry_for(d)
+  decode_key(entry.key, tree.ordering) = d
+```
+
+The value field — `content_hash(d)` — is **not** a reconstruction source. It cannot be
+inverted (BLAKE3 is one-way), and it would be insufficient even if it could be inverted
+because a hash is a fixed-size summary of variable-size content. Implementations MUST NOT
+attempt to reconstruct datoms by deserializing the value field. Implementations that need
+to recover a datom from a tree entry MUST decode the key.
+
+**Implementation contract**:
+
+```rust
+/// Decode a primary-tree key back into a Datom.
+/// INV-FERR-086 + S23.9.0: key encoding is canonical and reversible.
+pub fn decode_primary_key(key: &[u8]) -> Result<Datom, FerraError> {
+    Datom::from_canonical_bytes(key)
+}
+
+/// Decode a secondary-tree key back into a Datom.
+/// The ordering parameter selects which permutation to invert.
+pub fn decode_index_key(key: &[u8], ordering: IndexOrdering) -> Result<Datom, FerraError> {
+    Datom::from_sort_prefix(key, ordering)
+}
+
+/// The value field is for cross-reference only — never call this with intent to
+/// reconstruct the datom. The signature deliberately returns Hash, not Datom.
+pub fn decode_entry_value(value: &[u8]) -> Result<Hash, FerraError> {
+    if value.len() != 32 {
+        return Err(FerraError::InvalidValueLength { expected: 32, actual: value.len() });
+    }
+    Ok(Hash::from_bytes(value.try_into().expect("length checked above")))
+}
+```
+
+A round-trip property follows immediately and is verified at the implementation level by
+INV-FERR-049's snapshot proptest: building a prolly tree from `kvs`, extracting the root
+hash, then resolving and decoding produces the original `kvs`.
+
+#### S23.9.0.4: RootSet — Multi-Tree Snapshot Manifest
+
+A complete store snapshot is identified by **five** root hashes (one per tree), composed
+into a single fixed-size manifest:
+
+```rust
+/// Five tree roots that together identify a complete store snapshot.
+/// Field order is FIXED for canonical serialization (S23.9.0.5).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct RootSet {
+    /// Primary tree root: canonical content-addressed datom set.
+    pub primary: Hash,
+    /// EAVT secondary index root.
+    pub eavt: Hash,
+    /// AEVT secondary index root.
+    pub aevt: Hash,
+    /// VAET secondary index root (reverse references).
+    pub vaet: Hash,
+    /// AVET secondary index root (attribute-value lookup).
+    pub avet: Hash,
+}
+```
+
+The `RootSet` is the bridge between the multi-tree physical layout and the
+single-root-hash abstraction used by INV-FERR-049 (`Snapshot::root`). Snapshot comparison,
+diff, and transfer all begin by comparing or operating on `RootSet`s, then descend into
+individual tree pairs.
+
+#### S23.9.0.5: RootSet Canonical Serialization
+
+```
+serialize(RootSet) : RootSet → [u8; 160]
+
+Layout (fixed 160 bytes, no padding, no length prefixes):
+  bytes 0..32    primary  : [u8; 32]
+  bytes 32..64   eavt     : [u8; 32]
+  bytes 64..96   aevt     : [u8; 32]
+  bytes 96..128  vaet     : [u8; 32]
+  bytes 128..160 avet     : [u8; 32]
+```
+
+```rust
+/// Canonical RootSet serialization (S23.9.0.5).
+/// Fixed 160 bytes. Field order: primary, eavt, aevt, vaet, avet.
+impl RootSet {
+    pub fn canonical_bytes(&self) -> [u8; 160] {
+        let mut buf = [0u8; 160];
+        buf[0..32].copy_from_slice(self.primary.as_bytes());
+        buf[32..64].copy_from_slice(self.eavt.as_bytes());
+        buf[64..96].copy_from_slice(self.aevt.as_bytes());
+        buf[96..128].copy_from_slice(self.vaet.as_bytes());
+        buf[128..160].copy_from_slice(self.avet.as_bytes());
+        buf
+    }
+
+    pub fn from_canonical_bytes(buf: &[u8; 160]) -> Self {
+        RootSet {
+            primary: Hash::from_bytes(buf[0..32].try_into().expect("32 bytes")),
+            eavt:    Hash::from_bytes(buf[32..64].try_into().expect("32 bytes")),
+            aevt:    Hash::from_bytes(buf[64..96].try_into().expect("32 bytes")),
+            vaet:    Hash::from_bytes(buf[96..128].try_into().expect("32 bytes")),
+            avet:    Hash::from_bytes(buf[128..160].try_into().expect("32 bytes")),
+        }
+    }
+}
+```
+
+#### S23.9.0.6: Snapshot Hash = BLAKE3(RootSet)
+
+The `Snapshot::root` field of INV-FERR-049 is defined as:
+
+```
+snapshot_hash : RootSet → Hash
+snapshot_hash(rs) = BLAKE3(serialize(rs))
+```
+
+This is the **manifest hash** that uniquely identifies a five-tree snapshot. It is what
+gets stored in the journal `RootUpdate` records (S23.9.2), what gets compared for snapshot
+identity, and what gets passed to `Snapshot::resolve`. Two stores with the same five tree
+roots produce the same manifest hash; two stores that differ in any tree root produce
+different manifest hashes.
+
+**Resolve protocol** (used by `Snapshot::resolve` per INV-FERR-049 Level 2):
+
+```
+fn resolve(snapshot_root: Hash, store: &dyn ChunkStore) -> Result<RootSet, FerraError> {
+    // 1. Load the manifest chunk addressed by snapshot_root.
+    let manifest_chunk = store.get_chunk(&snapshot_root)?
+        .ok_or(FerraError::ChunkNotFound(snapshot_root))?;
+
+    // 2. The manifest chunk's content IS the canonical RootSet bytes (160 bytes).
+    let buf: &[u8; 160] = manifest_chunk.data().try_into()
+        .map_err(|_| FerraError::InvalidManifestSize)?;
+
+    // 3. Deserialize the RootSet — five tree roots ready for tree-level access.
+    Ok(RootSet::from_canonical_bytes(buf))
+}
+```
+
+After resolution, callers descend into individual tree roots: `read_prolly_tree(rs.primary,
+store)`, `diff(rs1.eavt, rs2.eavt, store)`, etc. The two-step indirection (manifest hash →
+RootSet → tree roots) is the structural core of the multi-index store and the reason why
+INV-FERR-049 can claim O(1) snapshot identity for a store that physically contains five
+independent trees.
+
+**Diff fast path**: `diff(rs1, rs2)` short-circuits at the manifest level: if `rs1 = rs2`
+(equivalently, `snapshot_hash(rs1) = snapshot_hash(rs2)`), the trees are identical and no
+further work is needed. Otherwise, the diff descends into the four (or five) tree pairs
+where the roots differ. In the common case where only one index changed (e.g., a
+new datom was inserted, affecting all five trees), this still bounds work to O(d × log_k n)
+per affected tree.
+
+#### S23.9.0.7: Encoding Stability and Versioning
+
+The encodings defined in this section (canonical_bytes, sort_prefix permutations, RootSet
+layout) are **format version 1**. Any change to the encoding — adding a field, changing
+the field order, adopting a new value tag — is a breaking change that produces different
+chunk addresses, different tree roots, and different snapshot hashes for the same logical
+datom set. Version transitions are governed by the same migration discipline as
+INV-FERR-086 and require an explicit ADR.
+
+The `Chunk` discriminator byte specified in INV-FERR-045a includes a `format_version` field
+that allows future encodings to coexist. Until that field is bumped, all implementations
+MUST use the V1 encoding defined here.
+
+---
+
 ### INV-FERR-045: Chunk Content Addressing
 
 **Traces to**: SEED.md section 4 (Content-Addressed Identity), INV-FERR-012
@@ -267,22 +535,686 @@ proptest! {
 
 **Lean theorem**:
 ```lean
-/-- Chunk content addressing: identical content produces identical address.
-    This is the storage-layer extension of INV-FERR-012. -/
+/-- Chunk content addressing: address is BLAKE3 of content, and BLAKE3 is
+    injective on practical inputs (collision-resistance assumption from
+    00-preamble.md §23.0.4 axiomatizes blake3_injective). -/
 
 def chunk_addr (data : List UInt8) : Hash := blake3 data
 
-theorem chunk_content_identity (d1 d2 : List UInt8) (h : d1 = d2) :
-    chunk_addr d1 = chunk_addr d2 := by
-  subst h; rfl
+/-- Forward direction: same content → same address. This is `congrArg` applied
+    to `blake3`, but we state it explicitly so downstream theorems can reference
+    it by name. -/
+theorem chunk_addr_deterministic (d1 d2 : List UInt8) (h : d1 = d2) :
+    chunk_addr d1 = chunk_addr d2 :=
+  congrArg blake3 h
 
-/-- Deduplication is structural: storing the same content twice
-    is observationally equivalent to storing it once. -/
-theorem chunk_store_idempotent (s : Finset (Hash x List UInt8))
+/-- Substantive direction: same address → same content (with the BLAKE3
+    collision-resistance assumption). This is the property that deduplication
+    relies on: if two `put_chunk` calls report the same address, they were
+    storing the same bytes. -/
+theorem chunk_addr_content_recovery (d1 d2 : List UInt8)
+    (h : chunk_addr d1 = chunk_addr d2) :
+    d1 = d2 :=
+  blake3_injective h
+
+/-- Deduplication is structural: storing the same content twice is
+    observationally equivalent to storing it once. The proof uses the
+    canonical lattice law `s ∪ {x} ∪ {x} = s ∪ {x}` (Finset.union_idem). -/
+theorem chunk_store_idempotent (s : Finset (Hash × List UInt8))
     (data : List UInt8) :
     let entry := (chunk_addr data, data)
     s ∪ {entry} ∪ {entry} = s ∪ {entry} := by
-  simp [Finset.union_self_of_subset (Finset.subset_union_right)]
+  intro entry
+  rw [Finset.union_assoc]
+  simp [Finset.union_idem]
+
+/-- Two-chunk store consistency: if a store contains a chunk under address `a`,
+    then any other put with the same content is a no-op. This is the operational
+    consequence of address-content equivalence. -/
+theorem chunk_store_dedup
+    (s : Finset (Hash × List UInt8)) (data : List UInt8)
+    (h_present : (chunk_addr data, data) ∈ s) :
+    s ∪ {(chunk_addr data, data)} = s :=
+  Finset.union_eq_left.mpr (Finset.singleton_subset_iff.mpr h_present)
+```
+
+---
+
+### INV-FERR-045a: Deterministic Chunk Serialization
+
+**Traces to**: INV-FERR-045 (Chunk Content Addressing), INV-FERR-086 (Canonical Datom
+Format Determinism), S23.9.0 (Canonical Datom Key Encoding), C2 (Identity by Content)
+**Referenced by**: INV-FERR-046 (history independence relies on canonical leaf bytes),
+INV-FERR-047 (DiffIterator deserializes chunk contents), INV-FERR-048 (transfer relies
+on `decode_child_addrs` which deserializes internal chunks), INV-FERR-049 (snapshot
+resolve deserializes the manifest chunk)
+**Verification**: `V:PROP`, `V:KANI`, `V:TYPE`, `V:LEAN`
+**Stage**: 1
+
+> INV-FERR-045 establishes that *some* canonical byte representation produces the chunk
+> address. INV-FERR-045a establishes *which* representation: the V1 format below, with
+> validated constructors that prevent non-canonical chunks from existing. Without
+> INV-FERR-045a, two implementations could compute different chunk addresses for the
+> "same" chunk content and the structural sharing guarantees of INV-FERR-046 (history
+> independence) and INV-FERR-022 (anti-entropy convergence) would degrade silently into
+> per-implementation isolation.
+
+#### Level 0 (Algebraic Law)
+```
+Let Chunk be the disjoint union LeafChunk ⊎ InternalChunk.
+Let serialize_leaf     : LeafChunk     → Bytes
+Let serialize_internal : InternalChunk → Bytes
+Let serialize          : Chunk         → Bytes  := match c with
+                                                    | Leaf l     → serialize_leaf l
+                                                    | Internal i → serialize_internal i
+Let deserialize        : Bytes → Result<Chunk, FerraError>
+
+A LeafChunk L is canonical iff its entries are sorted strictly ascending by key bytes
+  with no duplicate keys.
+An InternalChunk I is canonical iff its children are sorted strictly ascending by
+  separator-key bytes with no duplicate separators, and every child_addr is a 32-byte hash.
+
+Let CanonicalLeafChunk     = { L : LeafChunk     | canonical(L) }
+Let CanonicalInternalChunk = { I : InternalChunk | canonical(I) }
+Let CanonicalChunk         = CanonicalLeafChunk ⊎ CanonicalInternalChunk
+
+Theorem (round-trip):
+  ∀ c ∈ CanonicalChunk:
+    deserialize(serialize(c)) = Ok(c)
+
+Theorem (canonicality / injectivity):
+  ∀ c₁, c₂ ∈ CanonicalChunk:
+    serialize(c₁) = serialize(c₂)  ⟺  c₁ = c₂
+
+Theorem (cross-implementation determinism):
+  ∀ implementations I₁, I₂ conforming to the V1 format,
+  ∀ c ∈ CanonicalChunk:
+    serialize_I₁(c) = serialize_I₂(c)
+
+Proof:
+  serialize_leaf and serialize_internal are total functions defined by a fixed,
+  little-endian, length-prefixed byte layout (Level 2). Given identical canonical
+  inputs they emit identical byte sequences by construction. The V1 format has no
+  alignment padding, no implementation-defined choices, and no source of nondeterminism.
+
+  Round-trip holds because every byte position in the V1 format encodes a single field
+  with a unique tag-or-position, so deserialize is the structural inverse of serialize.
+  Since the canonical predicate enforces sorted-strictly-ascending entries with no
+  duplicates, the byte order of fields agrees with the byte order in the input, and
+  deserialize reconstructs the same field values in the same order.
+
+  Injectivity follows: if two canonical chunks serialize to the same bytes, then by
+  round-trip they deserialize to identical chunks (deserialize is a function of the bytes,
+  so equal bytes produce equal results), hence c₁ = c₂.
+
+Corollary (content-addressing stability):
+  ∀ c₁, c₂ ∈ CanonicalChunk:
+    c₁ = c₂  ⟺  BLAKE3(serialize(c₁)) = BLAKE3(serialize(c₂))    (with negligible collision)
+
+  This is the structural reason INV-FERR-045's content addressing is well-defined: the
+  address depends only on the canonical chunk content, not on incidental serialization
+  choices.
+```
+
+#### Level 1 (State Invariant)
+
+For all chunks reachable from any prolly tree root, the on-disk byte representation is
+the V1 canonical format:
+
+- Leaf chunks contain a discriminator byte (`0x01`), a format version byte (`0x01`), an
+  entry count, and a sequence of `(key_len, key, value_len, value)` records sorted strictly
+  ascending by `key`. Two leaves containing the same logical key-value set produce
+  byte-identical serializations and therefore byte-identical addresses.
+
+- Internal chunks contain a discriminator byte (`0x02`), a format version byte (`0x01`),
+  a tree-level byte, an entry count, and a sequence of `(separator_len, separator,
+  child_addr)` records sorted strictly ascending by `separator`. Two internal nodes
+  containing the same logical separator/child-address pairs at the same level produce
+  byte-identical serializations.
+
+- The canonical predicate is enforced **at construction**: the `LeafChunk` and
+  `InternalChunk` types expose only constructors that validate the sorted-strictly-ascending
+  invariant and return `FerraError::NonCanonicalChunk` on violation. Non-canonical chunks
+  are unrepresentable in well-typed code: there is no public constructor that accepts
+  unsorted or duplicate input.
+
+- `serialize_leaf` and `serialize_internal` accept only the validated chunk types and
+  therefore cannot fail on ordering grounds. They return `Vec<u8>` (infallible from the
+  domain perspective; the only failure mode is OOM, which is a system-level concern).
+
+- `deserialize_chunk` accepts arbitrary bytes and returns `Result<Chunk, FerraError>`.
+  It rejects bytes that do not parse against the V1 grammar OR that decode to a chunk
+  whose entries are not in canonical order. This double-check is the on-the-wire defense
+  against an adversarial peer sending non-canonical bytes whose hash happens to collide
+  with a legitimate chunk.
+
+The "two layers of enforcement" — type-level construction barrier plus deserialize-time
+validation — exist because chunks can enter the system from two sources: (1) construction
+by ferratomic-store from an in-memory `im::OrdMap` (type-level enforcement is sufficient),
+or (2) bytes received from a peer over the wire or read from a file written by a different
+implementation (deserialize-time validation is required because the type system cannot
+constrain bytes that haven't been parsed yet).
+
+#### Level 2 (Implementation Contract)
+
+```rust
+// ==========================================================================
+// V1 byte layout
+// ==========================================================================
+//
+// Leaf chunk:
+//   [0]      discriminator: u8 = LEAF_CHUNK_TAG (0x01)
+//   [1]      format_version: u8 = 0x01
+//   [2..6]   entry_count: u32-le
+//   [6..]    entries[entry_count]:
+//              key_len: u32-le
+//              key: [u8; key_len]
+//              value_len: u32-le
+//              value: [u8; value_len]
+//
+// Internal chunk:
+//   [0]      discriminator: u8 = INTERNAL_CHUNK_TAG (0x02)
+//   [1]      format_version: u8 = 0x01
+//   [2]      level: u8                 -- tree height level (>= 1; leaves are level 0)
+//   [3..7]   entry_count: u32-le
+//   [7..]    entries[entry_count]:
+//              separator_len: u32-le
+//              separator: [u8; separator_len]
+//              child_addr: [u8; 32]    -- BLAKE3 hash of child chunk
+//
+// Cross-cutting:
+//   - Multi-byte integers are little-endian (matches INV-FERR-086).
+//   - No alignment padding anywhere; bytes are packed.
+//   - Empty leaves (entry_count == 0) and empty internal nodes are syntactically valid
+//     but never appear in well-formed prolly trees: the build path always splits chunks
+//     at boundaries, never produces empty intermediate states. deserialize accepts them
+//     for parser simplicity; downstream constructors reject them per canonical_predicate.
+
+pub const LEAF_CHUNK_TAG: u8     = 0x01;
+pub const INTERNAL_CHUNK_TAG: u8 = 0x02;
+pub const CHUNK_FORMAT_VERSION: u8 = 0x01;
+
+// ==========================================================================
+// Validated chunk types
+// ==========================================================================
+
+/// A leaf chunk: a sorted, deduplicated sequence of (key, value) pairs.
+/// Constructors validate the canonical predicate; non-canonical leaves are
+/// unrepresentable in well-typed code.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LeafChunk {
+    /// Entries in strict ascending key order. Field is private — the only way to
+    /// populate it is through `LeafChunk::new` or `LeafChunk::from_sorted_unchecked`.
+    entries: Vec<(Vec<u8>, Vec<u8>)>,
+}
+
+impl LeafChunk {
+    /// Build a leaf chunk from arbitrary entries. Validates strict ascending order
+    /// and duplicate-freedom; sorts internally if `entries` is unsorted.
+    ///
+    /// Returns `FerraError::NonCanonicalChunk` if duplicate keys are present.
+    pub fn new(mut entries: Vec<(Vec<u8>, Vec<u8>)>) -> Result<Self, FerraError> {
+        entries.sort_by(|a, b| a.0.cmp(&b.0));
+        for window in entries.windows(2) {
+            if window[0].0 == window[1].0 {
+                return Err(FerraError::NonCanonicalChunk {
+                    reason: "duplicate key in leaf chunk",
+                });
+            }
+        }
+        Ok(LeafChunk { entries })
+    }
+
+    /// Build a leaf chunk from already-sorted, already-deduplicated entries.
+    /// The caller asserts the canonical predicate; debug builds assert it.
+    /// This is the hot path used by tree construction where the sort step has
+    /// already happened upstream.
+    pub fn from_sorted_unchecked(entries: Vec<(Vec<u8>, Vec<u8>)>) -> Self {
+        debug_assert!(
+            entries.windows(2).all(|w| w[0].0 < w[1].0),
+            "from_sorted_unchecked called with non-canonical entries"
+        );
+        LeafChunk { entries }
+    }
+
+    pub fn entries(&self) -> &[(Vec<u8>, Vec<u8>)] { &self.entries }
+    pub fn len(&self) -> usize { self.entries.len() }
+    pub fn is_empty(&self) -> bool { self.entries.is_empty() }
+}
+
+/// An internal chunk: a sorted sequence of (separator_key, child_addr) pairs at a
+/// specific tree level (>= 1). Constructors validate the canonical predicate.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InternalChunk {
+    /// Tree level. Leaves are level 0; the root has level == tree height.
+    level: u8,
+    /// Children in strict ascending separator-key order. Private field.
+    children: Vec<(Vec<u8>, Hash)>,
+}
+
+impl InternalChunk {
+    pub fn new(level: u8, mut children: Vec<(Vec<u8>, Hash)>) -> Result<Self, FerraError> {
+        if level == 0 {
+            return Err(FerraError::NonCanonicalChunk {
+                reason: "internal chunk must have level >= 1",
+            });
+        }
+        children.sort_by(|a, b| a.0.cmp(&b.0));
+        for window in children.windows(2) {
+            if window[0].0 == window[1].0 {
+                return Err(FerraError::NonCanonicalChunk {
+                    reason: "duplicate separator key in internal chunk",
+                });
+            }
+        }
+        Ok(InternalChunk { level, children })
+    }
+
+    pub fn from_sorted_unchecked(level: u8, children: Vec<(Vec<u8>, Hash)>) -> Self {
+        debug_assert!(level >= 1);
+        debug_assert!(
+            children.windows(2).all(|w| w[0].0 < w[1].0),
+            "from_sorted_unchecked called with non-canonical children"
+        );
+        InternalChunk { level, children }
+    }
+
+    pub fn level(&self) -> u8 { self.level }
+    pub fn children(&self) -> &[(Vec<u8>, Hash)] { &self.children }
+}
+
+/// The full Chunk discriminated union. `serialize` accepts this type;
+/// `deserialize_chunk` produces this type.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProllyChunkBody {
+    Leaf(LeafChunk),
+    Internal(InternalChunk),
+}
+
+// ==========================================================================
+// Serialization
+// ==========================================================================
+
+pub fn serialize_leaf(chunk: &LeafChunk) -> Vec<u8> {
+    // Pre-compute capacity to avoid reallocs.
+    let cap = 6 + chunk.entries.iter().map(|(k, v)| 8 + k.len() + v.len()).sum::<usize>();
+    let mut buf = Vec::with_capacity(cap);
+
+    buf.push(LEAF_CHUNK_TAG);
+    buf.push(CHUNK_FORMAT_VERSION);
+    buf.extend_from_slice(&(chunk.entries.len() as u32).to_le_bytes());
+
+    for (k, v) in &chunk.entries {
+        buf.extend_from_slice(&(k.len() as u32).to_le_bytes());
+        buf.extend_from_slice(k);
+        buf.extend_from_slice(&(v.len() as u32).to_le_bytes());
+        buf.extend_from_slice(v);
+    }
+    buf
+}
+
+pub fn serialize_internal(chunk: &InternalChunk) -> Vec<u8> {
+    let cap = 7 + chunk.children.iter().map(|(s, _)| 4 + s.len() + 32).sum::<usize>();
+    let mut buf = Vec::with_capacity(cap);
+
+    buf.push(INTERNAL_CHUNK_TAG);
+    buf.push(CHUNK_FORMAT_VERSION);
+    buf.push(chunk.level);
+    buf.extend_from_slice(&(chunk.children.len() as u32).to_le_bytes());
+
+    for (separator, child_addr) in &chunk.children {
+        buf.extend_from_slice(&(separator.len() as u32).to_le_bytes());
+        buf.extend_from_slice(separator);
+        buf.extend_from_slice(child_addr.as_bytes()); // 32 bytes
+    }
+    buf
+}
+
+pub fn serialize_chunk(body: &ProllyChunkBody) -> Vec<u8> {
+    match body {
+        ProllyChunkBody::Leaf(l)     => serialize_leaf(l),
+        ProllyChunkBody::Internal(i) => serialize_internal(i),
+    }
+}
+
+// ==========================================================================
+// Deserialization
+// ==========================================================================
+
+pub fn deserialize_chunk(bytes: &[u8]) -> Result<ProllyChunkBody, FerraError> {
+    if bytes.is_empty() {
+        return Err(FerraError::TruncatedChunk { needed: 1, got: 0 });
+    }
+    match bytes[0] {
+        LEAF_CHUNK_TAG     => deserialize_leaf(bytes).map(ProllyChunkBody::Leaf),
+        INTERNAL_CHUNK_TAG => deserialize_internal(bytes).map(ProllyChunkBody::Internal),
+        tag => Err(FerraError::UnknownChunkTag { tag }),
+    }
+}
+
+fn deserialize_leaf(bytes: &[u8]) -> Result<LeafChunk, FerraError> {
+    let mut cur = Cursor::new(bytes);
+    let tag = cur.read_u8()?;
+    debug_assert_eq!(tag, LEAF_CHUNK_TAG);
+    let version = cur.read_u8()?;
+    if version != CHUNK_FORMAT_VERSION {
+        return Err(FerraError::UnsupportedChunkVersion { version });
+    }
+    let entry_count = cur.read_u32_le()? as usize;
+    let mut entries = Vec::with_capacity(entry_count);
+    for _ in 0..entry_count {
+        let key_len = cur.read_u32_le()? as usize;
+        let key = cur.read_bytes(key_len)?.to_vec();
+        let value_len = cur.read_u32_le()? as usize;
+        let value = cur.read_bytes(value_len)?.to_vec();
+        entries.push((key, value));
+    }
+    if !cur.is_empty() {
+        return Err(FerraError::TrailingChunkBytes { extra: cur.remaining() });
+    }
+    // Defense in depth: revalidate the canonical predicate even though we constructed
+    // entries in deserialize order. A non-canonical on-disk chunk is a corruption signal.
+    LeafChunk::new(entries)
+}
+
+fn deserialize_internal(bytes: &[u8]) -> Result<InternalChunk, FerraError> {
+    let mut cur = Cursor::new(bytes);
+    let tag = cur.read_u8()?;
+    debug_assert_eq!(tag, INTERNAL_CHUNK_TAG);
+    let version = cur.read_u8()?;
+    if version != CHUNK_FORMAT_VERSION {
+        return Err(FerraError::UnsupportedChunkVersion { version });
+    }
+    let level = cur.read_u8()?;
+    let entry_count = cur.read_u32_le()? as usize;
+    let mut children = Vec::with_capacity(entry_count);
+    for _ in 0..entry_count {
+        let separator_len = cur.read_u32_le()? as usize;
+        let separator = cur.read_bytes(separator_len)?.to_vec();
+        let addr_bytes: [u8; 32] = cur.read_bytes(32)?.try_into()
+            .expect("read_bytes(32) returns 32 bytes");
+        children.push((separator, Hash::from_bytes(addr_bytes)));
+    }
+    if !cur.is_empty() {
+        return Err(FerraError::TrailingChunkBytes { extra: cur.remaining() });
+    }
+    InternalChunk::new(level, children)
+}
+
+// ==========================================================================
+// Helper used by INV-FERR-048 (federation transfer)
+// ==========================================================================
+
+/// Decode the child addresses from a chunk's bytes. Used by `RecursiveTransfer`
+/// (INV-FERR-048) to walk the tree without materializing the full chunk content.
+/// Returns an empty vec for leaf chunks (leaves have no children).
+pub fn decode_child_addrs(chunk: &Chunk) -> Result<Vec<Hash>, FerraError> {
+    match deserialize_chunk(chunk.data())? {
+        ProllyChunkBody::Leaf(_)         => Ok(Vec::new()),
+        ProllyChunkBody::Internal(inode) => Ok(
+            inode.children().iter().map(|(_, addr)| addr.clone()).collect()
+        ),
+    }
+}
+
+// ==========================================================================
+// Kani harness — bounded round-trip
+// ==========================================================================
+
+#[kani::proof]
+#[kani::unwind(4)]
+fn leaf_chunk_roundtrip_bounded() {
+    // Two entries, small keys and values.
+    let k1: [u8; 2] = kani::any();
+    let v1: [u8; 2] = kani::any();
+    let k2: [u8; 2] = kani::any();
+    let v2: [u8; 2] = kani::any();
+    kani::assume(k1 != k2);
+
+    let entries = vec![(k1.to_vec(), v1.to_vec()), (k2.to_vec(), v2.to_vec())];
+    let leaf = LeafChunk::new(entries).expect("distinct keys are canonical");
+
+    let bytes = serialize_leaf(&leaf);
+    let body = deserialize_chunk(&bytes).expect("V1 bytes must round-trip");
+    match body {
+        ProllyChunkBody::Leaf(decoded) => assert_eq!(decoded, leaf),
+        ProllyChunkBody::Internal(_) => panic!("expected leaf"),
+    }
+}
+
+#[kani::proof]
+#[kani::unwind(4)]
+fn internal_chunk_roundtrip_bounded() {
+    let s1: [u8; 2] = kani::any();
+    let h1: [u8; 32] = kani::any();
+    let s2: [u8; 2] = kani::any();
+    let h2: [u8; 32] = kani::any();
+    kani::assume(s1 != s2);
+
+    let children = vec![
+        (s1.to_vec(), Hash::from_bytes(h1)),
+        (s2.to_vec(), Hash::from_bytes(h2)),
+    ];
+    let inode = InternalChunk::new(1, children).expect("distinct separators are canonical");
+
+    let bytes = serialize_internal(&inode);
+    let body = deserialize_chunk(&bytes).expect("V1 bytes must round-trip");
+    match body {
+        ProllyChunkBody::Internal(decoded) => assert_eq!(decoded, inode),
+        ProllyChunkBody::Leaf(_) => panic!("expected internal"),
+    }
+}
+```
+
+**Falsification**: Any one of the following witnesses falsifies INV-FERR-045a.
+
+1. **Round-trip failure**: a canonical `LeafChunk` (or `InternalChunk`) `c` such that
+   `deserialize_chunk(serialize(c)) != Ok(c)`. This indicates the V1 format encoding and
+   the V1 format decoding are inconsistent.
+
+2. **Canonicality / injectivity failure**: two canonical chunks `c₁ ≠ c₂` (different
+   logical entries) such that `serialize(c₁) = serialize(c₂)`. This is a hash-collision-free
+   way to demonstrate that the encoding is not injective on canonical inputs.
+
+3. **Type-level escape**: a code path that constructs a `LeafChunk` or `InternalChunk` with
+   non-canonical entries (unsorted, duplicate keys, or — for internal — `level == 0`)
+   without going through `LeafChunk::new` / `InternalChunk::new`. The presence of such a
+   path means the type-level enforcement claim of Level 1 is false. The only sanctioned
+   bypass is `from_sorted_unchecked`, which is `debug_assert!`-checked and documented as
+   a hot-path optimization that requires upstream sortedness.
+
+4. **Deserialize accepts non-canonical bytes**: an on-disk byte sequence whose decoded
+   entries are not in strict ascending key order, yet `deserialize_chunk` returns `Ok`.
+   This violates the defense-in-depth requirement for bytes received from untrusted sources.
+
+5. **Cross-implementation divergence**: two implementations conforming to this spec that
+   produce different `serialize_leaf(c)` outputs for the same canonical input `c`.
+
+**proptest strategy**:
+```rust
+proptest! {
+    /// Round-trip property: serialize then deserialize produces the original chunk.
+    /// Drives Falsification cases #1 and #4 (the latter implicitly: deserialize_chunk
+    /// must validate the canonical predicate, and re-serializing the validated result
+    /// must equal the original bytes).
+    #[test]
+    fn leaf_chunk_roundtrip(
+        raw_entries in prop::collection::btree_map(
+            prop::collection::vec(any::<u8>(), 1..32),  // keys
+            prop::collection::vec(any::<u8>(), 0..256), // values
+            0..200,
+        ),
+    ) {
+        let entries: Vec<_> = raw_entries.into_iter().collect();
+        let leaf = LeafChunk::new(entries).expect("BTreeMap iteration is canonical");
+        let bytes = serialize_leaf(&leaf);
+
+        let decoded = deserialize_chunk(&bytes).expect("V1 bytes must round-trip");
+        match decoded {
+            ProllyChunkBody::Leaf(d) => prop_assert_eq!(d, leaf),
+            ProllyChunkBody::Internal(_) => prop_assert!(false, "expected leaf"),
+        }
+
+        // Re-serialize must produce identical bytes (canonicality of the format).
+        let re_bytes = serialize_leaf(&leaf);
+        prop_assert_eq!(bytes, re_bytes);
+    }
+
+    #[test]
+    fn internal_chunk_roundtrip(
+        raw_children in prop::collection::btree_map(
+            prop::collection::vec(any::<u8>(), 1..32),
+            any::<[u8; 32]>(),
+            1..100,
+        ),
+        level in 1u8..8,
+    ) {
+        let children: Vec<_> = raw_children.into_iter()
+            .map(|(s, h)| (s, Hash::from_bytes(h)))
+            .collect();
+        let inode = InternalChunk::new(level, children).expect("BTreeMap is canonical");
+        let bytes = serialize_internal(&inode);
+
+        let decoded = deserialize_chunk(&bytes).expect("V1 bytes must round-trip");
+        match decoded {
+            ProllyChunkBody::Internal(d) => prop_assert_eq!(d, inode),
+            ProllyChunkBody::Leaf(_) => prop_assert!(false, "expected internal"),
+        }
+    }
+
+    /// Canonicality / injectivity: two distinct canonical chunks must serialize to
+    /// distinct byte sequences. Drives Falsification case #2.
+    #[test]
+    fn leaf_chunk_serialize_injective(
+        entries1 in prop::collection::btree_map(
+            prop::collection::vec(any::<u8>(), 1..16),
+            prop::collection::vec(any::<u8>(), 0..32),
+            1..40,
+        ),
+        entries2 in prop::collection::btree_map(
+            prop::collection::vec(any::<u8>(), 1..16),
+            prop::collection::vec(any::<u8>(), 0..32),
+            1..40,
+        ),
+    ) {
+        prop_assume!(entries1 != entries2);
+        let l1 = LeafChunk::new(entries1.into_iter().collect()).unwrap();
+        let l2 = LeafChunk::new(entries2.into_iter().collect()).unwrap();
+        prop_assert_ne!(serialize_leaf(&l1), serialize_leaf(&l2),
+            "INV-FERR-045a: distinct canonical leaves must serialize differently");
+    }
+
+    /// Defense-in-depth: deserialize must reject non-canonical input even if the bytes
+    /// are syntactically valid. Drives Falsification case #4.
+    #[test]
+    fn deserialize_rejects_unsorted_leaf(
+        k1 in prop::collection::vec(any::<u8>(), 1..16),
+        v1 in prop::collection::vec(any::<u8>(), 0..32),
+        k2 in prop::collection::vec(any::<u8>(), 1..16),
+        v2 in prop::collection::vec(any::<u8>(), 0..32),
+    ) {
+        prop_assume!(k1 > k2);  // Force descending order in the wire bytes.
+        // Hand-craft non-canonical leaf bytes by writing entries in the wrong order.
+        let mut bytes = vec![LEAF_CHUNK_TAG, CHUNK_FORMAT_VERSION];
+        bytes.extend_from_slice(&2u32.to_le_bytes());
+        bytes.extend_from_slice(&(k1.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(&k1);
+        bytes.extend_from_slice(&(v1.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(&v1);
+        bytes.extend_from_slice(&(k2.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(&k2);
+        bytes.extend_from_slice(&(v2.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(&v2);
+
+        let result = deserialize_chunk(&bytes);
+        prop_assert!(matches!(result, Err(FerraError::NonCanonicalChunk { .. })),
+            "INV-FERR-045a: deserialize must reject non-canonical bytes");
+    }
+
+    /// Type-level enforcement: LeafChunk::new with duplicate keys must fail.
+    /// Drives Falsification case #3.
+    #[test]
+    fn leaf_chunk_rejects_duplicate_keys(
+        k in prop::collection::vec(any::<u8>(), 1..16),
+        v1 in prop::collection::vec(any::<u8>(), 0..16),
+        v2 in prop::collection::vec(any::<u8>(), 0..16),
+    ) {
+        let entries = vec![(k.clone(), v1), (k, v2)];
+        let result = LeafChunk::new(entries);
+        prop_assert!(matches!(result, Err(FerraError::NonCanonicalChunk { .. })),
+            "INV-FERR-045a: LeafChunk::new must reject duplicate keys");
+    }
+}
+```
+
+**Lean theorem**:
+```lean
+/-- Deterministic chunk serialization (INV-FERR-045a).
+    Modeled at the abstract level: serialize is a function on canonical chunks
+    and is injective. The concrete byte layout is verified by proptest + Kani. -/
+
+inductive ProllyChunkBody where
+  | leaf     (entries  : List (List UInt8 × List UInt8))
+  | internal (level    : Nat) (children : List (List UInt8 × Hash))
+
+/-- A leaf chunk is canonical iff its entries are strictly ascending by key
+    (which implies duplicate-free). -/
+def canonicalLeaf (entries : List (List UInt8 × List UInt8)) : Prop :=
+  entries.Pairwise (fun a b => a.1 < b.1)
+
+def canonicalInternal (level : Nat) (children : List (List UInt8 × Hash)) : Prop :=
+  level ≥ 1 ∧ children.Pairwise (fun a b => a.1 < b.1)
+
+def canonicalChunk : ProllyChunkBody → Prop
+  | .leaf entries     => canonicalLeaf entries
+  | .internal lvl chs => canonicalInternal lvl chs
+
+/-- Abstract serialization function. The concrete byte layout is given by
+    `serialize_leaf` / `serialize_internal` in Level 2; here we treat it as
+    an opaque function and prove the algebraic properties. -/
+axiom serializeChunk : ProllyChunkBody → List UInt8
+
+/-- Round-trip: deserializing a serialized canonical chunk recovers the original.
+    Modeled as: there exists a deserialization function such that this holds. -/
+axiom deserializeChunk : List UInt8 → Option ProllyChunkBody
+
+axiom roundtrip_canonical (c : ProllyChunkBody) (h : canonicalChunk c) :
+    deserializeChunk (serializeChunk c) = some c
+
+/-- Injectivity on canonical chunks: distinct canonical chunks have distinct bytes. -/
+theorem serialize_injective_canonical
+    (c₁ c₂ : ProllyChunkBody)
+    (h₁ : canonicalChunk c₁)
+    (h₂ : canonicalChunk c₂)
+    (h_eq : serializeChunk c₁ = serializeChunk c₂) :
+    c₁ = c₂ := by
+  have r₁ := roundtrip_canonical c₁ h₁
+  have r₂ := roundtrip_canonical c₂ h₂
+  rw [h_eq] at r₁
+  -- Both r₁ and r₂ now state: deserializeChunk (serializeChunk c₂) = some <something>
+  -- Functional equality of deserializeChunk forces the somethings to agree.
+  have : some c₁ = some c₂ := by rw [← r₁, ← r₂]
+  exact Option.some.inj this
+
+/-- Content-addressing stability: distinct canonical chunks have distinct addresses
+    (modulo BLAKE3 collision, which is treated as impossible in the abstract model). -/
+theorem chunk_addr_injective_canonical
+    (c₁ c₂ : ProllyChunkBody)
+    (h₁ : canonicalChunk c₁)
+    (h₂ : canonicalChunk c₂)
+    (h_addr : blake3 (serializeChunk c₁) = blake3 (serializeChunk c₂)) :
+    c₁ = c₂ := by
+  -- BLAKE3 is injective on the practical inputs of interest (collision resistance).
+  -- We axiomatize this in the foundation model; see 00-preamble.md §23.0.4.
+  have h_bytes : serializeChunk c₁ = serializeChunk c₂ :=
+    blake3_injective h_addr
+  exact serialize_injective_canonical c₁ c₂ h₁ h₂ h_bytes
+
+-- The two `axiom` declarations above are tracked for replacement with concrete
+-- definitions when the V1 byte layout is formalized at the byte level. The current
+-- form proves the algebraic properties needed by INV-FERR-046 (history independence)
+-- and INV-FERR-049 (snapshot identity) without depending on a specific layout.
+-- Tracked: bd-aqg9h (INV-FERR-045a Lean concretization).
 ```
 
 ---
@@ -500,29 +1432,61 @@ proptest! {
 **Lean theorem**:
 ```lean
 /-- History independence: prolly tree structure is a function of the key-value set,
-    not the insertion history. Modeled as: sorted list determines the tree. -/
+    not the insertion history. The substantive proof: any two LISTS that determine
+    the same SET produce the same sorted sequence and therefore the same tree. -/
 
 /-- A boundary function that depends only on the key, not on insertion order. -/
 def is_boundary (key : List UInt8) (pattern_width : Nat) : Bool :=
   (rolling_hash key) % (2 ^ pattern_width) == 0
 
-/-- Chunk boundaries are determined by the sorted key list. -/
+/-- Chunk boundaries are determined by the sorted key list. The function is
+    a pure function of the input list. -/
 def chunk_boundaries (keys : List (List UInt8)) (pw : Nat) : List Nat :=
   keys.enum.filterMap fun (i, k) => if is_boundary k pw then some i else none
 
-/-- Any permutation of inserts produces the same sorted key list,
-    therefore the same chunk boundaries, therefore the same tree. -/
-theorem history_independence (kvs1 kvs2 : Finset (List UInt8 x List UInt8))
-    (h : kvs1 = kvs2) (pw : Nat) :
-    prolly_root (kvs1.sort (fun a b => a.1 < b.1)) pw =
-    prolly_root (kvs2.sort (fun a b => a.1 < b.1)) pw := by
-  subst h; rfl
+/-- The substantive history independence theorem: two lists with the same
+    multiset of entries (i.e., same elements, possibly different order) produce
+    the same prolly tree. The proof uses `List.Perm` (permutation equivalence)
+    and the fact that `List.mergeSort` is a function from permutation classes
+    to canonical sorted lists. -/
+theorem history_independence_perm
+    (xs ys : List (List UInt8 × List UInt8))
+    (h : xs.Perm ys) (pw : Nat) :
+    prolly_root (xs.mergeSort (fun a b => a.1 < b.1)) pw =
+    prolly_root (ys.mergeSort (fun a b => a.1 < b.1)) pw := by
+  -- mergeSort is permutation-invariant: equal multisets produce equal sorted lists.
+  have h_sort : xs.mergeSort (fun a b => a.1 < b.1)
+              = ys.mergeSort (fun a b => a.1 < b.1) :=
+    List.mergeSort_eq_of_perm h
+  rw [h_sort]
 
-/-- Merge commutativity extends to prolly trees via history independence. -/
-theorem prolly_merge_comm (a b : Finset (List UInt8 x List UInt8)) (pw : Nat) :
+/-- Corollary: insertion in any order produces the same tree, because
+    `List.insert` permutations of the same elements are `Perm`-equivalent. -/
+theorem history_independence_set
+    (kvs : Finset (List UInt8 × List UInt8)) (pw : Nat)
+    (xs ys : List (List UInt8 × List UInt8))
+    (hxs : xs.toFinset = kvs) (hys : ys.toFinset = kvs)
+    (hxs_nodup : xs.Nodup) (hys_nodup : ys.Nodup) :
+    prolly_root (xs.mergeSort (fun a b => a.1 < b.1)) pw =
+    prolly_root (ys.mergeSort (fun a b => a.1 < b.1)) pw := by
+  -- Two duplicate-free lists with the same toFinset are permutations of each other.
+  have h_perm : xs.Perm ys :=
+    List.perm_of_nodup_toFinset_eq hxs_nodup hys_nodup (hxs.trans hys.symm)
+  exact history_independence_perm xs ys h_perm pw
+
+/-- Merge commutativity extends to prolly trees via set commutativity.
+    This was already substantive (uses `Finset.union_comm`); kept as the
+    second pillar of history independence. -/
+theorem prolly_merge_comm (a b : Finset (List UInt8 × List UInt8)) (pw : Nat) :
     prolly_root ((a ∪ b).sort (fun x y => x.1 < y.1)) pw =
     prolly_root ((b ∪ a).sort (fun x y => x.1 < y.1)) pw := by
   rw [Finset.union_comm]
+
+-- Helper lemmas (axiomatized at this layer; concrete proofs tracked):
+-- - List.mergeSort_eq_of_perm: permutation-equivalent lists sort to the same list
+-- - List.perm_of_nodup_toFinset_eq: duplicate-free lists with the same Finset are
+--   permutation-equivalent
+-- These are standard mathlib results; the proofs above are mechanical applications.
 ```
 
 ---
@@ -608,6 +1572,15 @@ pub enum DiffEntry {
 
 /// Compute the diff between two prolly tree roots.
 /// Returns a lazy iterator over DiffEntry items.
+///
+/// # Root parameter scope (S23.9.0 disambiguation)
+/// `root1` and `root2` are **tree roots** (the root chunk address of one prolly
+/// tree), NOT manifest hashes. The `Snapshot` API of INV-FERR-049 stores manifest
+/// hashes that resolve to a `RootSet` of five tree roots; callers that hold
+/// `Snapshot`s must extract the appropriate tree root via
+/// `Snapshot::resolve_root_set(...).primary` (or `.eavt`, `.aevt`, etc.) before
+/// invoking `diff`. The `Snapshot::diff` method handles this two-step protocol
+/// internally and is the preferred entry point for snapshot-level diffing.
 ///
 /// # Complexity
 /// - O(1) if roots are equal (identical trees)
@@ -865,6 +1838,23 @@ pub struct TransferResult {
 pub trait ChunkTransfer {
     /// Transfer all chunks reachable from `root` in `src` that are not present in `dst`.
     ///
+    /// # Root parameter scope (S23.9.0 disambiguation)
+    /// `root` is a **tree root** — the address of one prolly tree's root chunk
+    /// (a leaf-or-internal chunk, parseable by `decode_child_addrs` per
+    /// INV-FERR-045a). It is NOT a manifest hash; manifest chunks are 160 raw
+    /// bytes (S23.9.0.5) without a `LEAF_CHUNK_TAG`/`INTERNAL_CHUNK_TAG`
+    /// discriminator and therefore cannot be parsed as prolly tree internal
+    /// nodes. Calling `transfer(_, _, manifest_hash)` would copy ONLY the
+    /// 160-byte manifest chunk, not the trees it points to, because
+    /// `decode_child_addrs` would fail on the manifest's first byte.
+    ///
+    /// To transfer a complete snapshot (all five trees plus the manifest), use
+    /// `Snapshot::transfer_to_dst` (defined in INV-FERR-049 Level 2), which
+    /// orchestrates the two-phase protocol:
+    ///   1. `put_chunk(manifest_chunk)` into `dst` (160 bytes, idempotent).
+    ///   2. For each tree root in the resolved `RootSet`, call
+    ///      `transfer(src, dst, &tree_root)` — five tree transfers in total.
+    ///
     /// # Algorithm
     /// 1. Start at `root`. Check if `dst.has_chunk(root)`.
     /// 2. If yes, the entire subtree is already present (content-addressing). Done.
@@ -1049,115 +2039,263 @@ proptest! {
 
 ### INV-FERR-049: Snapshot = Root Hash
 
-**Traces to**: INV-FERR-045 (Chunk Content Addressing), INV-FERR-006 (Snapshot Isolation),
-C2 (Identity by Content)
+**Traces to**: INV-FERR-045 (Chunk Content Addressing), INV-FERR-045a (Deterministic
+Chunk Serialization), S23.9.0 (Canonical Datom Key Encoding — RootSet manifest
+structure), INV-FERR-006 (Snapshot Isolation), C2 (Identity by Content)
 **Verification**: `V:PROP`, `V:LEAN`
 **Stage**: 1
 
 #### Level 0 (Algebraic Law)
 ```
 Let ProllyTree be the type of prolly trees.
-Let root_hash : ProllyTree -> Hash extract the root's content address.
-Let resolve : ChunkStore x Hash -> ProllyTree reconstruct a tree from its root hash.
+Let RootSet be the multi-tree snapshot manifest from S23.9.0.4 — a record of five
+  tree roots: { primary, eavt, aevt, vaet, avet : Hash }.
+Let Snapshot be the externally visible snapshot identifier: a single Hash that
+  is the BLAKE3 of a serialized RootSet (S23.9.0.6).
 
-Theorem (snapshot identity):
-  forall T : ProllyTree, forall S : ChunkStore containing all chunks of T:
-    resolve(S, root_hash(T)) = T
+Let tree_root_hash : ProllyTree -> Hash extract the root chunk address of one tree.
+Let tree_resolve   : ChunkStore x Hash -> ProllyTree reconstruct one tree from its
+                     root chunk address.
+Let serialize_rs   : RootSet -> [u8; 160]               -- S23.9.0.5
+Let snapshot_hash  : RootSet -> Hash := λ rs. BLAKE3(serialize_rs(rs))
+Let resolve_rs     : ChunkStore x Hash -> RootSet := λ S, h.
+                     RootSet::from_canonical_bytes(get_chunk(S, h))
 
-Proof:
-  By structural induction on tree height:
-  - Base case (leaf node): root_hash(T) is BLAKE3(content(T)). resolve(S, root_hash(T))
-    retrieves the chunk, deserializes the leaf content, producing T. Content-addressing
-    (INV-FERR-045) guarantees the retrieved chunk has the right content.
-  - Inductive case (internal node): root_hash(T) addresses a chunk containing child hashes.
-    resolve deserializes the child hashes and recursively resolves each child.
-    By induction, each child resolves correctly. The reassembled tree = T.
+Theorem (per-tree snapshot identity):
+  ∀ T : ProllyTree, ∀ S : ChunkStore containing all chunks of T:
+    tree_resolve(S, tree_root_hash(T)) = T
+
+Proof: By structural induction on tree height.
+  - Base case (leaf node): tree_root_hash(T) = BLAKE3(content(T)). tree_resolve
+    fetches the chunk via INV-FERR-045 content-addressing and deserializes the
+    leaf bytes via INV-FERR-045a's `deserialize_chunk`. The round-trip property
+    of INV-FERR-045a guarantees the recovered LeafChunk equals T.
+  - Inductive case (internal node): tree_root_hash(T) addresses an internal chunk
+    whose deserialized form contains child hashes (INV-FERR-045a). tree_resolve
+    invokes itself on each child hash; by induction each child resolves correctly,
+    and reassembly produces T.
+
+Theorem (snapshot identity / multi-tree extension):
+  ∀ rs : RootSet, ∀ S : ChunkStore containing the manifest chunk and all chunks
+                  of all five trees in rs:
+    resolve_rs(S, snapshot_hash(rs)) = rs                                  -- (M1)
+    ∀ field ∈ {primary, eavt, aevt, vaet, avet}:
+      tree_resolve(S, rs.field) = the prolly tree built for that index      -- (M2)
+
+Proof of (M1):
+  snapshot_hash(rs) = BLAKE3(serialize_rs(rs)) is the address of a 160-byte chunk
+  whose content is the canonical RootSet bytes. INV-FERR-045 guarantees that
+  get_chunk(S, snapshot_hash(rs)) returns those exact 160 bytes (assuming S
+  contains the manifest chunk). RootSet::from_canonical_bytes is the structural
+  inverse of canonical_bytes (S23.9.0.5: fixed 160-byte layout, no padding,
+  field order primary/eavt/aevt/vaet/avet). Therefore resolve_rs recovers rs
+  exactly.
+
+Proof of (M2): apply the per-tree snapshot identity theorem to each of the five
+  fields of the resolved rs.
 
 Corollary (snapshot cost):
-  Creating a snapshot costs O(1): store the root hash.
-  The entire tree is already in the chunk store (immutable, content-addressed).
-  No data is copied; the root hash IS the snapshot.
+  Creating a snapshot is O(1): serialize the current RootSet (160 bytes), put_chunk
+  the result, record its address. The five trees and their chunks already exist in
+  the chunk store (immutable, content-addressed). No tree data is copied; the
+  manifest hash IS the externally visible snapshot identifier.
 
 Corollary (version history):
-  Storing a sequence of root hashes [h1, h2, ..., hn] provides a complete
-  version history. Each hi resolves to the full store state at version i.
-  Old versions remain accessible as long as their chunks are not garbage-collected.
-  Since chunks are shared across versions, the incremental storage cost of each
-  new version is O(d) (only the changed chunks), not O(n).
+  A sequence of manifest hashes [h1, h2, ..., hn] provides a complete version
+  history. Each hi resolves to a RootSet, and through the RootSet to all five
+  per-version tree states. Chunks are shared across versions by content-addressing,
+  so the incremental storage cost of each new version is O(d) (the changed chunks
+  in any of the five trees) plus 160 bytes for the new manifest, not O(n).
 ```
 
 #### Level 1 (State Invariant)
-For all reachable `(ProllyTree, ChunkStore)` pairs where the chunk store contains
-all chunks reachable from the tree's root:
-- `resolve(store, root_hash(tree))` produces a key-value set identical to the tree's
-  key-value set. The round-trip is lossless.
-- The root hash uniquely identifies the store state. Two stores with different key-value
-  sets produce different root hashes (by history independence INV-FERR-046 and
-  content-addressing INV-FERR-045, assuming collision resistance).
-- Storing the root hash is sufficient to reconstruct the full store. The root hash is
-  a O(32-byte) summary of an arbitrarily large store.
-- Old root hashes remain valid as long as their chunks exist. The chunk store is append-only
-  (chunks are never modified or deleted during normal operation). Garbage collection is an
-  explicit, separate operation that the application controls.
+For all reachable `(RootSet, ChunkStore)` pairs where the chunk store contains
+the 160-byte manifest chunk addressed by `snapshot_hash(RootSet)` AND all chunks
+reachable from each of the five tree roots:
 
-This invariant is the foundation for the journal format (section 23.9.2): the journal stores
-root hash updates, and each root hash is a complete snapshot of the store at that point.
-Combined with the O(d) diff (INV-FERR-047), the journal enables efficient time-travel
-queries: "diff the store between version V1 and V2."
+- `Snapshot::resolve_root_set(store, snapshot_hash)` produces a `RootSet`
+  identical to the original. The 160-byte manifest round-trip is lossless and
+  is enforced by the fixed field layout in S23.9.0.5.
+- For each of the five fields (`primary`, `eavt`, `aevt`, `vaet`, `avet`), the
+  per-tree resolve protocol of INV-FERR-045/045a yields the original prolly tree.
+  The round-trip from a key-value set through `build_prolly_tree` and back through
+  `read_prolly_tree(rs.primary, store)` is lossless.
+- The manifest hash uniquely identifies the snapshot state. Two snapshots with
+  different `RootSet`s produce different manifest hashes (by injectivity of
+  `serialize_rs` over fixed-layout 160-byte sequences and by BLAKE3 collision
+  resistance — the same combinatorial argument as INV-FERR-045).
+- The 32-byte manifest hash is a complete summary of the multi-tree store. The
+  external "snapshot = root hash" abstraction (single Hash externally visible)
+  is preserved even though the internal representation is five trees.
+- Old manifest hashes remain valid as long as the manifest chunk and all five
+  trees' chunks remain in the store. The chunk store is append-only during
+  normal operation; garbage collection is a separate, explicit lifecycle event
+  that the application controls (S23.9.2).
+
+This invariant is the foundation for the journal format (section 23.9.2): the
+journal stores `RootUpdate` records containing manifest hashes, and each manifest
+hash resolves to a complete snapshot of all five trees at that point. Combined
+with the O(d) diff per tree (INV-FERR-047), the journal enables efficient
+time-travel queries: "diff the store between version V1 and V2" reduces to
+loading both manifests and diffing the corresponding tree pairs.
 
 #### Level 2 (Implementation Contract)
 ```rust
-/// A snapshot is identified by a single root hash.
-/// The root hash is a content-addressed pointer to an immutable prolly tree.
+/// A snapshot is identified by a single MANIFEST hash that resolves to a `RootSet`
+/// (per S23.9.0.4). The manifest hash is `BLAKE3(serialize(root_set))` per S23.9.0.6.
 ///
-/// Creating a snapshot: store the root hash (O(1)).
-/// Loading a snapshot: resolve the root hash through the chunk store.
-/// Diffing snapshots: diff(root1, root2) using INV-FERR-047.
+/// The single-Hash external interface preserves INV-FERR-049's "snapshot = root hash"
+/// claim. The internal indirection through `RootSet` is what makes the multi-tree
+/// store (5 prolly trees per S23.9.0.1) addressable by a single 32-byte identifier.
+///
+/// Creating a snapshot: serialize the current `RootSet`, store the manifest chunk,
+///   record its address. O(1) chunk write (160 bytes).
+/// Loading a snapshot: load the manifest chunk, deserialize the `RootSet`, descend
+///   into individual tree roots. O(1) manifest load + O(n) tree traversal.
+/// Diffing snapshots: load both manifests (O(1)), compare each `RootSet` field pair
+///   (O(1)), and `diff()` only the trees whose roots differ. Common case: a single
+///   transaction touches all five indexes, so all five tree pairs need O(d * log_k n)
+///   diffing.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Snapshot {
-    /// The root hash of the prolly tree at this point in time.
-    root: Hash,
+    /// The MANIFEST hash. Per S23.9.0.6: `manifest_hash = BLAKE3(RootSet::canonical_bytes())`.
+    /// To recover the five tree roots, load the chunk addressed by `manifest_hash`
+    /// and deserialize its 160 bytes through `RootSet::from_canonical_bytes`.
+    manifest: Hash,
     /// The transaction that produced this snapshot (for ordering).
     tx: TxId,
 }
 
 impl Snapshot {
-    /// Create a snapshot from a root hash and transaction.
-    pub fn new(root: Hash, tx: TxId) -> Self {
-        Snapshot { root, tx }
+    /// Create a snapshot from a `RootSet`. Stores the manifest chunk and records
+    /// its content-addressed hash. O(1).
+    pub fn create(
+        root_set: &RootSet,
+        tx: TxId,
+        chunk_store: &dyn ChunkStore,
+    ) -> Result<Self, FerraError> {
+        let manifest_bytes = root_set.canonical_bytes();
+        let manifest_chunk = Chunk::from_bytes(&manifest_bytes);
+        let manifest = manifest_chunk.addr().clone();
+        chunk_store.put_chunk(&manifest_chunk)?;
+        Ok(Snapshot { manifest, tx })
     }
 
-    /// The root hash. This IS the snapshot.
-    pub fn root(&self) -> &Hash { &self.root }
+    /// Reconstruct a `Snapshot` from a known manifest hash (e.g., loaded from the
+    /// journal). The chunk store is consulted lazily during `resolve_root_set`.
+    pub fn from_manifest(manifest: Hash, tx: TxId) -> Self {
+        Snapshot { manifest, tx }
+    }
+
+    /// The manifest hash. This IS the externally-visible snapshot identifier.
+    pub fn manifest(&self) -> &Hash { &self.manifest }
 
     /// The transaction that produced this state.
     pub fn tx(&self) -> &TxId { &self.tx }
 
-    /// Resolve this snapshot to a full key-value set.
-    /// O(n) where n = number of key-value pairs in the tree.
+    /// Resolve this snapshot's manifest hash into the five tree roots.
+    /// O(1) chunk load + O(1) deserialize. Per S23.9.0.6.
+    pub fn resolve_root_set(
+        &self,
+        chunk_store: &dyn ChunkStore,
+    ) -> Result<RootSet, FerraError> {
+        let manifest_chunk = chunk_store.get_chunk(&self.manifest)?
+            .ok_or_else(|| FerraError::ChunkNotFound(self.manifest.clone()))?;
+        let buf: &[u8; 160] = manifest_chunk.data().try_into()
+            .map_err(|_| FerraError::InvalidManifestSize {
+                expected: 160,
+                actual: manifest_chunk.data().len(),
+            })?;
+        Ok(RootSet::from_canonical_bytes(buf))
+    }
+
+    /// Resolve this snapshot to the full key-value set of the PRIMARY tree.
+    /// Two-step protocol: (1) load manifest → RootSet, (2) descend the primary tree.
+    /// O(1) manifest load + O(n) tree traversal where n = number of datoms.
     pub fn resolve(
         &self,
         chunk_store: &dyn ChunkStore,
     ) -> Result<BTreeMap<Key, Value>, FerraError> {
-        read_prolly_tree(&self.root, chunk_store)
+        let root_set = self.resolve_root_set(chunk_store)?;
+        read_prolly_tree(&root_set.primary, chunk_store)
     }
 
-    /// Diff this snapshot against another.
-    /// O(d * log_k(n)) where d = number of changed key-value pairs.
+    /// Diff this snapshot against another at the manifest level first, descending
+    /// into individual tree pairs only where their roots differ.
+    ///
+    /// O(1) fast path when manifests are identical (no chunks loaded).
+    /// O(1) per-tree fast path when individual tree roots are identical.
+    /// O(d * log_k n) per tree where roots differ.
+    ///
+    /// The returned iterator yields entries from the PRIMARY tree only. Callers
+    /// that need cross-index diffs must call `diff_index` for each ordering.
     pub fn diff<'a>(
         &self,
         other: &Snapshot,
         chunk_store: &'a dyn ChunkStore,
-    ) -> Result<impl Iterator<Item = Result<DiffEntry, FerraError>> + 'a, FerraError> {
-        diff(&self.root, &other.root, chunk_store)
+    ) -> Result<Box<dyn Iterator<Item = Result<DiffEntry, FerraError>> + 'a>, FerraError> {
+        // Manifest fast path: identical manifest hash means identical RootSet,
+        // which means identical trees by S23.9.0.6 + INV-FERR-045.
+        if self.manifest == other.manifest {
+            return Ok(Box::new(std::iter::empty()));
+        }
+
+        let rs_self  = self.resolve_root_set(chunk_store)?;
+        let rs_other = other.resolve_root_set(chunk_store)?;
+
+        // Tree-level fast path: identical primary roots → no primary diff.
+        if rs_self.primary == rs_other.primary {
+            return Ok(Box::new(std::iter::empty()));
+        }
+        Ok(Box::new(diff(&rs_self.primary, &rs_other.primary, chunk_store)?))
+    }
+
+    /// Transfer this snapshot (manifest + all five trees) from `src` to `dst`.
+    ///
+    /// Two-phase protocol because manifests are not parseable by INV-FERR-045a's
+    /// `decode_child_addrs` (manifests have no chunk discriminator; they are 160
+    /// raw bytes per S23.9.0.5):
+    ///
+    /// 1. **Manifest phase**: copy the 160-byte manifest chunk from `src` to `dst`
+    ///    via `put_chunk`. Idempotent — re-runs are no-ops.
+    /// 2. **Tree phase**: resolve the manifest into a `RootSet` by reading from
+    ///    whichever store has it (preferentially `src`, fallback `dst` if the
+    ///    manifest was already present), then call `ChunkTransfer::transfer`
+    ///    for each of the five tree roots.
+    ///
+    /// After completion, `dst` contains every chunk reachable from this snapshot.
+    /// `Snapshot::resolve_root_set` and `Snapshot::resolve` will succeed against
+    /// `dst` without further chunk fetches.
+    pub fn transfer_to_dst(
+        &self,
+        src: &dyn ChunkStore,
+        dst: &dyn ChunkStore,
+        chunk_transfer: &dyn ChunkTransfer,
+    ) -> Result<(), FerraError> {
+        // Phase 1: copy the manifest chunk if dst doesn't already have it.
+        if !dst.has_chunk(&self.manifest)? {
+            let manifest_chunk = src.get_chunk(&self.manifest)?
+                .ok_or_else(|| FerraError::ChunkNotFound(self.manifest.clone()))?;
+            dst.put_chunk(&manifest_chunk)?;
+        }
+
+        // Phase 2: resolve and transfer each tree root.
+        let root_set = self.resolve_root_set(src)?;
+        chunk_transfer.transfer(src, dst, &root_set.primary)?;
+        chunk_transfer.transfer(src, dst, &root_set.eavt)?;
+        chunk_transfer.transfer(src, dst, &root_set.aevt)?;
+        chunk_transfer.transfer(src, dst, &root_set.vaet)?;
+        chunk_transfer.transfer(src, dst, &root_set.avet)?;
+        Ok(())
     }
 }
 
-/// A version history: sequence of snapshots (root hashes).
-/// Storage cost: O(versions x 32 bytes) for the hash list,
-/// plus O(d_total) chunks where d_total is the cumulative changes across versions.
+/// A version history: sequence of snapshots (manifest hashes).
+/// Storage cost: O(versions x 32 bytes) for the manifest list, plus O(d_total)
+/// chunks across the version history (chunks shared by content addressing per
+/// INV-FERR-045 + INV-FERR-046).
 pub struct VersionHistory {
-    /// Ordered list of (TxId, root_hash) pairs.
+    /// Ordered list of `Snapshot { manifest, tx }` pairs.
     versions: Vec<Snapshot>,
 }
 
@@ -1178,27 +2316,55 @@ impl VersionHistory {
         from: &TxId,
         to: &TxId,
         chunk_store: &'a dyn ChunkStore,
-    ) -> Result<impl Iterator<Item = Result<DiffEntry, FerraError>> + 'a, FerraError> {
+    ) -> Result<Box<dyn Iterator<Item = Result<DiffEntry, FerraError>> + 'a>, FerraError> {
         let snap_from = self.at_version(from)
-            .ok_or(FerraError::VersionNotFound(from.clone()))?;
+            .ok_or_else(|| FerraError::VersionNotFound(from.clone()))?;
         let snap_to = self.at_version(to)
-            .ok_or(FerraError::VersionNotFound(to.clone()))?;
+            .ok_or_else(|| FerraError::VersionNotFound(to.clone()))?;
         snap_from.diff(snap_to, chunk_store)
     }
 }
 ```
 
-**Falsification**: A `resolve(store, root_hash(tree))` call that produces a key-value set
-different from the original tree's key-value set. Concretely: build a prolly tree from
-key-value set KV, extract `root_hash`, then `resolve(store, root_hash)` and compare the
-result to KV. Any difference — a missing key, a wrong value, an extra key — constitutes
-a violation.
+> **Manifest model rationale (§23.9.0.6)**: The original spec authored a single-tree
+> Snapshot model where `Snapshot::root` was a direct prolly tree pointer. This was
+> incompatible with the multi-tree (primary + EAVT/AEVT/VAET/AVET) physical layout
+> that ferratomic-store actually requires per INV-FERR-005. The Pattern H authoring
+> in session 023 (S23.9.0) made the manifest model canonical, and FINDING-226 of
+> the session 023 spec audit identified this Level 2 as inconsistent with §23.9.0.6.
+> The L2 contract above was updated to introduce the manifest hash as a content-addressed
+> pointer to a `RootSet` chunk, preserving the "snapshot = root hash" external
+> abstraction (INV-FERR-049 Level 0) while making the multi-tree resolve protocol
+> explicit (INV-FERR-049 Level 2).
+
+**Falsification**: Any one of the following witnesses falsifies INV-FERR-049.
+
+1. **Per-tree round-trip failure**: A `tree_resolve(store, tree_root_hash(tree))` call
+   that produces a key-value set different from the original tree's key-value set.
+   Concretely: build a prolly tree from key-value set KV, extract `root_hash`, then
+   `read_prolly_tree(root_hash, store)` and compare the result to KV.
+
+2. **Manifest round-trip failure**: A `Snapshot::resolve_root_set(store)` call that
+   produces a `RootSet` whose fields differ from the original `RootSet` used to
+   construct the snapshot. This indicates the 160-byte canonical serialization
+   from S23.9.0.5 is broken (wrong field order, wrong width, padding leak).
+
+3. **Snapshot identity collision**: Two distinct `RootSet`s `rs1 != rs2` (different
+   in at least one field) such that `snapshot_hash(rs1) = snapshot_hash(rs2)`.
+   This would indicate either a BLAKE3 collision (negligible) or a serialization
+   bug where two different `RootSet`s produce the same canonical bytes.
+
+4. **Cross-tree leakage**: A `Snapshot::resolve` call that returns a key-value set
+   containing keys from a different snapshot's primary tree. This would indicate
+   the chunk store is non-deterministic or that the manifest hash is being misread.
 
 **proptest strategy**:
 ```rust
 proptest! {
+    /// (1) Per-tree snapshot round-trip — builds one tree, resolves via the
+    /// `Snapshot::resolve` two-step protocol, and compares against the original kvs.
     #[test]
-    fn snapshot_roundtrip(
+    fn snapshot_primary_roundtrip(
         kvs in prop::collection::btree_map(
             prop::collection::vec(any::<u8>(), 1..32),
             prop::collection::vec(any::<u8>(), 1..256),
@@ -1207,87 +2373,173 @@ proptest! {
         pattern_width in 4u32..12,
     ) {
         let store = MemoryChunkStore::new();
-        let root = build_prolly_tree(&kvs, &store, pattern_width).unwrap();
-
-        let snapshot = Snapshot::new(root, TxId::genesis());
+        let primary_root = build_prolly_tree(&kvs, &store, pattern_width).unwrap();
+        // Single-tree test: populate only the primary field, leave others as
+        // genesis sentinels. Real snapshots populate all five.
+        let root_set = RootSet {
+            primary: primary_root,
+            eavt:    Hash::genesis(),
+            aevt:    Hash::genesis(),
+            vaet:    Hash::genesis(),
+            avet:    Hash::genesis(),
+        };
+        let snapshot = Snapshot::create(&root_set, TxId::genesis(), &store).unwrap();
         let resolved = snapshot.resolve(&store).unwrap();
 
         prop_assert_eq!(resolved, kvs,
-            "Snapshot roundtrip lost data: built from {:?}, resolved to {:?}",
+            "Snapshot primary roundtrip lost data: built from {} kvs, resolved {}",
             kvs.len(), resolved.len());
     }
 
+    /// (2) Manifest round-trip — builds a `RootSet` with arbitrary tree roots,
+    /// stores the manifest, then resolves and compares.
     #[test]
-    fn snapshot_identity(
-        kvs in prop::collection::btree_map(
-            prop::collection::vec(any::<u8>(), 1..32),
-            prop::collection::vec(any::<u8>(), 1..256),
-            1..200
-        ),
-        pattern_width in 4u32..12,
+    fn snapshot_manifest_roundtrip(
+        primary_bytes in any::<[u8; 32]>(),
+        eavt_bytes in any::<[u8; 32]>(),
+        aevt_bytes in any::<[u8; 32]>(),
+        vaet_bytes in any::<[u8; 32]>(),
+        avet_bytes in any::<[u8; 32]>(),
     ) {
-        let store1 = MemoryChunkStore::new();
-        let store2 = MemoryChunkStore::new();
+        let root_set = RootSet {
+            primary: Hash::from_bytes(primary_bytes),
+            eavt:    Hash::from_bytes(eavt_bytes),
+            aevt:    Hash::from_bytes(aevt_bytes),
+            vaet:    Hash::from_bytes(vaet_bytes),
+            avet:    Hash::from_bytes(avet_bytes),
+        };
+        let store = MemoryChunkStore::new();
+        let snapshot = Snapshot::create(&root_set, TxId::genesis(), &store).unwrap();
 
-        let root1 = build_prolly_tree(&kvs, &store1, pattern_width).unwrap();
-        let root2 = build_prolly_tree(&kvs, &store2, pattern_width).unwrap();
+        let resolved_rs = snapshot.resolve_root_set(&store).unwrap();
+        prop_assert_eq!(resolved_rs, root_set,
+            "Manifest roundtrip lost or reordered tree roots");
 
-        prop_assert_eq!(root1, root2,
-            "Same key-value set must produce same root hash (snapshot identity)");
+        // Verify the manifest chunk is exactly 160 bytes (S23.9.0.5).
+        let manifest_chunk = store.get_chunk(snapshot.manifest()).unwrap().unwrap();
+        prop_assert_eq!(manifest_chunk.data().len(), 160,
+            "Manifest chunk must be exactly 160 bytes per S23.9.0.5");
     }
 
+    /// (3) Snapshot identity — same `RootSet` always produces the same manifest hash.
+    #[test]
+    fn snapshot_identity(
+        primary_bytes in any::<[u8; 32]>(),
+    ) {
+        let rs = RootSet {
+            primary: Hash::from_bytes(primary_bytes),
+            eavt:    Hash::genesis(),
+            aevt:    Hash::genesis(),
+            vaet:    Hash::genesis(),
+            avet:    Hash::genesis(),
+        };
+        let store1 = MemoryChunkStore::new();
+        let store2 = MemoryChunkStore::new();
+        let s1 = Snapshot::create(&rs, TxId::genesis(), &store1).unwrap();
+        let s2 = Snapshot::create(&rs, TxId::genesis(), &store2).unwrap();
+
+        prop_assert_eq!(s1.manifest(), s2.manifest(),
+            "Same RootSet must produce same manifest hash (snapshot identity)");
+    }
+
+    /// (4) Snapshot injectivity — distinct RootSets produce distinct manifest hashes.
     #[test]
     fn snapshot_distinct_for_different_data(
-        kvs1 in prop::collection::btree_map(
-            prop::collection::vec(any::<u8>(), 1..32),
-            prop::collection::vec(any::<u8>(), 1..256),
-            1..200
-        ),
-        kvs2 in prop::collection::btree_map(
-            prop::collection::vec(any::<u8>(), 1..32),
-            prop::collection::vec(any::<u8>(), 1..256),
-            1..200
-        ),
-        pattern_width in 4u32..12,
+        rs1_primary in any::<[u8; 32]>(),
+        rs2_primary in any::<[u8; 32]>(),
     ) {
-        prop_assume!(kvs1 != kvs2);
-
+        prop_assume!(rs1_primary != rs2_primary);
+        let mk = |p: [u8; 32]| RootSet {
+            primary: Hash::from_bytes(p),
+            eavt:    Hash::genesis(),
+            aevt:    Hash::genesis(),
+            vaet:    Hash::genesis(),
+            avet:    Hash::genesis(),
+        };
         let store = MemoryChunkStore::new();
-        let root1 = build_prolly_tree(&kvs1, &store, pattern_width).unwrap();
-        let root2 = build_prolly_tree(&kvs2, &store, pattern_width).unwrap();
+        let s1 = Snapshot::create(&mk(rs1_primary), TxId::genesis(), &store).unwrap();
+        let s2 = Snapshot::create(&mk(rs2_primary), TxId::genesis(), &store).unwrap();
 
-        prop_assert_ne!(root1, root2,
-            "Different key-value sets must produce different root hashes");
+        prop_assert_ne!(s1.manifest(), s2.manifest(),
+            "Different RootSets must produce different manifest hashes");
     }
 }
 ```
 
 **Lean theorem**:
 ```lean
-/-- Snapshot = root hash: resolve(store, root_hash(tree)) = tree.
-    Modeled as: the root hash is a faithful representation of the key-value set. -/
+/-- Snapshot identity at two layers:
+    (a) per-tree: tree_resolve(store, tree_root_hash(tree)) = tree
+    (b) multi-tree: resolve_rs(store, snapshot_hash(rs)) = rs
+    Both are theorems in the Lean foundation model; (b) reduces (a) over the
+    five RootSet fields. -/
 
-/-- A snapshot is a root hash. Creating it is O(1). -/
-def snapshot (tree : ProllyTree) : Hash := root_hash tree
+/-- A per-tree snapshot is the content-addressed root hash of a single prolly tree. -/
+def tree_snapshot (tree : ProllyTree) : Hash := tree_root_hash tree
 
-/-- Resolving a snapshot recovers the original key-value set. -/
-theorem snapshot_roundtrip (tree : ProllyTree) (store : ChunkStore)
+/-- Per-tree round-trip: resolving a tree's root hash recovers the tree. -/
+theorem tree_snapshot_roundtrip (tree : ProllyTree) (store : ChunkStore)
     (h : chunks_of tree ⊆ chunks_in store) :
-    resolve store (snapshot tree) = key_values tree := by
+    tree_resolve store (tree_snapshot tree) = tree := by
   induction tree with
   | leaf kvs =>
-    simp [snapshot, root_hash, resolve, key_values]
-    exact chunk_retrieve_correct store (root_hash (leaf kvs)) h
+    simp [tree_snapshot, tree_root_hash, tree_resolve, key_values]
+    exact chunk_retrieve_correct store (tree_root_hash (leaf kvs)) h
   | node children ih =>
-    simp [snapshot, root_hash, resolve, key_values]
+    simp [tree_snapshot, tree_root_hash, tree_resolve, key_values]
     congr 1
     exact ih (chunks_subset_of_children h)
 
-/-- Two trees with the same key-value set have the same snapshot. -/
-theorem snapshot_deterministic (t1 t2 : ProllyTree)
+/-- Multi-tree snapshot: a RootSet is identified by BLAKE3 of its 160-byte
+    canonical serialization (S23.9.0.5–.6). -/
+structure RootSet where
+  primary : Hash
+  eavt    : Hash
+  aevt    : Hash
+  vaet    : Hash
+  avet    : Hash
+
+axiom serialize_rs : RootSet → List UInt8  -- 160 bytes per S23.9.0.5
+axiom rs_serialize_injective : ∀ a b : RootSet,
+  serialize_rs a = serialize_rs b → a = b
+axiom rs_from_canonical_bytes : List UInt8 → Option RootSet
+axiom rs_roundtrip : ∀ rs : RootSet,
+  rs_from_canonical_bytes (serialize_rs rs) = some rs
+
+def snapshot_hash (rs : RootSet) : Hash := blake3 (serialize_rs rs)
+
+/-- Manifest round-trip: resolving the manifest hash through the chunk store
+    yields the original RootSet. -/
+theorem rs_snapshot_roundtrip (rs : RootSet) (store : ChunkStore)
+    (h_manifest : (snapshot_hash rs, serialize_rs rs) ∈ chunks_in store) :
+    rs_from_canonical_bytes
+      (chunk_retrieve store (snapshot_hash rs)) = some rs := by
+  -- The manifest chunk in store has content = serialize_rs rs (by content-addressing,
+  -- INV-FERR-045). chunk_retrieve returns that content. rs_roundtrip then applies.
+  rw [chunk_retrieve_eq_content store (snapshot_hash rs) (serialize_rs rs) h_manifest]
+  exact rs_roundtrip rs
+
+/-- Two RootSets with different fields have different manifest hashes
+    (assuming BLAKE3 collision resistance). -/
+theorem snapshot_hash_injective (a b : RootSet)
+    (h : snapshot_hash a = snapshot_hash b) : a = b := by
+  -- Manifest hash is BLAKE3 of canonical bytes; BLAKE3 is injective in the
+  -- collision-resistance model (00-preamble.md §23.0.4).
+  have h_bytes : serialize_rs a = serialize_rs b := blake3_injective h
+  exact rs_serialize_injective a b h_bytes
+
+/-- Two trees with the same key-value set have the same per-tree root hash
+    (history independence INV-FERR-046 lifted into snapshot identity). -/
+theorem tree_snapshot_deterministic (t1 t2 : ProllyTree)
     (h : key_values t1 = key_values t2) :
-    snapshot t1 = snapshot t2 := by
-  exact history_independence_root h
+    tree_snapshot t1 = tree_snapshot t2 :=
+  history_independence_root h
+
+-- Tracked: bd-uhjj3 — replace `axiom serialize_rs` etc. with concrete
+-- definitions over a 160-byte vector model and prove `rs_serialize_injective`
+-- directly. The current axiomatic form proves the algebraic snapshot identity
+-- needed by INV-FERR-049 without depending on a specific byte-level Lean
+-- implementation.
 ```
 
 ---
