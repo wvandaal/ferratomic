@@ -1,10 +1,11 @@
 //! Schema creation and evolution helpers.
 //!
 //! INV-FERR-009: Schema validation at transact boundary.
-//! INV-FERR-031: Genesis determinism -- 19 axiomatic meta-schema attributes.
+//! INV-FERR-031: Genesis determinism -- 25 axiomatic meta-schema attributes
+//! (9 db/*, 5 lattice/*, 11 tx/*).
 //!
 //! This module contains:
-//! - The genesis meta-schema (19 axiomatic attributes)
+//! - The genesis meta-schema (25 axiomatic attributes: 9 db/*, 5 lattice/*, 11 tx/*)
 //! - Schema evolution logic (transact-time attribute installation)
 //! - Value type and cardinality parsing from datom keywords
 //!
@@ -23,7 +24,7 @@
 //! let db = Database::genesis();
 //! let node = NodeId::from_bytes([1u8; 16]);
 //!
-//! // The genesis schema contains 19 axiomatic attributes (INV-FERR-031).
+//! // The genesis schema contains 25 axiomatic attributes (INV-FERR-031).
 //! // "db/doc" is one of them -- it accepts String values.
 //! let schema = db.schema();
 //! assert!(schema.get(&Attribute::from("db/doc")).is_some());
@@ -64,7 +65,7 @@ use ferratom::{
     ValueType,
 };
 
-/// Build the deterministic genesis meta-schema with 19 axiomatic attributes.
+/// Build the deterministic genesis meta-schema with 25 axiomatic attributes.
 ///
 /// Helper: LWW keyword attribute definition for genesis schema.
 fn lww_kw(doc: &str) -> AttributeDef {
@@ -116,12 +117,32 @@ fn lww_instant(doc: &str) -> AttributeDef {
     )
 }
 
-/// Build the deterministic genesis meta-schema with 19 axiomatic attributes.
+/// Helper: LWW bytes attribute definition for genesis schema.
+fn lww_bytes(doc: &str) -> AttributeDef {
+    AttributeDef::new(
+        ValueType::Bytes,
+        Cardinality::One,
+        ResolutionMode::Lww,
+        Some(Arc::from(doc)),
+    )
+}
+
+/// Helper: `MultiValue` card-many ref attribute definition for genesis schema.
+fn mv_ref_many(doc: &str) -> AttributeDef {
+    AttributeDef::new(
+        ValueType::Ref,
+        Cardinality::Many,
+        ResolutionMode::MultiValue,
+        Some(Arc::from(doc)),
+    )
+}
+
+/// Build the deterministic genesis meta-schema with 25 axiomatic attributes.
 ///
-/// INV-FERR-031: every call produces an identical schema. These 19
+/// INV-FERR-031: every call produces an identical schema. These 25
 /// attributes are the ONLY hardcoded elements in the engine. Every
 /// other attribute is defined by transacting datoms that reference
-/// these 19. This is the schema-as-data bootstrap (C3, C7).
+/// these 25. This is the schema-as-data bootstrap (C3, C7).
 #[must_use]
 pub(crate) fn genesis_schema() -> Schema {
     let mut schema = Schema::empty();
@@ -178,23 +199,54 @@ fn define_meta_schema(schema: &mut Schema) {
     schema.define(Attribute::from("lattice/top"), lww_kw("Greatest element"));
 }
 
-/// Attributes 15-19: tx/* transaction metadata.
+/// Attributes 15-25: tx/* transaction metadata.
+///
+/// Phase 4a.5 federation metadata attributes added per INV-FERR-051,
+/// INV-FERR-061, INV-FERR-063, and design decision D20.
 fn define_tx_schema(schema: &mut Schema) {
+    // --- derivation attributes (D20: derived datom provenance, Phase 4d) ---
     schema.define(
-        Attribute::from("tx/time"),
-        lww_instant("Transaction wall-clock time"),
+        Attribute::from("tx/derivation-input"),
+        mv_ref_many("Input datoms for derivation (D20, Phase 4d)"),
     );
+    schema.define(
+        Attribute::from("tx/derivation-rule"),
+        lww_kw("Rule that produced derivation (D20, Phase 4d)"),
+    );
+    schema.define(
+        Attribute::from("tx/derivation-source"),
+        lww_kw("Source of derived datoms (D20)"),
+    );
+
+    // --- existing + federation attributes ---
     schema.define(
         Attribute::from("tx/origin"),
         lww_ref("Node that originated transaction"),
     );
     schema.define(
+        Attribute::from("tx/predecessor"),
+        mv_ref_many("Causal predecessor entity refs (INV-FERR-061)"),
+    );
+    schema.define(
         Attribute::from("tx/provenance"),
-        lww_str("Provenance description"),
+        // ADR-FERR-028: changed from String to Keyword (INV-FERR-063).
+        lww_kw("Epistemic confidence level (INV-FERR-063)"),
     );
     schema.define(
         Attribute::from("tx/rationale"),
         lww_str("Why this transaction exists"),
+    );
+    schema.define(
+        Attribute::from("tx/signature"),
+        lww_bytes("Ed25519 signature bytes (INV-FERR-051)"),
+    );
+    schema.define(
+        Attribute::from("tx/signer"),
+        lww_bytes("Ed25519 verifying key bytes (INV-FERR-051)"),
+    );
+    schema.define(
+        Attribute::from("tx/time"),
+        lww_instant("Transaction wall-clock time"),
     );
     schema.define(
         Attribute::from("tx/validation-override"),

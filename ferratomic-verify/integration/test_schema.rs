@@ -308,6 +308,16 @@ fn build_all_ferra_error_variants() -> Vec<FerraError> {
             invariant: "INV-FERR-005".into(),
             details: "test invariant violation".into(),
         },
+        FerraError::SignatureInvalid {
+            tx_description: "test signature".into(),
+        },
+        FerraError::TransportError("test transport".into()),
+        FerraError::TruncatedChunk,
+        FerraError::TrailingBytes,
+        FerraError::NonCanonicalChunk,
+        FerraError::EmptyChunk,
+        FerraError::UnknownCodecTag(0x42),
+        FerraError::NotImplemented("test feature"),
     ]
 }
 
@@ -355,7 +365,12 @@ fn assert_ferra_error_fields_valid(error: &FerraError) {
         } => {
             assert_attr_pair_distinct(attribute, expected, got, "SchemaViolation");
         }
-        FerraError::EmptyTransaction | FerraError::Backpressure => {}
+        FerraError::EmptyTransaction
+        | FerraError::Backpressure
+        | FerraError::TruncatedChunk
+        | FerraError::TrailingBytes
+        | FerraError::NonCanonicalChunk
+        | FerraError::EmptyChunk => {}
         FerraError::SchemaIncompatible {
             attribute,
             left,
@@ -373,6 +388,18 @@ fn assert_ferra_error_fields_valid(error: &FerraError) {
                 "InvariantViolation naming"
             );
             assert_message_variant_valid(details, "InvariantViolation details");
+        }
+        FerraError::SignatureInvalid { tx_description } => {
+            assert_message_variant_valid(tx_description, "SignatureInvalid tx_description");
+        }
+        FerraError::TransportError(msg) => {
+            assert_message_variant_valid(msg, "TransportError");
+        }
+        FerraError::UnknownCodecTag(tag) => {
+            assert_ne!(*tag, 0x01, "0x01 is a known codec tag (DatomPair)");
+        }
+        FerraError::NotImplemented(msg) => {
+            assert!(!msg.is_empty(), "NotImplemented must have a message");
         }
     }
 }
@@ -407,8 +434,8 @@ fn test_inv_ferr_019_error_exhaustiveness() {
 
     assert_eq!(
         variants.len(),
-        12,
-        "INV-FERR-019: expected 12 FerraError variants -- update this test if variants are added"
+        20,
+        "INV-FERR-019: expected 20 FerraError variants -- update this test if variants are added"
     );
 }
 
@@ -443,6 +470,12 @@ fn build_simple_ferra_error_variants() -> Vec<(&'static str, FerraError)> {
         ),
         ("EmptyTransaction", FerraError::EmptyTransaction),
         ("Backpressure", FerraError::Backpressure),
+        ("TruncatedChunk", FerraError::TruncatedChunk),
+        ("TrailingBytes", FerraError::TrailingBytes),
+        ("NonCanonicalChunk", FerraError::NonCanonicalChunk),
+        ("EmptyChunk", FerraError::EmptyChunk),
+        ("UnknownCodecTag", FerraError::UnknownCodecTag(0x42)),
+        ("NotImplemented", FerraError::NotImplemented("test feature")),
     ]
 }
 

@@ -16,7 +16,7 @@ use std::fmt;
 /// | Validation | Caller | No (fix input) | `UnknownAttribute`, `SchemaViolation`, `EmptyTransaction` |
 /// | Merge | Caller | No (reconcile schemas) | `SchemaIncompatible` |
 /// | Concurrency | Transient | Yes (backoff) | `Backpressure` |
-/// | Federation | Infrastructure | Yes (retry/reconnect) | `PeerUnreachable` |
+/// | Federation | Infrastructure | Yes (retry/reconnect) | `PeerUnreachable`, `SignatureInvalid`, `TransportError` |
 /// | Internal | Our bug | No (file a bug) | `InvariantViolation` |
 ///
 /// `PartialEq` compares full variant structure including string fields.
@@ -181,6 +181,69 @@ pub enum FerraError {
         reason: String,
     },
 
+    /// Ed25519 signature verification failed.
+    ///
+    /// **Cause**: The signature does not match the signing message computed
+    /// from (`user_datoms`, `tx_id`, `predecessors`, `store_fingerprint`, `signer_pk`).
+    /// **Fault**: Either the transaction was tampered with, the signer key
+    /// is wrong, or the signing message was computed incorrectly.
+    /// **Recovery**: Reject the transaction. Do not apply it to the store.
+    /// INV-FERR-051: Signed transaction verification.
+    SignatureInvalid {
+        /// Which transaction failed verification.
+        tx_description: String,
+    },
+
+    /// Federation transport operation failed.
+    ///
+    /// **Cause**: The Transport trait implementation encountered an error
+    /// during `fetch_datoms` or `fetch_signed_transactions`.
+    /// **Fault**: Infrastructure (network, I/O, serialization).
+    /// **Recovery**: Retry with backoff. Check transport configuration.
+    /// INV-FERR-038: Federation substrate transparency.
+    TransportError(String),
+
+    // ── Codec / chunk errors (INV-FERR-045a, INV-FERR-045c) ─────────
+    /// Leaf chunk payload is truncated (fewer bytes than required).
+    ///
+    /// **Cause**: On-disk or wire bytes are shorter than the format requires.
+    /// **Fault**: Corruption or truncated transfer.
+    /// **Recovery**: Discard the chunk and re-fetch from a peer.
+    TruncatedChunk,
+
+    /// Leaf chunk payload has trailing bytes after the last entry.
+    ///
+    /// **Cause**: Extra bytes appended after the encoded entries.
+    /// **Fault**: Corruption, buggy encoder, or format version mismatch.
+    /// **Recovery**: Reject the chunk; do not process partial data.
+    TrailingBytes,
+
+    /// Chunk entries are not in canonical (strict ascending key) order.
+    ///
+    /// **Cause**: Entries in the chunk violate the sorted-deduplicated predicate.
+    /// **Fault**: Buggy encoder or adversarial peer.
+    /// **Recovery**: Reject the chunk. Defense in depth per INV-FERR-045a.
+    NonCanonicalChunk,
+
+    /// Chunk is empty (zero entries). `boundary_key` cannot produce a result.
+    ///
+    /// **Cause**: Empty chunks are syntactically valid but never appear in
+    /// well-formed prolly trees.
+    /// **Fault**: Structural error in tree construction.
+    EmptyChunk,
+
+    /// Unknown codec discriminator tag in a leaf chunk.
+    ///
+    /// **Cause**: The leading byte of the leaf chunk payload does not match
+    /// any registered codec in §23.9.8.
+    /// **Fault**: Corruption, future format, or experimental codec.
+    UnknownCodecTag(u8),
+
+    /// Feature not yet implemented.
+    ///
+    /// **Cause**: A code path that is spec-defined but not yet implemented.
+    NotImplemented(&'static str),
+
     // ── Invariant violations (OUR bug — should never happen) ────────
     /// An internal invariant was violated. This is a bug in Ferratomic.
     ///
@@ -234,6 +297,16 @@ impl fmt::Display for FerraError {
             Self::PeerUnreachable { addr, reason } => {
                 write!(f, "Peer unreachable at {addr}: {reason}")
             }
+            Self::SignatureInvalid { tx_description } => {
+                write!(f, "Signature invalid: {tx_description}")
+            }
+            Self::TransportError(msg) => write!(f, "Transport error: {msg}"),
+            Self::TruncatedChunk => write!(f, "Chunk payload truncated"),
+            Self::TrailingBytes => write!(f, "Chunk payload has trailing bytes"),
+            Self::NonCanonicalChunk => write!(f, "Chunk entries not in canonical order"),
+            Self::EmptyChunk => write!(f, "Empty chunk (no entries)"),
+            Self::UnknownCodecTag(tag) => write!(f, "Unknown codec tag: 0x{tag:02x}"),
+            Self::NotImplemented(msg) => write!(f, "Not implemented: {msg}"),
             Self::InvariantViolation { invariant, details } => {
                 write!(f, "INVARIANT VIOLATION {invariant}: {details}")
             }
@@ -309,6 +382,22 @@ mod tests {
             ),
             (FerraError::EmptyTransaction, "Empty transaction"),
             (FerraError::Backpressure, "backpressure"),
+            (
+                FerraError::SignatureInvalid {
+                    tx_description: "tx-42".into(),
+                },
+                "Signature invalid",
+            ),
+            (
+                FerraError::TransportError("timeout".into()),
+                "Transport error",
+            ),
+            (FerraError::TruncatedChunk, "truncated"),
+            (FerraError::TrailingBytes, "trailing"),
+            (FerraError::NonCanonicalChunk, "canonical"),
+            (FerraError::EmptyChunk, "Empty chunk"),
+            (FerraError::UnknownCodecTag(0x42), "0x42"),
+            (FerraError::NotImplemented("test"), "Not implemented"),
         ]
     }
 
@@ -375,10 +464,9 @@ mod tests {
         }
     }
 
-    /// Every variant must implement `Debug` without panicking.
-    #[test]
-    fn debug_output_is_nonempty() {
-        let variants: Vec<FerraError> = vec![
+    /// Build one instance of every `FerraError` variant for exhaustive testing.
+    fn all_error_variants() -> Vec<FerraError> {
+        vec![
             FerraError::WalWrite("test".into()),
             FerraError::WalRead("test".into()),
             FerraError::CheckpointCorrupted {
@@ -409,18 +497,29 @@ mod tests {
                 addr: "addr".into(),
                 reason: "r".into(),
             },
+            FerraError::SignatureInvalid {
+                tx_description: "tx-1".into(),
+            },
+            FerraError::TransportError("timeout".into()),
             FerraError::InvariantViolation {
                 invariant: "INV".into(),
                 details: "d".into(),
             },
-        ];
+            FerraError::TruncatedChunk,
+            FerraError::TrailingBytes,
+            FerraError::NonCanonicalChunk,
+            FerraError::EmptyChunk,
+            FerraError::UnknownCodecTag(0x42),
+            FerraError::NotImplemented("test"),
+        ]
+    }
 
-        for v in &variants {
+    /// Every variant must implement `Debug` without panicking.
+    #[test]
+    fn debug_output_is_nonempty() {
+        for v in &all_error_variants() {
             let dbg = format!("{v:?}");
-            assert!(
-                !dbg.is_empty(),
-                "Debug output must not be empty for a variant"
-            );
+            assert!(!dbg.is_empty(), "Debug output must not be empty");
         }
     }
 

@@ -55,8 +55,8 @@ fn test_inv_ferr_031_genesis_determinism() {
     assert_eq!(a.epoch(), b.epoch());
 }
 
-/// The 19 axiomatic attribute idents expected in genesis schema (INV-FERR-031).
-const GENESIS_ATTRIBUTE_IDENTS: [&str; 19] = [
+/// The 25 axiomatic attribute idents expected in genesis schema (INV-FERR-031).
+const GENESIS_ATTRIBUTE_IDENTS: [&str; 25] = [
     "db/ident",
     "db/valueType",
     "db/cardinality",
@@ -71,20 +71,26 @@ const GENESIS_ATTRIBUTE_IDENTS: [&str; 19] = [
     "lattice/comparator",
     "lattice/bottom",
     "lattice/top",
-    "tx/time",
+    "tx/derivation-input",
+    "tx/derivation-rule",
+    "tx/derivation-source",
     "tx/origin",
+    "tx/predecessor",
     "tx/provenance",
     "tx/rationale",
+    "tx/signature",
+    "tx/signer",
+    "tx/time",
     "tx/validation-override",
 ];
 
 #[test]
-fn test_inv_ferr_031_genesis_schema_has_19_attributes() {
+fn test_inv_ferr_031_genesis_schema_has_25_attributes() {
     let store = Store::genesis();
     assert_eq!(
         store.schema().len(),
-        19,
-        "INV-FERR-031: genesis schema must have exactly 19 axiomatic attributes"
+        25,
+        "INV-FERR-031: genesis schema must have exactly 25 axiomatic attributes"
     );
     for ident in &GENESIS_ATTRIBUTE_IDENTS {
         assert!(

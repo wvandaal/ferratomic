@@ -28,14 +28,22 @@
 // NOT as crate-level attributes, because those also block test code.
 #![warn(clippy::pedantic)]
 
+pub mod bundle;
 pub mod clock;
 pub mod datom;
 pub mod error;
+pub mod filter;
+pub mod provenance;
 pub mod schema;
+pub mod signing;
 pub mod traits;
 pub mod wire;
 
+pub use bundle::SignedTransactionBundle;
 pub use clock::{ClockSource, Frontier, HybridClock, NodeId, SystemClock, TxId};
 pub use datom::{Attribute, AttributeId, AttributeIntern, Datom, EntityId, NonNanFloat, Op, Value};
 pub use error::FerraError;
+pub use filter::DatomFilter;
+pub use provenance::ProvenanceType;
 pub use schema::{AttributeDef, Cardinality, ResolutionMode, Schema, ValueType};
+pub use signing::{TxSignature, TxSigner};

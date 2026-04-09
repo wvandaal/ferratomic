@@ -17,6 +17,7 @@
 pub mod adjacency;
 mod bloom;
 pub mod chunk_fingerprints;
+pub mod codec;
 mod columns;
 pub mod entity_rle;
 mod fingerprint;

@@ -424,9 +424,10 @@ mod tests {
     }
 
     #[test]
-    fn test_adr_ferr_030_genesis_19_attributes() {
-        // The genesis schema has exactly 19 attributes. Verify the intern
-        // table can accommodate them with deterministic IDs.
+    fn test_adr_ferr_030_genesis_25_attributes() {
+        // The genesis schema has exactly 25 attributes (19 original + 6 federation
+        // metadata from Phase 4a.5). Verify the intern table can accommodate them
+        // with deterministic IDs.
         let genesis_attrs: Vec<Attribute> = vec![
             "db/cardinality",
             "db/doc",
@@ -442,9 +443,15 @@ mod tests {
             "lattice/elements",
             "lattice/ident",
             "lattice/top",
+            "tx/derivation-input",
+            "tx/derivation-rule",
+            "tx/derivation-source",
             "tx/origin",
+            "tx/predecessor",
             "tx/provenance",
             "tx/rationale",
+            "tx/signature",
+            "tx/signer",
             "tx/time",
             "tx/validation-override",
         ]
@@ -454,9 +461,9 @@ mod tests {
 
         let table = AttributeIntern::from_attributes(genesis_attrs.clone())
             .expect("genesis intern must succeed");
-        assert_eq!(table.len(), 19, "ADR-FERR-030: genesis has 19 attributes");
+        assert_eq!(table.len(), 25, "ADR-FERR-030: genesis has 25 attributes");
 
-        // IDs must be 0..18 in sorted order.
+        // IDs must be 0..24 in sorted order.
         for (i, attr) in genesis_attrs.iter().enumerate() {
             let id = table
                 .id_of(attr)

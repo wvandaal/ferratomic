@@ -481,8 +481,8 @@ mod tests {
         let merged = merge(&a, &b).expect("merge genesis stores");
         assert_eq!(
             merged.schema().len(),
-            19,
-            "bd-10p: merge must preserve schema -- expected 19 genesis attributes, got {}",
+            25,
+            "bd-10p: merge must preserve schema -- expected 25 genesis attributes, got {}",
             merged.schema().len()
         );
         assert!(
@@ -610,9 +610,9 @@ mod tests {
 
         assert_eq!(
             merged.schema().len(),
-            21,
+            27,
             "bd-3n6: disjoint schema merge must union all attributes. \
-             Expected 21 (19 genesis + user/name + user/age), got {}",
+             Expected 27 (25 genesis + user/name + user/age), got {}",
             merged.schema().len()
         );
         assert!(merged.schema().get(&Attribute::from("user/name")).is_some());
