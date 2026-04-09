@@ -2404,19 +2404,308 @@ bd-8rvz is the **second** Session 015 cleanroom-finding orphan to verify as alre
 2. Should the orphan audit pause and a broader Pattern I sweep happen across all P2/P3 Session 015-attributed beads in the labeled phase-4a/4b cluster?
 3. Should the closure-without-bead-update workflow be added as a discipline reminder in `feedback_*.md` or AGENTS.md to prevent future Pattern I instances?
 
+**User directive (2026-04-08)**: Option A then C — finish bd-0wn5, then continue with Phase 022b spec audit per the original roadmap. Pattern I sweep filed as a follow-up session item (recorded in §5.6 conclusion + Phase 3 reconciliation list update).
+
+#### bd-0wn5 — INV-FERR-057: Implement soak test framework and mini-soak proptest
+
+**Phase 1**:
+- Code refs: bead specifies `ferratomic-verify/src/soak.rs` as **NEW** (work not done). Verified by Glob: `soak.rs` does NOT exist in `ferratomic-verify/{src,proptest}` — only `durability_properties.rs` (proptest target) and `generators.rs` (precondition utility) exist. **Pattern I negative**: work is real outstanding, not a phantom-fix.
+- Spec refs: INV-FERR-057 verified at `spec/08-verification-infrastructure.md:390` with title "Sustained Load Invariant Preservation" — MATCHES bead citation. INV-FERR-057 is Stage 1 (`**Stage**: 1`) which the bead correctly understands. Algebraic Law spans lines 397-429 with full proof sketch.
+- Deps: Clean — explicit "Depends on: None (uses existing Store/Database APIs)" + "Blocks: bd-fzn". `br show` confirms outgoing edge to bd-fzn (Phase 4c gate). VALID.
+- Duplicate: UNIQUE.
+
+**NOT a Session 015 cleanroom finding**: bd-0wn5 was created 2026-03-31 (BEFORE the Session 015 sweep), with the standard lab-grade template structure (Specification Reference / Preconditions / Postconditions / Frame Conditions / Refinement Sketch / Files / Dependencies). It does NOT have a "Finding (Session 015 Cleanroom Re-Review)" header. This means **Pattern I scope is restricted to Session 015 cleanroom attribution** — bd-0wn5 doesn't add or subtract from the Pattern I sample.
+
+**Structured field state**:
+```
+{ "id": "bd-0wn5", "status": "open", "issue_type": "task", "priority": 3 }
+$ br label list bd-0wn5
+No labels for bd-0wn5.
+```
+
+**Phase 2** (8 lenses):
+- L0 Epistemic: PASS — V:PROP is appropriate for INV-FERR-057 (empirical sustained-load property, Stage 1, statistical confidence on long-running invariant preservation).
+- L1 Structural: **MOSTLY PASS** — type=task ✓, full template structure (Specification Reference / Preconditions / Postconditions / Frame Conditions / Refinement Sketch / Files / Dependencies) all present. Missing only: labels and Pseudocode Contract. **bd-0wn5 is the most lab-grade of the 7 hidden orphans.**
+- L2 Spec Trace: STRONG PASS — INV-FERR-057 + supporting Stage 0 set + NEG-FERR-005.
+- L3 Postcondition: STRONG PASS — 5 binary, verifiable, INV-traced postconditions with explicit verification commands.
+- L4 Scope: PASS — 3 files (1 new + 2 modified), all in `ferratomic-verify/`, single concept.
+- L5 Frame: STRONG PASS — explicit "ferratomic-core/src/ must not be modified" + "ferratom/src/ must not be modified."
+- L6 Compiler Test: **WEAK FAIL** — introduces `SoakConfig` and `SoakResult` structs (Postcondition #1) but no Pseudocode Contract showing the field types. An implementing agent would have to choose: `SoakConfig { duration: Duration, rate: u64, check_interval: u64, ... }`?
+- L7 Axiological: STRONG PASS — INV-FERR-057 is the empirical guardrail for all Stage 0 invariants under sustained load; load-bearing for billion-scale True North targets.
+
+**Verdict**: NEEDS WORK → **EDIT** (only 2 fixes — add label, add Pseudocode Contract for SoakConfig/SoakResult).
+
+**Findings raised**:
+- [FINDING-198] bd-0wn5: no labels (`br label list bd-0wn5` returns "No labels"). Phase-4b verification work per §17.3. Lens 1 + §17.3. MAJOR.
+- [FINDING-199] bd-0wn5: missing Pseudocode Contract for SoakConfig and SoakResult structs (Postcondition #1 names them but doesn't specify field types). Lens 6. MAJOR.
+
+---
+
+### 5.6.1 Phase 022a summary (7 hidden orphans audited)
+
+| # | Bead | Verdict | Findings | Pattern I? |
+|---|------|---------|----------|------------|
+| 1 | bd-gvil | NEEDS WORK (RECLASSIFY+REWRITE) | 171-177 + cross-cut 178 | N/A (not Session 015) |
+| 2 | bd-uyy9 | NEEDS WORK (EDIT) | 179-183 | Session 015 — REAL outstanding work |
+| 3 | bd-fcta | **CLOSE — completed** | 184-185 | Session 015 — **PHANTOM (Pattern I)** — fixed by commit d14f47c |
+| 4 | bd-l64y | NEEDS WORK (EDIT) | 186-191 | Session 015 — REAL bug at line precision |
+| 5 | bd-wwia | REWRITE (Pattern E worst form) | 192-195 | NOT Session 015 — work not done, body empty |
+| 6 | bd-8rvz | **CLOSE — completed** | 196-197 | Session 015 — **PHANTOM (Pattern I)** — fixed by Phase 4a refactor sweep |
+| 7 | bd-0wn5 | NEEDS WORK (EDIT) | 198-199 | NOT Session 015 — most lab-grade orphan |
+
+**Statistics**:
+- 7 / 7 hidden orphans audited (100%)
+- 2 / 7 verdict CLOSE (29% — both Pattern I)
+- 4 / 7 verdict NEEDS WORK with EDIT or RECLASSIFY+REWRITE (57%)
+- 1 / 7 verdict REWRITE (Pattern E worst form, bd-wwia)
+- 4 / 7 are Session 015 cleanroom findings; **2 / 4 = 50% Pattern I** (bd-fcta + bd-8rvz phantom-fix)
+- 29 new findings filed (171-199)
+- 1 cross-cut to Pattern F + Pattern H (bd-4vwk via bd-gvil audit)
+
+### 5.6.2 Pattern I formal description
+
+**Pattern I — Session 015 cleanroom-finding orphans whose work was completed during Phase 4a remediation but the beads were never closed.**
+
+| Aspect | Detail |
+|--------|--------|
+| **Population** | Beads created during/after the Session 015 cleanroom re-review with the "Finding (Session 015 Cleanroom Re-Review)" header in their body. |
+| **Defect signature** | Bead status remains `open` even though the cited code has been fixed. The fix typically lands in a Phase 4a remediation commit (e.g., `d14f47c "fix: close 24 Phase 4a gate blockers"` or unnamed refactoring sweeps). |
+| **Confirmed instances** | bd-fcta (commit d14f47c) + bd-8rvz (Phase 4a refactor sweep). |
+| **Hit rate among 4 audited Session 015 orphans** | 2/4 = 50%. Statistically significant — large enough to recommend a broader sweep across labeled Phase 4a/4b cleanroom-finding beads. |
+| **Detection method** | For each Session 015 cleanroom finding, grep current code for the cited bug signature; if absent, check git log for the fix commit; if found, the bead is a Pattern I victim. |
+| **Remediation** | `br close <bd-id> --reason "Already fixed in commit <hash>. <Verification evidence>. Verified by audit doc §5.6 in session 022."` |
+| **Prevention** | Discipline reminder to add to AGENTS.md or `feedback_*.md`: "When closing a cleanroom-finding-driven defect, IMMEDIATELY close the corresponding bead with the fix commit hash. Do not assume the next agent will notice." |
+
+### 5.6.3 Pattern I sweep — recommended follow-up
+
+**Status**: NOT executed in session 022 (per session 022 discipline: orphan audit only, no broader sweep). Filed as session 026 verification work item.
+
+**Scope of recommended sweep** (session 026 or new dedicated session):
+
+1. Search for all open beads with body containing "Session 015 Cleanroom Re-Review" or "Session 015 cleanroom" — these are the Pattern I population.
+2. For each, perform Phase 1 Check 1 (grep current code for the bug signature):
+   - If bug exists → bead is real outstanding work (no action)
+   - If bug absent → bead is Pattern I phantom; close with commit reference
+3. Update §19.x in the audit doc with new closure batch script entries.
+4. Update spec/README.md or AGENTS.md with the prevention discipline rule.
+
+**Estimated effort**: 30-90 min depending on Session 015 finding population size (likely 5-15 candidates beyond the 2 already-confirmed).
+
+**Pattern I sweep does NOT block session 022 → 027+ progression**. It is parallel verification work that closes bookkeeping debt without affecting the True North Roadmap critical path.
+
 ---
 
 ## 6. Spec Audit — `spec/05 §23.8.5` (Phase 4a.5 Federation Foundations)
 
-_Phases 1-6 of lifecycle/17 to be filled in during execution._
+> **Audit context**: Per `lifecycle/17` deep mode. Sequential, orchestrator-only.
+> Pattern F federation-side renumber proposal locked in §18.2 (spec/05 ADRs
+> 031/032/033 → 034/035/036). Pattern D INV-029/032 mismatch resolution
+> requires reading spec/03 INV-FERR-029. INV-FERR-08x placeholder beads need
+> their citations verified against the actual §23.8.5 INV cluster.
 
 ### 6.1 Structural inventory
 
-_Per-INV table to be filled in during Phase 1 of spec audit._
+**Section anchor**: `## 23.8.5 Phase 4a.5: Federation Foundations` at `spec/05-federation.md:4951` (level-2 heading).
+
+**Element scope discovery** — the session 022 mandate enumerated 15 elements (6 INVs + 9 ADRs). Actual cluster contents per `grep ^### ADR-FERR` and `grep ^### INV-FERR` in spec/05:
+
+| Element | Line | In mandate? |
+|---------|------|-------------|
+| ADR-FERR-021 (Signature Storage as Datoms) | 4989 | ✓ |
+| ADR-FERR-022 (Phase 4a.5 DatomFilter Scope) | 5030 | ✓ |
+| ADR-FERR-023 (Per-Transaction Signing) | 5068 | ✓ |
+| ADR-FERR-024 (Async Transport via std::future) | 5108 | ✓ |
+| ADR-FERR-025 (Transaction-Level Federation) | 5144 | ✓ |
+| ADR-FERR-026 (Causal Predecessors as Datoms) | 5184 | ✓ |
+| ADR-FERR-027 (Store Identity via Self-Signed Transaction) | 5223 | ✓ |
+| ADR-FERR-028 (ProvenanceType Lattice on Transactions) | 5265 | ✓ |
+| **ADR-FERR-029 (Merge Receipts as Datoms)** | **5306** | **✗ MISSING from mandate** |
+| ADR-FERR-031 (Database-Layer Signing) — to be renumbered to 034 | 5341 | ✓ |
+| ADR-FERR-032 (TxId-Based Transaction Entity) — to be renumbered to 035 | 5390 | ✓ |
+| ADR-FERR-033 (Store Fingerprint in Signing Message) — to be renumbered to 036 | 5437 | ✓ |
+| INV-FERR-060 (Store Identity Persistence) | 5491 | ✓ |
+| INV-FERR-061 (Causal Predecessor Completeness) | 5736 | ✓ |
+| INV-FERR-062 (Merge Receipt Completeness) | 5952 | ✓ |
+| INV-FERR-063 (Provenance Lattice Total Order) | 6143 | ✓ |
+| INV-FERR-025b (Universal Index Algebra & Graceful Degradation) | 6343 | ✓ |
+| INV-FERR-086 (Canonical Datom Format Determinism) | 6722 | ✓ |
+
+**Total: 18 elements** (12 ADRs + 6 INVs + 0 NEGs). The session 022 mandate's 15-element enumeration was undercount by 3 ADRs (021-029 has 9 ADRs, mandate listed 8; plus 031/032/033). Mandate said "9 ADRs" but ADR-FERR-029 was omitted entirely. Recovered count: 12 ADRs.
+
+#### 6.1.1 INV inventory (9 layers per INV per `lifecycle/17` Phase 1 table)
+
+| INV | Traces | V tags | Stage | L0 | L0-proof | L1 | L2 | Falsify | proptest | Lean | Gaps |
+|-----|--------|--------|-------|----|----|----|----|---------|----------|------|------|
+| 060 | ✓ (5493) | 4 (V:PROP, V:KANI, V:LEAN, V:INTEGRATION) | 0 | ✓ (5498) | ✓ | ✓ (5532) | ✓ (5551) | ✓ (5657) | ✓ (5662) | ✓ (5706) | **0** |
+| 061 | ✓ (5738) | 4 (V:PROP, V:KANI, V:LEAN, V:INTEGRATION) | 0 | ✓ (5742) | ✓ | ✓ (5774) | ✓ (5795) | ✓ (5846) | ✓ (5850) | ✓ (5918) | **0** |
+| 062 | ✓ (5954) | 4 (V:PROP, V:KANI, V:LEAN, V:INTEGRATION) | 0 | ✓ (5958) | ✓ | ✓ (5973) | ✓ (5988) | ✓ (6059) | ✓ (6065) | ✓ (6116) | **0** |
+| 063 | ✓ (6145) | 3 (V:PROP, V:KANI, V:LEAN) | 0 | ✓ (6150) | ✓ | ✓ (6174) | ✓ (6192) | ✓ (6264) | ✓ (6269) | ✓ (6306) | **0** |
+| 025b | ✓ (6345) | 2 (V:PROP, V:LEAN) | 1 | ✓ (6351) | ✓ | ✓ (6394) | ✓ (6427) | ✓ (6555) | ✓ (6564) | ✓ (6601) | **0** |
+| 086 | ✓ (6724) | 3 (V:PROP, V:KANI, V:TYPE) | 0 | ✓ (6739) | ✓ | ✓ (6759) | ✓ (6777) | ✓ (6836) | ✓ (6842) | ✓ (6865) | **0** |
+
+**All 6 INVs are structurally complete: 9/9 layers, 0 gaps.** This is the lab-grade structural baseline. Quality assessment of within-field content is Phase 3's job (7 lenses).
+
+#### 6.1.2 ADR inventory (8 fields per ADR)
+
+All 12 ADRs verified to have: `**Traces to**`, `**Stage**`, `**Problem**`, `**Options**` table, `**Decision**`, `**Rejected**`, `**Consequence**`, `**Source**`. Each follows the standard ADR template.
+
+| ADR | Lines | Stage | Decision | Notable |
+|-----|-------|-------|----------|---------|
+| 021 | 4989-5028 | 0 | A (Datoms) | Signing message exclusion |
+| 022 | 5030-5066 | 0 | B (Positive-only DatomFilter, 6 variants) | CALM theorem grounding |
+| 023 | 5068-5106 | 0 | B (Per-Transaction signing) | Refined by 031/034 |
+| 024 | 5108-5142 | 0 | B (Pin<Box<dyn Future>>) | Zero-deps async |
+| 025 | 5144-5182 | 0 | B (Transaction bundles) | Braid alignment |
+| 026 | 5184-5220 | 0 | C (Predecessor datoms) | Genesis schema impact |
+| 027 | 5223-5263 | 0 | C (Self-signed identity tx) | X.509 pattern |
+| 028 | 5265-5305 | 0 | B (ProvenanceType lattice) | Braid kernel basis |
+| 029 | 5306-5340 | 0 | B (Receipt datoms) | **OMITTED FROM MANDATE — FINDING-200** |
+| 031 | 5341-5388 | 0 | D (Database::transact_signed) | **Pattern F renumber → 034** |
+| 032 | 5390-5435 | 0 | B (TxId-based entity) | **Pattern F renumber → 035** |
+| 033 | 5437-5489 | 0 | B (Store fingerprint in signing msg) | **Pattern F renumber → 036** |
+
+**Structural inventory verdict**: All 18 elements present and structurally complete. No missing-layer findings at the inventory level. The §23.8.5 cluster is structurally lab-grade.
+
+#### 6.1.3 Phase 1 findings (structural)
+
+- [FINDING-200] **§23.8.5 section number collision in spec/05.** TWO different sections share the number "23.8.5":
+  - `spec/05:2092` — `### §23.8.5: Knowledge Transfer Use Cases (Application-Level)` (level-3 sub-subsection of §23.8 Federation & Federated Query)
+  - `spec/05:4951` — `## 23.8.5 Phase 4a.5: Federation Foundations` (level-2 major section)
+  - These are at DIFFERENT heading levels (`###` vs `##`) and have completely different content scopes. Same section number "23.8.5" appears in two places.
+  - **Severity**: MAJOR (section-number collision in canonical spec namespace, structurally similar to Pattern F at the section level)
+  - **Lens**: Phase 1 inventory + Phase 2 cross-reference integrity (a citation to "§23.8.5" in any bead is now ambiguous)
+  - **Fix**: Renumber the later (Phase 4a.5) section to a non-conflicting number (e.g., `## 23.8.9 Phase 4a.5 Federation Foundations`) OR rename the earlier sub-subsection. Recommendation: rename the later one because the §23.8.x sub-numbering at line 1895+ already runs through §23.8.8 (line 2221 — "Federation Orchestration Protocol"); §23.8.9 is the natural next slot. Alternatively, use a fresh major section number (e.g., §23.8.5 → §23.11 or §23.8a).
+  - **Status**: open (Phase 4 remediation; cross-cuts to spec audit Section 8 since §23.8.x numbering is global to spec/05)
+
+- [FINDING-201] **ADR-FERR-029 (Merge Receipts as Datoms) was OMITTED from session 022 mandate enumeration**. Continuation prompt listed only 9 ADRs (021-028, 031-033). Verified by `grep ^### ADR-FERR spec/05`: ADR-FERR-029 exists at `spec/05:5306` between 028 and 031. The §23.8.5 cluster has 12 ADRs total, not 9.
+  - **Severity**: MINOR (mandate enumeration error, no spec defect — ADR-FERR-029 is itself structurally complete)
+  - **Lens**: scope verification
+  - **Fix**: Audit ADR-FERR-029 in this Phase 1 (already done above), include it in Phase 3 7-lens audit (15 → 18 elements), update the §6 element count throughout. The continuation prompt source (`docs/prompts/sessions/2026-04-08-session-021-continuation.md`) should be updated for future sessions.
+  - **Status**: applied to current audit (ADR-FERR-029 now in scope)
+
+- [FINDING-202] **Mandate undercount has knock-on effect on §18.2 Pattern F victim list**. The §18.2 affected-bead enumeration (bd-qguw, bd-mklv, bd-6j0r, bd-3t63 + bd-4vwk via FINDING-178) was based on the 9-ADR mandate. With ADR-FERR-029 in scope, no NEW Pattern F victims emerge for it (ADR-FERR-029 is "Merge Receipts as Datoms" — its number does NOT collide with any spec/09 ADR). But the methodology lesson holds: mandate-driven enumeration risks omission. Phase 3 lens audit should verify each ADR for cross-section number collisions, not assume the §18.2 list is exhaustive.
+  - **Severity**: MINOR (informational / methodology improvement)
+  - **Lens**: cross-cut to §18.2 quality
+  - **Fix**: Phase 3 lens 7 (Internal Contradiction) explicitly checks ADR number collisions across spec/04, spec/05, spec/09 for ALL 12 ADRs in the §23.8.5 cluster, not just 031/032/033.
+  - **Status**: open (Phase 3 audit task)
+
+- [FINDING-203] **Mandate originally said "INV-FERR-08x placeholder resolution"** — this was a reference to fabricated INV-FERR-08x citations in beads (similar to Pattern H §S23.9.x). With INV-FERR-086 verified to exist at `spec/05:6722` ("Canonical Datom Format Determinism"), the canonical INV-FERR-08x cluster member from §23.8.5 is identified. Other INV-FERR-08x references in beads (070-085 in spec/09) are out of §23.8.5 scope and belong to the spec audit Section 8 (spec/09).
+  - **Severity**: INFORMATIONAL (resolves a placeholder concern, not a defect)
+  - **Lens**: cross-cut to bead audit
+  - **Fix**: No action — clarification only. spec/05 §23.8.5 contributes ONLY INV-FERR-086 to the INV-FERR-08x family. Other 08x INVs are spec/09's responsibility.
+  - **Status**: clarified
 
 ### 6.2 Cross-reference integrity
 
-_To be filled in during Phase 2 of spec audit._
+**Method**: For each cited identifier across the 18 §23.8.5 elements, verify existence in canonical spec via `grep ^### (INV-FERR|ADR-FERR)-NNN spec/`. Then verify semantic consistency for inter-section citations (especially INV-FERR-029/032 in spec/03 for Pattern D resolution).
+
+#### 6.2.1 Upstream traces — existence verification
+
+**All cited identifiers across the 18 §23.8.5 elements** (extracted from "Traces to:" fields):
+
+| Cited identifier | Exists at | Cited by |
+|-----|-----|-----|
+| INV-FERR-004 (Monotonic Growth) | spec/01:242 ✓ | ADR-021, ADR-029 |
+| INV-FERR-005 (Index Bijection) | spec/01:360 ✓ | INV-025b |
+| INV-FERR-012 (Content-Addressed Identity) | spec/01:1452 ✓ | ADR-032, INV-086 |
+| INV-FERR-014 (Recovery Correctness) | spec/02:274 ✓ | INV-060 |
+| INV-FERR-016 (HLC Causality) | spec/02:736 ✓ | ADR-026, INV-061 |
+| INV-FERR-025 (Index Backend Interchangeability) | spec/03:3 ✓ | INV-025b |
+| INV-FERR-037 (Federated Query Correctness) | spec/05:38 ✓ (internal) | ADR-022 |
+| INV-FERR-038 (Federation Substrate Transparency) | spec/05:358 ✓ (internal) | ADR-024, ADR-025 |
+| INV-FERR-039 (Selective Merge) | spec/05:546 ✓ (internal) | ADR-022 |
+| INV-FERR-040 (Merge Provenance Preservation) | spec/05:881 ✓ (internal) | ADR-025, INV-060 |
+| INV-FERR-044 (Namespace Isolation) | spec/05:1729 ✓ (internal) | ADR-022 |
+| INV-FERR-051 (Signed Transactions) | spec/05:2355 ✓ (internal) | ADR-021, 023, 025, 026, 027, 028, 031, 033 + INV-060, 061, 063 |
+| INV-FERR-074 (Homomorphic Store Fingerprint) | spec/09:919 ✓ | ADR-033 |
+| ADR-FERR-002 (Async Runtime) | spec/04:41 ✓ | ADR-024 |
+| ADR-FERR-023 (Per-Transaction Signing) | spec/05:5068 ✓ (internal) | ADR-031 |
+| ADR-FERR-026 (Causal Predecessors as Datoms) | spec/05:5184 ✓ (internal) | INV-061 |
+| ADR-FERR-027 (Store Identity via Self-Signed Tx) | spec/05:5223 ✓ (internal) | INV-060 |
+| ADR-FERR-028 (ProvenanceType Lattice) | spec/05:5265 ✓ (internal) | INV-063 |
+| ADR-FERR-029 (Merge Receipts as Datoms) | spec/05:5306 ✓ (internal) | INV-062 |
+| ADR-FERR-031 (Database-Layer Signing) | spec/05:5341 ✓ (internal) | ADR-033 — **will be renumbered to ADR-FERR-034 per Pattern F resolution** |
+| C1 (Append-only) | spec/00 — verified by reference convention | INV-029 (cross-section) |
+| C2 (Content-Addressed Identity) | spec/00 — verified | ADR-032, INV-086 |
+
+**Result**: **ALL 22 unique upstream traces resolve to existing canonical elements.** Phase 2 Check 1 passes for all 18 elements. No phantom citations in §23.8.5.
+
+#### 6.2.2 Bidirectional cross-references — spot check
+
+`lifecycle/17` Phase 2 Check 2 requires verifying that cited elements acknowledge back-references. Full bidirectional verification across 22 unique citations × 18 elements is too costly for an opening pass; spot-checked the most-cited (INV-FERR-051):
+
+- **INV-FERR-051 "Referenced by" field** at `spec/05:2358-2360`: Lists supporting INVs but does NOT explicitly enumerate ADR-021/023/025/026/027/028/031/033 + INV-060/061/063 (i.e., the 11 §23.8.5 elements that cite it). This is a typical "downstream-too-numerous-to-list" case — INV-FERR-051 is the FOUNDATIONAL invariant for the entire signing layer, so 11 §23.8.5 citations are expected.
+- **No back-reference defect**: INV-FERR-051 having a "Referenced by" line that doesn't enumerate all 11 §23.8.5 callers is acceptable; the convention in spec/05 is to list 1-3 most-relevant references.
+
+#### 6.2.3 Code references — implementation status
+
+`grep INV-FERR-(060|061|062|063|025b|086) **/*.rs`: **0 hits.** Phase 4a.5 implementation has not started — this is EXPECTED, not a defect. The 6 INVs are spec-only at this point, awaiting Phase 4a.5 implementation per the True North Roadmap.
+
+#### 6.2.4 Pattern D resolution — INV-FERR-029 vs INV-FERR-032
+
+**Spec verified** (read both INVs in spec/03):
+
+- **INV-FERR-029** at `spec/03:500`: Title = **"LIVE View Resolution"**. Defines `LIVE(S)` as a set: `LIVE(S) = { (e, a, v) | latest_S(e, a, v).op = Assert }`. Implementation: `build_live_causal` + `live_set`. Set-valued projection of the store.
+- **INV-FERR-032** at `spec/03:937`: Title = **"LIVE Resolution Correctness"**. EXPLICITLY references INV-FERR-029: *"INV-FERR-029 certifies the raw set-valued LIVE projection. INV-FERR-032 strengthens that by certifying the query semantics built on top of it"*. Defines `live_values` (set query) and `live_resolve` (max-by-TxId for cardinality-one). Query semantics ON TOP of 029's set.
+
+**The two INVs are real, complementary, and not redundant.** The previous "Pattern D" finding was a citation/title transcription error in two beads, not a spec drift.
+
+**Per-bead resolution** (bd-u5vi, bd-u2tx, bd-l64y):
+
+| Bead | Number cited | Title cited | Semantic intent (from body) | Correct citation | Fix |
+|------|--------------|-------------|-----------------------------|------------------|-----|
+| **bd-u5vi** | 029 ✓ | "Resolution Correctness" ✗ | Bare retraction removes value from LIVE set; Op ordering in im::OrdSet; Cardinality::Many exclusion | **INV-FERR-029** "LIVE View Resolution" | Fix the **TITLE** in citation. Number is correct. |
+| **bd-u2tx** | 029 ✗ | "Resolution Correctness" ✓ | live_resolve uses explicit max-by-TxId (not iteration); LWW cardinality-one resolution | **INV-FERR-032** "LIVE Resolution Correctness" | Fix the **NUMBER** in citation. Title is correct. |
+| **bd-l64y** | 029 ✓ | (no title quoted) ✓ | Three-path tie-breaking inconsistency for same-TxId different-Op | **INV-FERR-029** Level 0/1 spec gap (no defect in citation; the spec itself doesn't disambiguate the failure mode) | Spec amendment in Phase 3 / Section 6.4 |
+
+**bd-u2tx context bonus**: bd-u2tx body contains "Root Cause (VERIFIED: CODE IS CORRECT)" — the bead author already verified that ferratomic's `live_resolve` uses explicit max_by-TxId (NOT iteration order), so the underlying bug DOES NOT exist in ferratomic. bd-u2tx is a **regression-test-only bead** intended to lock in the correct behavior. This is similar to but NOT identical with Pattern I:
+
+- **Pattern I**: Bug existed, was fixed, bead never closed (bd-fcta, bd-8rvz)
+- **bd-u2tx category**: Bug existed in upstream (Braid), was verified to NOT exist in ferratomic, bead intentionally repurposed for regression testing
+
+bd-u2tx is correctly open as a "verify the absence" bead, not an unfixed bug. Verdict for bd-u2tx in original audit (Section 4) was correct. The Pattern D finding is purely a citation/number transcription error.
+
+#### 6.2.5 Phase 2 findings (cross-reference)
+
+- [FINDING-204] **bd-u5vi citation TITLE error**. bd-u5vi cites "INV-FERR-029 (LIVE Resolution Correctness)" — the **NUMBER** 029 is correct (semantic intent matches set-valued LIVE projection per body content), but the **TITLE** "LIVE Resolution Correctness" belongs to INV-FERR-032. Fix: update citation to "INV-FERR-029 (LIVE View Resolution)".
+  - **Severity**: MAJOR (citation defect — would mislead a reader doing spec navigation)
+  - **Lens**: Cross-reference integrity Check 4 (Inter-Section Consistency)
+  - **Action**: Phase 3 reconciliation (session 025); add to Pattern D resolution batch.
+
+- [FINDING-205] **bd-u2tx citation NUMBER error**. bd-u2tx cites "INV-FERR-029 (LIVE Resolution Correctness)" — the **TITLE** "LIVE Resolution Correctness" is correct (semantic intent matches `live_resolve` max-by-TxId LWW per body content), but the **NUMBER** 029 belongs to "LIVE View Resolution". Fix: update citation to "INV-FERR-032 (LIVE Resolution Correctness)".
+  - **Severity**: MAJOR (citation defect — incorrect spec navigation target)
+  - **Lens**: Cross-reference integrity Check 4
+  - **Action**: Phase 3 reconciliation (session 025); add to Pattern D resolution batch.
+  - **Bonus note**: bd-u2tx is a regression-test-only bead (acknowledged in body: "VERIFIED: CODE IS CORRECT"). Pattern I does NOT apply.
+
+- [FINDING-206] **bd-l64y exposes a real INV-FERR-029 spec gap (semantic ambiguity)**. INV-FERR-029 Level 0 defines LIVE(S) via "highest-TxId datom" but does NOT specify the tie-breaking rule for same-TxId different-Op (assert + retract at the same TxId). Three implementations took three different defaults (FINDING-186 verified at line precision in `merge.rs:233`, `query.rs:103`, `store.rs:470`). The Level 1 description and Level 2 contract show only the `build_live_causal` path (Assert wins via EAVT order); they do not acknowledge that `merge_causal` uses `std::cmp::max` (Retract wins via tuple lex order).
+  - **Severity**: **CRITICAL** (spec defect — Level 0 algebraic law admits multiple valid interpretations, leading to three implementations with divergent semantics)
+  - **Lens**: Cross-reference Check 4 + Phase 3 lens 1 (Algebraic Soundness) + lens 2 (Level 0 ↔ Level 2 Consistency)
+  - **Fix**: Amend INV-FERR-029 Level 0 to add an explicit tie-breaking clause: *"For same-TxId different-Op (assert + retract at the same TxId), the resolution is **Assert wins** (matching transact semantics where Assert precedes Retract in EAVT order). This is the canonical rule; merge_causal must use `(TxId, OpRank::Assert > OpRank::Retract)` lexicographic comparison, NOT `std::cmp::max` on raw `(TxId, Op)` tuples (which gives Retract > Assert)."*
+  - Add Level 2 contracts for ALL THREE code paths (`build_live_causal`, `merge_causal`, `live_apply`) so the spec acknowledges them as canonical implementations of the same rule.
+  - This finding is **CRITICAL CROSS-CUT** to spec audit because it's outside the original §23.8.5 mandate scope (lives in spec/03 §23.3) but is the only path to resolving bd-l64y. Per audit doc §17.7, the spec audit Section 6 should expand scope to include spec/03 INV-FERR-029.
+  - **Action**: Spec amendment to spec/03 INV-FERR-029 — execute in Phase 4 remediation (later in session 022) since it requires actually editing spec/03, not just §23.8.5.
+  - **Status**: open (Phase 4 remediation, this session 022)
+
+- [FINDING-207] **INV-FERR-029 Level 2 only documents one of the three implementations**. The spec/03 INV-FERR-029 Level 2 shows `build_live_causal` (line 576-590) and points to `positional/src/live` for the bitvector path, but does NOT show or acknowledge:
+  - `merge_causal` in `ferratomic-store/src/merge.rs:228-235`
+  - `live_apply` in `ferratomic-store/src/store.rs:460-490`
+  These are operational paths that maintain LIVE state during merge and individual applies. The Level 1 description references "the same invariant is also realized in the positional representation" but doesn't enumerate the three causal-update paths explicitly.
+  - **Severity**: MAJOR (spec completeness — Level 2 contract is incomplete)
+  - **Lens**: Phase 3 lens 2 (Level 0 ↔ Level 2 Consistency)
+  - **Fix**: Extend INV-FERR-029 Level 2 to enumerate all three paths and prove they produce equivalent state given the canonical tie-breaking rule from FINDING-206.
+  - **Status**: open (Phase 4 remediation; bundled with FINDING-206 spec amendment)
+
+#### 6.2.6 Phase 2 result summary
+
+| Check | Result |
+|-------|--------|
+| 1. Upstream Traces | **PASS** — all 22 unique citations resolve |
+| 2. Bidirectional Cross-References | PASS (spot-checked INV-FERR-051; downstream "Referenced by" enumeration is acceptably partial) |
+| 3. Code References | **PASS (expected absence)** — no source code references for §23.8.5 INVs because Phase 4a.5 hasn't been implemented yet |
+| 4. Inter-Section Consistency | **2 CRITICAL findings** (206, 207 — spec gap in INV-FERR-029) + **2 MAJOR findings** (204, 205 — Pattern D citation defects in beads) |
+
+**Key insight**: Phase 2 reveals that the §23.8.5 cluster's CROSS-REFERENCES are clean (no phantoms), but the most important Pattern D finding lives OUTSIDE §23.8.5 in spec/03 INV-FERR-029. The bead audit (Phase 1) discovered this; the spec audit (Phase 2) confirms and amplifies it. **Per audit doc §17.7, spec audit Section 6 scope must expand to include spec/03 INV-FERR-029** for the FINDING-206 + FINDING-207 amendments. This is the recommended scope expansion from §17.7 being executed.
 
 ### 6.3 Deep quality audit
 
