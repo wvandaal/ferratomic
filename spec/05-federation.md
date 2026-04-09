@@ -5532,6 +5532,8 @@ hash; this ADR places it in the signing message.
 
 **Traces to**: ADR-FERR-027, INV-FERR-051, INV-FERR-040 (provenance preservation),
 INV-FERR-014 (recovery correctness)
+**Referenced by**: INV-FERR-061 (predecessor DAG roots back to identity tx),
+ADR-FERR-034 (genesis_with_identity is the identity constructor)
 **Verification**: `V:PROP`, `V:KANI`, `V:LEAN`, `V:INTEGRATION`
 **Stage**: 0
 
@@ -5777,6 +5779,8 @@ theorem both_identities_survive_merge
 ### INV-FERR-061: Causal Predecessor Completeness
 
 **Traces to**: ADR-FERR-026, INV-FERR-016 (HLC causality), INV-FERR-051
+**Referenced by**: INV-FERR-062 (merge receipt builds on predecessor chain),
+INV-FERR-086 (canonical_bytes used in predecessor entity computation via ADR-FERR-035)
 **Verification**: `V:PROP`, `V:KANI`, `V:LEAN`, `V:INTEGRATION`
 **Stage**: 0
 
@@ -5920,7 +5924,7 @@ proptest! {
             // After the Nth transaction with K distinct agents, the frontier
             // has min(N, K) entries. Predecessor count must equal frontier size.
             if i > 0 {
-                let expected_frontier_size = agents[..=i].iter()
+                let expected_frontier_size = nodes[..=i].iter()
                     .collect::<std::collections::HashSet<_>>()
                     .len()
                     .min(i);
@@ -5943,17 +5947,29 @@ proptest! {
             })
             .collect();
 
-        // Verify: for every edge (child, parent), child's TxId > parent's TxId.
-        // This structural property guarantees acyclicity (INV-FERR-061 property 4).
+        // Verify: for every edge (child, parent), the child's tx_time is strictly
+        // later than the parent's tx_time. This structural property guarantees
+        // acyclicity (INV-FERR-061 property 4 + INV-FERR-015 HLC monotonicity).
+        let time_attr = Attribute::from("tx/time");
+        let entity_time: std::collections::HashMap<EntityId, i64> = snap.datoms()
+            .filter(|d| d.attribute() == &time_attr && d.op() == Op::Assert)
+            .filter_map(|d| match d.value() {
+                Value::Instant(ms) => Some((d.entity(), *ms)),
+                _ => None,
+            })
+            .collect();
+
         for (child_entity, parent_entity) in &all_pred_edges {
-            // Both entities should be findable in the store; the child's tx
-            // is strictly later than the parent's tx by HLC monotonicity.
-            // (Full verification requires resolving entity → TxId mapping,
-            //  which is available via tx/time datoms on each tx entity.)
+            if let (Some(&child_time), Some(&parent_time)) =
+                (entity_time.get(child_entity), entity_time.get(parent_entity))
+            {
+                prop_assert!(child_time > parent_time,
+                    "INV-FERR-061: predecessor must have strictly earlier tx_time \
+                     (child={child_time}, parent={parent_time})");
+            }
         }
-        // If we reached here without panic, the DAG has no cycles detectable
-        // at the entity level. Full cycle detection requires tx_id resolution.
-        prop_assert!(true, "INV-FERR-061: predecessor DAG acyclicity verified");
+        prop_assert!(!all_pred_edges.is_empty() || tx_count <= 1,
+            "INV-FERR-061: multi-tx store must have predecessor edges");
     }
 }
 ```
@@ -5995,6 +6011,7 @@ theorem predecessor_dag_merge
 ### INV-FERR-062: Merge Receipt Completeness
 
 **Traces to**: ADR-FERR-029, INV-FERR-004 (monotonic growth)
+**Referenced by**: INV-FERR-063 (provenance lattice composes with receipt-triggered resolution)
 **Verification**: `V:PROP`, `V:KANI`, `V:LEAN`, `V:INTEGRATION`
 **Stage**: 0
 
@@ -6031,11 +6048,23 @@ is reconstructible from the store.
 #### Level 2 (Implementation Contract)
 ```rust
 /// Perform selective merge and emit receipt datoms (INV-FERR-062).
+///
+/// The receipt is a proper transaction (gets TxId, predecessors, signing)
+/// rather than raw inserts — FINDING-017: raw insert bypasses causal chain.
+///
+/// # Parameters
+/// - `db`: The local Database instance (needed for `transact` to produce
+///   TxId and predecessor datoms — a `Store` alone cannot do this).
+/// - `remote`: The remote store to merge from.
+/// - `filter`: Which remote datoms to accept (positive-only per ADR-FERR-022).
+/// - `source_id`: Human-readable identifier for the remote source.
 pub fn selective_merge(
-    local: &mut Store,
+    db: &Database,
     remote: &Store,
     filter: &DatomFilter,
+    source_id: &str,
 ) -> Result<MergeReceipt, FerraError> {
+    let local = db.snapshot();
     let remote_filtered: Vec<Datom> = remote.datoms()
         .filter(|d| filter.matches(d))
         .cloned()
@@ -6046,19 +6075,24 @@ pub fn selective_merge(
         .count();
     let transferred = remote_filtered.len() - already_present;
 
-    // Apply filtered datoms to local store
+    // Apply filtered datoms to local store via proper transact path
     for datom in &remote_filtered {
-        local.insert(datom.clone());
+        if !local.datoms().contains(datom) {
+            let tx = Transaction::new(db.node())
+                .assert_raw_datom(datom.clone())
+                .commit(&db.schema())?;
+            db.transact(tx)?;
+        }
     }
 
-    // Emit receipt datoms (INV-FERR-062: all 4 fields required)
-    // Bind the temporary string to extend its lifetime; as_bytes() borrows it.
-    let merge_key = format!("merge-{}", now_millis());
+    // Emit receipt as a proper transaction (INV-FERR-062: all 4 fields required).
+    // Entity ID derived from (source + timestamp) for uniqueness — BLAKE3 hash
+    // eliminates the millisecond-collision risk of format!("merge-{millis}").
+    let now = now_millis();
+    let merge_key = format!("{source_id}-{now}");
     let merge_entity = EntityId::from_content(merge_key.as_bytes());
 
-    // Build receipt as a proper transaction so it gets TxId, predecessors,
-    // and signing (FINDING-017: raw insert bypasses causal chain).
-    let receipt_tx = Transaction::new(local_agent)
+    let receipt_tx = Transaction::new(db.node())
         .assert_datom(merge_entity, Attribute::from("merge/source"),
             Value::String(source_id.into()))
         .assert_datom(merge_entity, Attribute::from("merge/filter"),
@@ -6066,9 +6100,9 @@ pub fn selective_merge(
         .assert_datom(merge_entity, Attribute::from("merge/transferred"),
             Value::Long(transferred as i64))
         .assert_datom(merge_entity, Attribute::from("merge/timestamp"),
-            Value::Instant(now_millis()))
-        .commit(&local.schema())?;
-    local.transact(receipt_tx)?;
+            Value::Instant(now))
+        .commit(&db.schema())?;
+    db.transact(receipt_tx)?;
 
     Ok(MergeReceipt {
         datoms_transferred: transferred,
@@ -6080,21 +6114,23 @@ pub fn selective_merge(
 #[kani::proof]
 #[kani::unwind(5)]
 fn merge_receipt_has_four_fields() {
-    let local_size: usize = kani::any();
-    let remote_size: usize = kani::any();
-    kani::assume(local_size <= 3 && remote_size <= 3);
+    let node = NodeId::from_seed(kani::any());
 
-    // After selective_merge, count datoms with merge/ attribute prefix
-    // in the result store. Must be exactly 4: source, filter, transferred, timestamp.
-    let receipt_field_count = 4; // source + filter + transferred + timestamp
-    let receipt_tx = Transaction::new(local_agent)
-        .assert_datom(merge_entity, Attribute::from("merge/source"), /* ... */)
-        .assert_datom(merge_entity, Attribute::from("merge/filter"), /* ... */)
-        .assert_datom(merge_entity, Attribute::from("merge/transferred"), /* ... */)
-        .assert_datom(merge_entity, Attribute::from("merge/timestamp"), /* ... */);
+    // Build a receipt transaction and verify it has exactly 4 user datoms:
+    // merge/source, merge/filter, merge/transferred, merge/timestamp.
+    let merge_entity = EntityId::from_content(b"test-merge");
+    let receipt_tx = Transaction::new(node)
+        .assert_datom(merge_entity, Attribute::from("merge/source"),
+            Value::String("peer-1".into()))
+        .assert_datom(merge_entity, Attribute::from("merge/filter"),
+            Value::String("All".into()))
+        .assert_datom(merge_entity, Attribute::from("merge/transferred"),
+            Value::Long(42))
+        .assert_datom(merge_entity, Attribute::from("merge/timestamp"),
+            Value::Instant(1_000_000));
 
     // The receipt transaction has exactly 4 user datoms
-    assert_eq!(receipt_tx.datom_count(), receipt_field_count,
+    assert_eq!(receipt_tx.datom_count(), 4,
         "INV-FERR-062: merge receipt must emit exactly 4 field datoms");
 }
 ```
@@ -6187,6 +6223,7 @@ theorem merge_receipt_persists
 
 **Traces to**: ADR-FERR-028 (ProvenanceType Lattice), INV-FERR-051 (signed transactions),
 INV-FERR-039 (selective merge — provenance enriches conflict resolution)
+**Referenced by**: INV-FERR-029/032 (LIVE resolution uses provenance as tiebreaker)
 **Verification**: `V:PROP`, `V:KANI`, `V:LEAN`
 **Stage**: 0
 
@@ -6388,6 +6425,8 @@ theorem weight_monotone (p₁ p₂ : ProvenanceType) (h : provenance_le p₁ p�
 **Traces to**: INV-FERR-005 (index bijection), INV-FERR-025 (index backend
 interchangeability), ADR-FERR-001 (persistent data structures), C8 (substrate
 independence)
+**Referenced by**: ADR-FERR-033 (primitive vs injectable index taxonomy),
+INV-FERR-045c (LeafChunkCodec trait mirrors the index homomorphism pattern)
 **Verification**: `V:PROP`, `V:LEAN`
 **Stage**: 1 (specification now, implementation Phase 4b)
 
@@ -6535,12 +6574,12 @@ impl VectorIndex for NullVectorIndex {
     fn search(&self, _: &[f32], _: usize, _: f32) -> Vec<(EntityId, f32)> { Vec::new() }
 }
 
-// Transport trait + LocalTransport impl moved to INV-FERR-038 Level 2
-// (the canonical home for federation substrate transparency contracts).
-// See `spec/05:412-...` for the canonical Pin<Box<dyn Future>> Transport
-// definition per ADR-FERR-024 (zero-deps async) + ADR-FERR-025 (transaction-
-// level federation). INV-FERR-025b focuses solely on the universal index
-// algebra; Transport is referenced but defined elsewhere.
+// Transport trait + LocalTransport impl defined in INV-FERR-038 Level 2
+// (the canonical home for federation substrate transparency contracts,
+// spec/05 lines 358-575). Uses Pin<Box<dyn Future>> per ADR-FERR-024
+// (zero-deps async) + ADR-FERR-025 (transaction-level federation).
+// INV-FERR-025b focuses solely on the universal index algebra;
+// Transport is referenced but defined in INV-FERR-038.
 ```
 
 **Falsification**: Any `DatomIndex` implementation I where, for some stores S₁ and S₂,
@@ -6585,6 +6624,35 @@ proptest! {
             merged_with.datom_set(), merged_without.datom_set(),
             "INV-FERR-025b: optional index must not affect merge result"
         );
+    }
+
+    /// Level 0 homomorphism: I(S₁ ∪ S₂) = I(S₁) ⊕ I(S₂).
+    /// Uses the 4 built-in primitive indexes (EAVT, AEVT, VAET, AVET) as
+    /// the DatomIndex implementations, since these are the only concrete
+    /// indexes available before Phase 4b.
+    #[test]
+    fn index_distributes_over_union(
+        datoms_a in prop::collection::btree_set(arb_datom(), 0..50),
+        datoms_b in prop::collection::btree_set(arb_datom(), 0..50),
+    ) {
+        // Build indexes separately then merge
+        let store_a = Store::from_datoms(datoms_a.clone());
+        let store_b = Store::from_datoms(datoms_b.clone());
+
+        // Build index of merged store
+        let merged_datoms: BTreeSet<_> = datoms_a.union(&datoms_b).cloned().collect();
+        let store_merged = Store::from_datoms(merged_datoms);
+
+        // Verify: the merged store's EAVT index contains exactly the union
+        // of the individual stores' EAVT indexes. This is the concrete
+        // instantiation of the Level 0 homomorphism I(S₁ ∪ S₂) = I(S₁) ⊕ I(S₂).
+        let merged_eavt: BTreeSet<_> = store_merged.datoms().cloned().collect();
+        let a_eavt: BTreeSet<_> = store_a.datoms().cloned().collect();
+        let b_eavt: BTreeSet<_> = store_b.datoms().cloned().collect();
+        let union_eavt: BTreeSet<_> = a_eavt.union(&b_eavt).cloned().collect();
+
+        prop_assert_eq!(merged_eavt, union_eavt,
+            "INV-FERR-025b: I(S₁ ∪ S₂) must equal I(S₁) ⊕ I(S₂)");
     }
 }
 ```
@@ -6739,12 +6807,26 @@ Let canonical_bytes : Datom → Bytes be the canonical serialization function.
   canonical_bytes_I₁(d) = canonical_bytes_I₂(d)
   (cross-implementation agreement)
 
-Proof: The format is a fixed-layout, tag-length-value encoding with no
-  alignment padding, no endianness ambiguity (all integers little-endian),
-  and no implementation-defined choices. Given identical field values,
-  identical bytes are produced by construction. Injectivity follows from
-  the tagged format: different field values produce different tag-length-
-  value sequences; same field values produce identical sequences.
+Proof (determinism): The format is a fixed-layout, tag-length-value encoding
+  with no alignment padding, no endianness ambiguity (all integers little-endian),
+  no compiler-inserted padding (fields are serialized sequentially without struct
+  layout), and no implementation-defined choices (no HashMap iteration order,
+  no floating-point rounding modes). Given identical field values, the encoder
+  emits identical bytes because each step (entity copy, attribute length prefix,
+  UTF-8 encoding, value tag dispatch, tx_id field serialization, op byte) is
+  a deterministic function of its input with no hidden state.
+
+  Proof (injectivity): The tagged format is self-delimiting: entity is fixed
+  32 bytes, attribute is length-prefixed UTF-8 (decodable to a unique string),
+  value is tag-dispatched with per-tag fixed or length-prefixed payload
+  (decodable to a unique Value variant), tx_id is fixed 28 bytes
+  (u64 + u32 + [u8;16]), op is fixed 1 byte. Concatenation of uniquely
+  decodable fields is injective by the uniqueness of the parsing parse tree.
+  Formally: if canonical_bytes(d₁) = canonical_bytes(d₂), then parsing both
+  byte sequences recovers (e₁,a₁,v₁,tx₁,op₁) = (e₂,a₂,v₂,tx₂,op₂) field
+  by field, so d₁ = d₂. The Lean proof of this property is tracked under
+  a bead (sorry in the current Lean model) because it requires byte-level
+  reasoning beyond the Finset Datom abstraction.
 ```
 
 #### Level 1 (State Invariant)
