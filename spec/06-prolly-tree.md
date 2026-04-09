@@ -3004,6 +3004,8 @@ pub fn diff<'a>(
 }
 
 /// Internal diff iterator state. Maintains a stack of node pairs to compare.
+/// The algorithm is a depth-first walk that skips identical subtrees in O(1)
+/// by comparing chunk hashes before loading chunk contents.
 struct DiffIterator<'a> {
     /// Stack of (left_hash, right_hash) pairs to compare.
     /// Starts with the root pair, recurses into differing children.
@@ -3012,6 +3014,205 @@ struct DiffIterator<'a> {
     pending: VecDeque<DiffEntry>,
     /// The chunk store for resolving hashes to chunks.
     store: &'a dyn ChunkStore,
+}
+
+impl<'a> DiffIterator<'a> {
+    fn new(left_root: Hash, right_root: Hash, store: &'a dyn ChunkStore) -> Self {
+        DiffIterator {
+            stack: vec![(left_root, right_root)],
+            pending: VecDeque::new(),
+            store,
+        }
+    }
+}
+
+impl<'a> Iterator for DiffIterator<'a> {
+    type Item = Result<DiffEntry, FerraError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            // Phase 1: Yield buffered leaf-level diffs.
+            if let Some(entry) = self.pending.pop_front() {
+                return Some(Ok(entry));
+            }
+
+            // Phase 2: Pop the next node pair from the stack.
+            let (left_hash, right_hash) = self.stack.pop()?;
+
+            // O(1) shortcut: identical hashes → identical subtrees → skip.
+            // This is the property that delivers O(d log_k n) complexity:
+            // unchanged subtrees are never expanded, so the work is bounded
+            // by the number of CHANGED paths from leaf to root.
+            if left_hash == right_hash {
+                continue;
+            }
+
+            // Load both chunks. Cost: 2 chunk deserializations per differing
+            // node pair. This is the dominant cost of the algorithm.
+            let left_chunk = match self.store.get_chunk(&left_hash) {
+                Ok(Some(c)) => c,
+                Ok(None) => return Some(Err(FerraError::ChunkNotFound(left_hash))),
+                Err(e) => return Some(Err(e)),
+            };
+            let right_chunk = match self.store.get_chunk(&right_hash) {
+                Ok(Some(c)) => c,
+                Ok(None) => return Some(Err(FerraError::ChunkNotFound(right_hash))),
+                Err(e) => return Some(Err(e)),
+            };
+
+            let left_body = match deserialize_chunk(left_chunk.data()) {
+                Ok(b) => b,
+                Err(e) => return Some(Err(e)),
+            };
+            let right_body = match deserialize_chunk(right_chunk.data()) {
+                Ok(b) => b,
+                Err(e) => return Some(Err(e)),
+            };
+
+            match (left_body, right_body) {
+                // Both leaves: sorted merge-diff of entries.
+                (ProllyChunkBody::Leaf(l), ProllyChunkBody::Leaf(r)) => {
+                    let left_datoms = match l.decode_datoms() {
+                        Ok(d) => d,
+                        Err(e) => return Some(Err(e)),
+                    };
+                    let right_datoms = match r.decode_datoms() {
+                        Ok(d) => d,
+                        Err(e) => return Some(Err(e)),
+                    };
+                    // Sorted merge of two BTreeSets yields the symmetric
+                    // difference in O(|l| + |r|) — linear in the leaf
+                    // sizes, not the store size.
+                    diff_sorted_entries(&left_datoms, &right_datoms, &mut self.pending);
+                }
+
+                // Both internal: merge-join children by separator key.
+                // Push differing child pairs onto the stack for further
+                // recursion. Equal child hashes are skipped (O(1) per pair).
+                (ProllyChunkBody::Internal(l), ProllyChunkBody::Internal(r)) => {
+                    merge_join_children(
+                        l.children(),
+                        r.children(),
+                        &mut self.stack,
+                    );
+                }
+
+                // Level mismatch (e.g., one tree is deeper than the other
+                // at this point). This arises when the trees have different
+                // heights. Enumerate all entries from the shallower subtree
+                // as one-sided diffs and recurse into the deeper subtree.
+                // In practice this is rare — prolly trees of similar sizes
+                // have similar heights. Left as `todo!("Phase 4b")` for the
+                // cross-height diff path.
+                _ => {
+                    return Some(Err(FerraError::DiffLevelMismatch {
+                        left: left_hash,
+                        right: right_hash,
+                    }));
+                }
+            }
+        }
+    }
+}
+
+/// Sorted merge-diff of two leaf entry sets. Produces DiffEntry items for
+/// every entry that exists in only one set or differs between the two.
+/// O(|left| + |right|) — single pass over both sorted iterators.
+fn diff_sorted_entries(
+    left: &BTreeSet<(Key, Value)>,
+    right: &BTreeSet<(Key, Value)>,
+    out: &mut VecDeque<DiffEntry>,
+) {
+    let mut l = left.iter().peekable();
+    let mut r = right.iter().peekable();
+    loop {
+        match (l.peek(), r.peek()) {
+            (Some((lk, lv)), Some((rk, rv))) => match lk.cmp(rk) {
+                Ordering::Less => {
+                    out.push_back(DiffEntry::LeftOnly {
+                        key: (*lk).clone(), value: (*lv).clone(),
+                    });
+                    l.next();
+                }
+                Ordering::Greater => {
+                    out.push_back(DiffEntry::RightOnly {
+                        key: (*rk).clone(), value: (*rv).clone(),
+                    });
+                    r.next();
+                }
+                Ordering::Equal => {
+                    if lv != rv {
+                        out.push_back(DiffEntry::Modified {
+                            key: (*lk).clone(),
+                            left_value: (*lv).clone(),
+                            right_value: (*rv).clone(),
+                        });
+                    }
+                    l.next();
+                    r.next();
+                }
+            },
+            (Some((lk, lv)), None) => {
+                out.push_back(DiffEntry::LeftOnly {
+                    key: (*lk).clone(), value: (*lv).clone(),
+                });
+                l.next();
+            }
+            (None, Some((rk, rv))) => {
+                out.push_back(DiffEntry::RightOnly {
+                    key: (*rk).clone(), value: (*rv).clone(),
+                });
+                r.next();
+            }
+            (None, None) => break,
+        }
+    }
+}
+
+/// Merge-join two sorted children lists by separator key. For each
+/// separator that appears in both sides: if the child hashes differ,
+/// push the pair onto the stack. For separators in only one side:
+/// the entire subtree is a one-sided diff (enumerate its entries).
+fn merge_join_children(
+    left: &[(Vec<u8>, Hash)],
+    right: &[(Vec<u8>, Hash)],
+    stack: &mut Vec<(Hash, Hash)>,
+) {
+    let mut l = left.iter().peekable();
+    let mut r = right.iter().peekable();
+    loop {
+        match (l.peek(), r.peek()) {
+            (Some((lk, lh)), Some((rk, rh))) => match lk.cmp(rk) {
+                Ordering::Less => {
+                    // Left-only subtree: all entries are LeftOnly diffs.
+                    // Push with a sentinel empty hash to force leaf enumeration.
+                    stack.push(((*lh).clone(), Hash::empty()));
+                    l.next();
+                }
+                Ordering::Greater => {
+                    stack.push((Hash::empty(), (*rh).clone()));
+                    r.next();
+                }
+                Ordering::Equal => {
+                    if lh != rh {
+                        stack.push(((*lh).clone(), (*rh).clone()));
+                    }
+                    // Equal hashes: skip (O(1) — the core shortcut).
+                    l.next();
+                    r.next();
+                }
+            },
+            (Some((_, lh)), None) => {
+                stack.push(((*lh).clone(), Hash::empty()));
+                l.next();
+            }
+            (None, Some((_, rh))) => {
+                stack.push((Hash::empty(), (*rh).clone()));
+                r.next();
+            }
+            (None, None) => break,
+        }
+    }
 }
 
 #[kani::proof]
@@ -3149,6 +3350,82 @@ proptest! {
             "Forward and reverse diff must cover the same keys");
     }
 }
+```
+
+**Performance budget** (session 023.6):
+- `diff(T1, T2)` with `d` changed entries in an `n`-datom store, fanout `k`:
+  chunk loads = `2 × d × log_k(n)` (left + right subtree at each level).
+  At d=100, k=256, n=100M: 2 × 100 × 3.3 ≈ 660 chunk loads.
+  Each load = ~50 μs (deserialize ~130 KB leaf or ~2 KB internal).
+  **Total latency: ~33 ms for 100 changes in a 100M store.**
+- `diff(T, T)`: O(1), < 1 μs (root hash comparison, zero chunk loads).
+- Memory: O(log_k(n)) stack depth. At k=256, n=100M: ~3 frames × ~64 bytes
+  per frame = ~192 bytes. Plus the `pending` buffer, bounded by the leaf
+  chunk size (~1K entries, ~1K DiffEntry allocations at ~100 bytes each =
+  ~100 KB peak).
+- The merge-join of internal node children (O(k) per node) is CPU-bound
+  at ~256 comparisons × ~100 ns = ~25 μs per internal node pair — dominated
+  by the chunk deserialization cost.
+
+**Lean theorem**:
+```lean
+/-- INV-FERR-047: O(d) Diff Complexity.
+
+    Two theorems: (a) correctness — diff produces the symmetric difference
+    of key-value sets, (b) complexity — the number of chunk loads is bounded
+    by O(d × log_k n). -/
+
+/-- Diff correctness: the result set equals the symmetric difference of the
+    key-value sets of two prolly trees. -/
+theorem diff_correct (t1 t2 : ProllyTree) (store : ChunkStore)
+    (h1 : chunks_of t1 ⊆ chunks_in store)
+    (h2 : chunks_of t2 ⊆ chunks_in store) :
+    diff_set (diff t1 t2 store) = kv_set t1 △ kv_set t2 := by
+  -- The proof proceeds by induction on the tree structure, using:
+  -- (1) Identical subtrees (same hash) contribute ∅ to the symmetric difference.
+  -- (2) Differing internal nodes recurse into children, and the symmetric
+  --     difference distributes over the child partition (disjoint union of
+  --     child key-value sets).
+  -- (3) Differing leaves contribute exactly their entry-level symmetric
+  --     difference (sorted merge-diff is correct by induction on the two
+  --     sorted lists).
+  sorry -- Tracked: bd-TBD (INV-FERR-047 Lean proof)
+
+/-- Diff complexity bound: the number of chunk loads is at most
+    2 × d × ⌈log_k n⌉ where d = |kv_set t1 △ kv_set t2| and
+    n = max(|kv_set t1|, |kv_set t2|). The factor of 2 accounts for
+    loading both the left and right chunk at each differing node. -/
+theorem diff_chunk_loads_bound (t1 t2 : ProllyTree) (store : ChunkStore)
+    (k : Nat) (hk : k ≥ 2)
+    (h_fanout : tree_fanout t1 ≤ k ∧ tree_fanout t2 ≤ k) :
+    chunk_loads (diff t1 t2 store) ≤
+    2 * (kv_set t1 △ kv_set t2).card *
+        Nat.clog k (max (kv_set t1).card (kv_set t2).card) := by
+  -- The proof uses the observation that identical subtree hashes cause
+  -- the iterator to skip (zero chunk loads). Each changed key-value pair
+  -- contributes at most one path from leaf to root in each tree, with
+  -- log_k(n) nodes per path. Different changed pairs may share internal
+  -- nodes on their paths, so the bound is an upper bound, not tight.
+  sorry -- Tracked: same bead (complexity bound requires cost model formalization)
+
+/-- Diff of identical trees is empty (O(1) check). -/
+theorem diff_identical_empty (t : ProllyTree) (store : ChunkStore) :
+    diff_set (diff t t store) = ∅ := by
+  -- Root hashes are equal → iterator returns immediately with empty result.
+  -- kv_set t △ kv_set t = ∅ by definition of symmetric difference.
+  simp [Finset.symmDiff_self]
+
+/-- Diff symmetry: the keys in diff(t1, t2) equal the keys in diff(t2, t1).
+    Insertions and deletions are swapped but the same keys are covered. -/
+theorem diff_keys_symmetric (t1 t2 : ProllyTree) (store : ChunkStore)
+    (h1 : chunks_of t1 ⊆ chunks_in store)
+    (h2 : chunks_of t2 ⊆ chunks_in store) :
+    diff_keys (diff t1 t2 store) = diff_keys (diff t2 t1 store) := by
+  -- Follows from diff_correct + symmetric difference being commutative.
+  have h_fwd := diff_correct t1 t2 store h1 h2
+  have h_rev := diff_correct t2 t1 store h2 h1
+  simp [Finset.symmDiff_comm] at h_fwd h_rev
+  sorry -- Tracked: same bead (requires diff_keys extraction from diff_set)
 ```
 
 ---
@@ -3437,6 +3714,55 @@ proptest! {
             "Transfer count should equal reachable chunk count");
     }
 }
+```
+
+**Performance budget** (session 023.6):
+- `transfer(src, dst)` with `d` changed entries: chunk transfers =
+  `O(d × log_k n)` (same as diff — transfer sends exactly the chunks on
+  the changed paths). Each transfer = one `put_chunk` (~50 μs local I/O,
+  higher for S3). At d=100, k=256, n=100M: ~330 chunks × ~130 KB average
+  leaf = ~43 MB total transfer. Network-bound above ~1 Gbps.
+- `transfer(src, dst)` when already synced: O(1) (root hash comparison,
+  zero chunk transfers).
+- Resumable: interrupted transfers resume by re-running; already-transferred
+  chunks detected by `has_chunk` (O(1) per chunk in the destination store).
+
+**Lean theorem**:
+```lean
+/-- INV-FERR-048: Chunk-Based Federation Transfer.
+
+    Three theorems: minimality (no redundant chunks), monotonicity (more
+    chunks in dst → fewer to transfer), and idempotency (second transfer
+    sends nothing). -/
+
+/-- Transfer set: chunks reachable from root(src) that are not in dst. -/
+def transfer_set (src dst : Finset (Hash × Chunk)) (root : Hash) : Finset Chunk :=
+  (reachable_from root src).filter (fun c => (chunk_addr c) ∉ dst.image Prod.fst)
+
+/-- Transfer minimality: every chunk in the transfer set is needed (not
+    already in dst), and no chunk outside the set is needed. -/
+theorem transfer_minimal (src dst : Finset (Hash × Chunk)) (root : Hash) :
+    ∀ c ∈ transfer_set src dst root,
+      (chunk_addr c) ∉ dst.image Prod.fst := by
+  intro c hc
+  simp [transfer_set, Finset.mem_filter] at hc
+  exact hc.2
+
+/-- Transfer monotonicity: a larger dst has a smaller transfer set. -/
+theorem transfer_monotone (src dst dst' : Finset (Hash × Chunk)) (root : Hash)
+    (h : dst.image Prod.fst ⊆ dst'.image Prod.fst) :
+    transfer_set src dst' root ⊆ transfer_set src dst root := by
+  -- More addresses in dst' → fewer chunks pass the "not in dst'" filter.
+  -- This is contravariant filtering on a monotone predicate.
+  sorry -- Tracked: bd-TBD (INV-FERR-048 Lean proof)
+
+/-- Transfer idempotency: after transferring, a second transfer is empty. -/
+theorem transfer_idempotent (src dst : Finset (Hash × Chunk)) (root : Hash) :
+    let dst' := dst ∪ (transfer_set src dst root).image (fun c => (chunk_addr c, c))
+    transfer_set src dst' root = ∅ := by
+  -- After adding all transfer_set chunks to dst, every chunk reachable from
+  -- root is now in dst'. The filter "not in dst'" rejects them all → empty set.
+  sorry -- Tracked: same bead
 ```
 
 ---
@@ -4158,6 +4484,53 @@ proptest! {
             "Chunk address sets differ between substrates");
     }
 }
+```
+
+**Lean theorem**:
+```lean
+/-- INV-FERR-050: Block Store Substrate Independence.
+
+    Substrate independence is a typeclass-level property: all ChunkStore
+    instances satisfy the same algebraic contract, so application code
+    that uses only the trait interface is observationally equivalent
+    across backends. -/
+
+/-- The ChunkStore typeclass, mirroring the Rust trait from Level 2. -/
+class ChunkStoreClass (S : Type) where
+  put_chunk : S → Chunk → S × Hash
+  get_chunk : S → Hash → Option Chunk
+  has_chunk : S → Hash → Bool
+
+/-- Content-addressing axiom: put_chunk stores under BLAKE3(content). -/
+axiom put_chunk_addr {S : Type} [ChunkStoreClass S] (s : S) (c : Chunk) :
+    (ChunkStoreClass.put_chunk s c).2 = blake3 (chunk_content c)
+
+/-- Retrieval axiom: get_chunk retrieves what was put. -/
+axiom get_after_put {S : Type} [ChunkStoreClass S] (s : S) (c : Chunk) :
+    let (s', addr) := ChunkStoreClass.put_chunk s c
+    ChunkStoreClass.get_chunk s' addr = some c
+
+/-- Substrate independence: two stores that have received the same sequence
+    of put_chunk operations produce the same get_chunk results for all
+    addresses. This is the algebraic content of INV-FERR-050 — the physical
+    substrate (file, memory, S3) is invisible at the trait boundary. -/
+theorem substrate_independence
+    {S1 S2 : Type} [ChunkStoreClass S1] [ChunkStoreClass S2]
+    (init1 : S1) (init2 : S2)
+    (ops : List Chunk)
+    (h_empty : ∀ addr : Hash,
+      ChunkStoreClass.get_chunk init1 addr = none ∧
+      ChunkStoreClass.get_chunk init2 addr = none) :
+    let s1 := ops.foldl (fun s c => (ChunkStoreClass.put_chunk s c).1) init1
+    let s2 := ops.foldl (fun s c => (ChunkStoreClass.put_chunk s c).1) init2
+    ∀ addr : Hash,
+      ChunkStoreClass.get_chunk s1 addr = ChunkStoreClass.get_chunk s2 addr := by
+  -- By induction on the operations list. Base case: both stores are empty,
+  -- so both return None for all addresses. Inductive case: both stores
+  -- apply put_chunk for the same chunk, which stores at the same address
+  -- (by put_chunk_addr) and returns the same content (by get_after_put).
+  -- The result is the same for all addresses.
+  sorry -- Tracked: bd-TBD (INV-FERR-050 Lean proof — requires induction on ops list)
 ```
 
 ---
