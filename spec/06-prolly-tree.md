@@ -1918,6 +1918,16 @@ impl DatomPairChunk {
 /// at a specific tree level (>= 1). Constructors validate the canonical
 /// predicate. Unchanged across session 023.5 — internal node format will be
 /// factored into a per-codec discharge under future INV-FERR-045b.
+///
+/// **Tier 1 optimization path** (session 023.6.5 inline integration):
+/// The current `Vec<(separator, child_hash)>` representation uses
+/// `|children| × (separator_len + 32)` bytes per internal node. At 100M
+/// datoms with k=1024 fanout: ~5 GB of internal node overhead; at 1B: ~50 GB.
+/// Balanced Parentheses tree encoding (Jacobson 1989) + Range Min-Max tree
+/// (Navarro & Sadakane 2014) stores tree structure in `2n + o(n)` bits with
+/// O(1) navigation (parent, first-child, next-sibling). Child hashes stored
+/// separately as `n × 32 bytes`. Total internal overhead drops to ~400 MB at
+/// 100M (12× reduction). Tracked under `bd-yvrnv` (future INV-FERR-045d).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InternalChunk {
     /// Tree level. Leaves are level 0; the root has level == tree height.
@@ -3499,6 +3509,29 @@ Where INV-FERR-022 guarantees eventual convergence of datom sets, INV-FERR-048
 specifies the mechanism: chunk-level diff and transfer. The chunk granularity means
 that even in a 100M-datom store, transferring 100 changed datoms sends ~300 chunks
 (100 leaf changes x ~3 levels), not 100M datoms.
+
+**Tier 1 optimization paths** (session 023.6.5 inline integration):
+
+- **Zero-copy transfer via `sendfile(2)` / `splice(2)`** (`bd-cc9hc`): The current
+  `ChunkTransfer::transfer` is a userspace-copy protocol (~2 GB/s throughput,
+  bounded by `memcpy`). Linux `sendfile(2)` enables kernel-to-kernel transfer with
+  no userspace buffering, combined with `TCP_CORK` for batch framing, pushing
+  throughput to ~12 GB/s (NVMe→NIC bound) — a 6× improvement for bootstrap sync.
+  This is a platform-specific optimization BEHIND the `ChunkStore` trait boundary:
+  the algebraic contract (transfer minimality, idempotency, monotonicity) is
+  unchanged. A future INV-FERR-048a would formalize the zero-copy path as a
+  `ChunkStore` extension trait with the same observational equivalence as
+  INV-FERR-050 (substrate independence).
+
+- **Hybrid CS + IBLT + Fingerprint anti-entropy** (`bd-6joz2`): The current
+  O(d × log_k n) chunk-level diff can be augmented at the federation layer with a
+  three-phase sub-linear protocol: (1) peers exchange compressed sensing projections
+  (~10 KB) for fast divergence estimation, (2) an IBLT covers the estimated
+  difference set for exact recovery, (3) the prolly tree fingerprint (INV-FERR-074)
+  verifies correctness. Bandwidth: O(d) regardless of store size, ~30 KB total
+  exchange for d=1000 differences in a 10B store. This sits ABOVE the chunk-level
+  transfer — it determines WHICH chunks to request, reducing the diff phase from
+  O(d × log_k n) chunk loads to O(d) IBLT cells + O(1) fingerprint comparison.
 
 #### Level 2 (Implementation Contract)
 ```rust
