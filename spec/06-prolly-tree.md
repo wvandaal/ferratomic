@@ -156,8 +156,12 @@ ordering. The physical encoding of entries within a leaf chunk is determined by 
 `LeafChunkCodec` in use (INV-FERR-045c) — the DatomPair reference codec (INV-FERR-045a)
 stores `(key_bytes, value_bytes)` pairs, while future codecs (e.g., WaveletMatrix) may
 use column-major or compressed representations. The canonical KEY ORDERING is codec-
-independent: all codecs must produce leaf chunks whose `boundary_key` (INV-FERR-045c)
-respects the tree's sort order. The five trees are content-addressed independently: each
+independent: for the primary tree, codecs produce leaf chunks whose `boundary_key`
+(INV-FERR-045c) respects the canonical sort order; for secondary trees (EAVT, AEVT,
+VAET, AVET), the prolly tree builder computes separator keys directly from the
+pre-sorted `DatomPairChunk` entries, bypassing `boundary_key` (which defaults to
+canonical ordering and is therefore primary-tree-only).
+The five trees are content-addressed independently: each
 has its own root hash and its own chunk set. Identical chunks across trees ARE physically
 deduplicated (by content addressing, INV-FERR-045) but the tree roots are distinct
 because the keys are distinct.
@@ -433,7 +437,11 @@ byte (codec discriminator) to select the codec's `decode` method.
 |-----|---------------|----------|
 | `0x02` | WaveletMatrix | `bd-gvil` epic (spec authoring `bd-obo8`) |
 | `0x03` | Verkle/KZG commitment-based | Exploratory in `docs/ideas/014` §4.1 |
-| `0x04` | BP+RMM succinct internal nodes | Future INV-FERR-045d (internal node codec trait) |
+
+Note: BP+RMM succinct internal nodes are NOT in this registry — internal
+nodes use a separate format versioning scheme (`INTERNAL_FORMAT_V1` at byte 1
+of internal chunks, per INV-FERR-045a). A future INV-FERR-045d will govern
+internal node codec dispatch analogous to §23.9.8 for leaves.
 
 Tag `0x00` is permanently reserved (never allocated) — it serves as a sentinel for
 corruption detection (a chunk that starts with `[0x01][0x00]` is definitively malformed
@@ -1653,8 +1661,9 @@ constrain bytes that haven't been parsed yet).
 **Performance budgets** (DatomPair codec, Phase 6 of session 023.5):
 - `DatomPairCodec::encode_payload`: O(n) in entry count, single-pass
   sequential write. At 100M datoms with ~1K entries per leaf chunk, expected
-  latency <50 μs per chunk on commodity hardware (bounded by `memcpy` of
-  ~40 KB average payload).
+  latency <50 μs per chunk on commodity hardware (bounded by sequential
+  write of the payload, typically ~130 KB at 1K entries with ~100-byte
+  average canonical-bytes keys + 32-byte values).
 - `DatomPairCodec::decode_payload`: O(n) in entry count, single-pass
   sequential read. Same order-of-magnitude as encode — dominated by
   allocation of the `Vec<(Vec<u8>, Vec<u8>)>` entries vector.
@@ -1954,7 +1963,11 @@ impl DatomPairCodec {
 fn datom_set_to_pair_chunk(datoms: &BTreeSet<Datom>) -> DatomPairChunk {
     let entries: Vec<(Vec<u8>, Vec<u8>)> = datoms
         .iter()
-        .map(|d| (d.canonical_bytes(), d.content_hash().as_bytes().to_vec()))
+        .map(|d| {
+            let key = d.canonical_bytes();
+            let value = blake3::hash(&key).as_bytes().to_vec(); // S23.9.0.2: content_hash(d) = BLAKE3(canonical_bytes(d))
+            (key, value)
+        })
         .collect();
     DatomPairChunk::from_sorted_unchecked(entries)
 }
