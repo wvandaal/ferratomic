@@ -3212,6 +3212,40 @@ $ git log --all --oneline --grep="INV-FERR-045a"
 
 **Conclusion**: `INV-FERR-045a` and `S23.9.0 "Canonical Datom Key Encoding"` were **planned but never authored**. The 8 affected beads (bd-3gk, bd-t9h, bd-r2u, bd-f74, bd-14b, bd-132, bd-400, bd-85j.13) cite content the bead author intended to land in a spec amendment that was never committed.
 
+**Triple confirmation** (added 2026-04-08, late session 021):
+
+```bash
+$ git log --all --oneline -G "INV-FERR-045a" -- spec/
+(zero results — INV-FERR-045a was never present in any version of any spec file)
+
+$ cass search "INV-FERR-045a" --robot --fields summary
+total_matches: 11
+top_hit_title: "I need to deeply verify 7 Phase 4b/4c specification beads against the actual spec text..."
+(11 hits across 8+ session paths — past sessions encountered the gap repeatedly)
+```
+
+**The cass evidence is rich**: a previous subagent (`agent-aa1484397a0a6fd52` in session `b8777b9b-...`) was tasked with "deeply verify 7 Phase 4b/4c specification beads against the actual spec text". Reading the subagent's findings:
+
+> **BEAD 1: bd-t9h... VERDICT: PARTIALLY RESOLVED**
+> Criterion 3: UNMET. INV-FERR-045a (lines 433-589) defines chunk serialization but does NOT address how primary tree VALUES (content hashes) participate in datom round-trip.
+
+The subagent BELIEVED INV-FERR-045a existed at lines 433-589. But git log proves no version of spec/06 ever contained INV-FERR-045a. **The subagent was hallucinating** (or perhaps confusing INV-FERR-045 with a planned 045a). Lines 433-589 in the actual spec/06 are inside INV-FERR-046's proptest strategy.
+
+**The hallucination is itself a significant finding**: it confirms that even agents tasked with "verify against the actual spec text" missed the gap because the bead descriptions are so plausibly self-consistent. The 7 affected beads cite each other's "INV-FERR-045a" assumptions, creating a closed loop of internal consistency that doesn't touch reality.
+
+**Triple-confirmed conclusion**: INV-FERR-045a / S23.9.0 are pure phantoms in the bead graph. They have never existed and should not exist as a "fix this back" task — they should be authored fresh in session 023.
+
+**Authoring source material** (now firmly identified):
+1. **bd-t9h Bug Analysis** describes the round-trip semantics gap (key vs value decode paths)
+2. **bd-r2u Bug Analysis** describes the manifest-root snapshot semantics (RootSet serialization byte layout)
+3. **bd-f74 Bug Analysis** describes the chunk canonicality enforcement contract
+4. **bd-14b Bug Analysis** describes the decode_child_addrs function and chunk type detection
+5. **bd-132 Bug Analysis** describes the DiffIterator algorithm and memory bounds
+6. **bd-400 Bug Analysis** describes the rolling hash determinism (and proposes INV-FERR-046a as a separate sub-INV)
+7. **bd-85j.13 postconditions** describe the prolly tree block store's full surface area
+
+These 7 Bug Analysis sections collectively describe the design intent for INV-FERR-045a + §23.9.0. Session 023 can synthesize them into the actual spec content without needing to re-derive the design.
+
 **Recommendation for spec audit Section 7 (session 023)**: **AUTHOR THE MISSING CONTENT**.
 
 Reasoning:
