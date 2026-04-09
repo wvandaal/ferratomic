@@ -409,45 +409,73 @@ deployment topology. This is the substrate transparency guarantee.
 /// Transport errors (network, timeout, protocol) are distinct from
 /// query errors (invalid query, schema mismatch). The caller can
 /// distinguish them via FerraError variants.
-#[async_trait]
-pub trait Transport: Send + Sync + 'static {
-    /// Execute a query against the remote store.
-    async fn query(&self, expr: &QueryExpr) -> Result<TransportResult, TransportError>;
+/// Transport trait: async, runtime-agnostic, dyn-compatible (ADR-FERR-024).
+/// All methods return Pin<Box<dyn Future>> using only std primitives.
+/// Phase 4a.5 federation: includes `fetch_signed_transactions` per ADR-FERR-025.
+///
+/// The trait contract: for any store S and matching filter F,
+/// transport.fetch_datoms(F) returns the same result as querying S directly.
+///
+/// # Errors
+/// Transport errors (network, timeout, protocol) and query errors (invalid
+/// filter, schema mismatch) are unified under `FerraError` so the caller can
+/// distinguish them via existing variants.
+pub trait Transport: Send + Sync {
+    /// Fetch datoms matching a filter (for selective merge / federated query).
+    fn fetch_datoms(
+        &self,
+        filter: &DatomFilter,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<Datom>, FerraError>> + Send + '_>>;
 
-    /// Fetch datoms matching a filter (for selective merge).
-    async fn fetch_datoms(&self, filter: &DatomFilter) -> Result<Vec<Datom>, TransportError>;
+    /// Fetch transactions grouped with signing metadata (ADR-FERR-025).
+    /// Preserves transaction boundaries for signature verification.
+    fn fetch_signed_transactions(
+        &self,
+        filter: &DatomFilter,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<SignedTransactionBundle>, FerraError>> + Send + '_>>;
 
     /// Fetch the current schema of the remote store.
-    async fn schema(&self) -> Result<Schema, TransportError>;
+    fn schema(
+        &self,
+    ) -> Pin<Box<dyn Future<Output = Result<Schema, FerraError>> + Send + '_>>;
 
-    /// Fetch the current epoch/frontier of the remote store.
-    async fn frontier(&self) -> Result<Frontier, TransportError>;
-
-    /// Stream WAL entries from a given epoch (for live migration).
-    async fn stream_wal(&self, from_epoch: Epoch) -> Result<WalStream, TransportError>;
+    /// Fetch the current frontier of the remote store.
+    fn frontier(
+        &self,
+    ) -> Pin<Box<dyn Future<Output = Result<Frontier, FerraError>> + Send + '_>>;
 
     /// Health check: is the remote store reachable?
-    async fn ping(&self) -> Result<Duration, TransportError>;
+    fn ping(
+        &self,
+    ) -> Pin<Box<dyn Future<Output = Result<Duration, FerraError>> + Send + '_>>;
 }
 
-/// Local transport: in-process, zero-copy, zero-latency.
+/// LocalTransport: in-process, zero-copy, zero-latency.
 pub struct LocalTransport {
     db: Arc<Database>,
 }
 
-#[async_trait]
 impl Transport for LocalTransport {
-    async fn query(&self, expr: &QueryExpr) -> Result<TransportResult, TransportError> {
-        let snapshot = self.db.snapshot();
-        let result = eval_query(&snapshot, expr)
-            .map_err(TransportError::QueryFailed)?;
-        Ok(TransportResult {
-            data: result,
-            latency: Duration::ZERO,
-            datom_count: snapshot.datom_count(),
-        })
+    fn fetch_datoms(
+        &self,
+        filter: &DatomFilter,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<Datom>, FerraError>> + Send + '_>> {
+        let snap = self.db.snapshot();
+        let datoms: Vec<Datom> = snap.datoms()
+            .filter(|d| filter.matches(d))
+            .cloned()
+            .collect();
+        Box::pin(async move { Ok(datoms) })
     }
-    // ... other methods delegate to Database directly
+
+    fn ping(
+        &self,
+    ) -> Pin<Box<dyn Future<Output = Result<Duration, FerraError>> + Send + '_>> {
+        Box::pin(async { Ok(Duration::ZERO) })
+    }
+
+    // ... other methods (fetch_signed_transactions, schema, frontier)
+    // delegate to Database snapshot similarly.
 }
 
 /// TCP transport: LAN/datacenter, persistent connections, reconnect.
@@ -457,17 +485,16 @@ pub struct TcpTransport {
     timeout: Duration,
 }
 
-/// Verify transport transparency: same query, same store, different transports.
+/// Verify transport transparency: same filter, same store, different transports.
 #[cfg(test)]
 fn verify_transport_transparency(
-    store: &Store,
-    query: &QueryExpr,
+    filter: &DatomFilter,
     transport_a: &dyn Transport,
     transport_b: &dyn Transport,
 ) -> bool {
-    let result_a = block_on(transport_a.query(query)).unwrap();
-    let result_b = block_on(transport_b.query(query)).unwrap();
-    result_a.data == result_b.data
+    let result_a = futures::executor::block_on(transport_a.fetch_datoms(filter)).unwrap();
+    let result_b = futures::executor::block_on(transport_b.fetch_datoms(filter)).unwrap();
+    result_a == result_b
 }
 ```
 
@@ -489,22 +516,24 @@ proptest! {
     #[test]
     fn transport_transparency(
         datoms in prop::collection::btree_set(arb_datom(), 0..100),
-        query_attr in arb_attribute(),
+        attr_prefix in "[a-z]{1,5}/",
     ) {
         let store = Store::from_datoms(datoms);
         let db = Database::from_store(store.clone());
 
         let local = LocalTransport::new(Arc::new(db.clone()));
 
-        // Simulate remote: serialize query, send to store, deserialize result
+        // Simulate remote: serialize filter, send to store, deserialize result
         let remote = LoopbackTransport::new(Arc::new(db));
 
-        let query = QueryExpr::attribute_filter(query_attr);
-        let result_local = block_on(local.query(&query)).unwrap();
-        let result_remote = block_on(remote.query(&query)).unwrap();
+        // ADR-FERR-024: Transport returns Pin<Box<dyn Future>> using only std primitives.
+        // Test substrate transparency via fetch_datoms (the canonical query path).
+        let filter = DatomFilter::AttributeNamespace(vec![attr_prefix]);
+        let result_local = futures::executor::block_on(local.fetch_datoms(&filter)).unwrap();
+        let result_remote = futures::executor::block_on(remote.fetch_datoms(&filter)).unwrap();
 
-        prop_assert_eq!(result_local.data, result_remote.data,
-            "Transport transparency violated: local != remote for same store and query");
+        prop_assert_eq!(result_local, result_remote,
+            "Transport transparency violated: local != remote for same store and filter");
     }
 
     #[test]
@@ -6506,64 +6535,12 @@ impl VectorIndex for NullVectorIndex {
     fn search(&self, _: &[f32], _: usize, _: f32) -> Vec<(EntityId, f32)> { Vec::new() }
 }
 
-/// Transport trait: async, runtime-agnostic, dyn-compatible (ADR-FERR-024).
-/// All methods return Pin<Box<dyn Future>> using only std primitives.
-pub trait Transport: Send + Sync {
-    /// Fetch datoms matching a filter.
-    fn fetch_datoms(
-        &self,
-        filter: &DatomFilter,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<Datom>, FerraError>> + Send + '_>>;
-
-    /// Fetch transactions grouped with signing metadata (ADR-FERR-025).
-    /// Preserves transaction boundaries for signature verification.
-    fn fetch_signed_transactions(
-        &self,
-        filter: &DatomFilter,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<SignedTransactionBundle>, FerraError>> + Send + '_>>;
-
-    /// Fetch the current schema of the remote store.
-    fn schema(
-        &self,
-    ) -> Pin<Box<dyn Future<Output = Result<Schema, FerraError>> + Send + '_>>;
-
-    /// Fetch the current frontier of the remote store.
-    fn frontier(
-        &self,
-    ) -> Pin<Box<dyn Future<Output = Result<Frontier, FerraError>> + Send + '_>>;
-
-    /// Health check: is the remote store reachable?
-    fn ping(
-        &self,
-    ) -> Pin<Box<dyn Future<Output = Result<Duration, FerraError>> + Send + '_>>;
-}
-
-/// LocalTransport: in-process, zero-copy, zero-latency (INV-FERR-038).
-pub struct LocalTransport {
-    db: Arc<Database>,
-}
-
-impl Transport for LocalTransport {
-    fn fetch_datoms(
-        &self,
-        filter: &DatomFilter,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<Datom>, FerraError>> + Send + '_>> {
-        let snap = self.db.snapshot();
-        let datoms: Vec<Datom> = snap.datoms()
-            .filter(|d| filter.matches(d))
-            .cloned()
-            .collect();
-        Box::pin(async move { Ok(datoms) })
-    }
-
-    fn ping(
-        &self,
-    ) -> Pin<Box<dyn Future<Output = Result<Duration, FerraError>> + Send + '_>> {
-        Box::pin(async { Ok(Duration::ZERO) })
-    }
-
-    // ... other methods delegate to Database snapshot similarly
-}
+// Transport trait + LocalTransport impl moved to INV-FERR-038 Level 2
+// (the canonical home for federation substrate transparency contracts).
+// See `spec/05:412-...` for the canonical Pin<Box<dyn Future>> Transport
+// definition per ADR-FERR-024 (zero-deps async) + ADR-FERR-025 (transaction-
+// level federation). INV-FERR-025b focuses solely on the universal index
+// algebra; Transport is referenced but defined elsewhere.
 ```
 
 **Falsification**: Any `DatomIndex` implementation I where, for some stores S₁ and S₂,

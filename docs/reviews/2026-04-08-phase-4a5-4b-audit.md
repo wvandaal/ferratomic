@@ -3012,7 +3012,7 @@ Recommendation: Amend `spec/03-performance.md` INV-FERR-029 (LIVE View Resolutio
 
 **Action**: Recorded recommendation in this audit doc; awaits user authorization before execution.
 
-#### 6.4.4 Remediation summary
+#### 6.4.4 Remediation summary (after session 022 main pass)
 
 | Status | Count | Notes |
 |--------|-------|-------|
@@ -3022,11 +3022,83 @@ Recommendation: Amend `spec/03-performance.md` INV-FERR-029 (LIVE View Resolutio
 | Phase 1 finding (200) | spec/05 §23.8.5 section number collision | Recorded but not yet remediated; requires §23.8.x renumbering decision |
 | Lean tautology/sorry findings (210, 221, 223, 224) | 4 findings | Defer to dedicated Lean proof work session (Phase 1 verification track in session 025+) |
 
-**Spec/05 quality after session 022 remediation**:
+**Spec/05 quality after session 022 main pass**:
 - **3 of 5 CRITICAL findings resolved** (208, 212+213 collapsed, 219 deferred, 206+207 deferred)
 - **5 of 12 MAJOR findings resolved** (211, 217, 225, plus the renumber resolves the §18.2 Pattern F)
 - **0 of 5 MINOR findings resolved** (deferred to session 025)
 - The §23.8.5 cluster is **substantially cleaner** but still has 2 CRITICAL findings (219, 206/207) deferred to focused follow-up.
+
+#### 6.4.5 Session 022.5 executions (2026-04-09, immediately following session 022)
+
+User authorized "Option A then C" (finish CRITICAL findings before session 023). Session 022.5 executes the 2 deferred CRITICAL findings.
+
+**FINDING-219 — INV-FERR-025b Transport scope leak** — **EXECUTED 2026-04-09**:
+
+**Scope expansion discovered during execution**: The original FINDING-219 described "scope leak in INV-025b". During the relocation read-through, a MORE SERIOUS finding emerged: **two `pub trait Transport` definitions existed simultaneously in spec/05** with INCOMPATIBLE shapes:
+
+- **INV-FERR-038 line 412**: `#[async_trait] pub trait Transport: Send + Sync + 'static` with 6 methods (`query`, `fetch_datoms`, `schema`, `frontier`, `stream_wal`, `ping`) — **STALE per ADR-FERR-024** which explicitly rejected `#[async_trait]` due to proc-macro dependency
+- **INV-FERR-025b line 6511**: `pub trait Transport: Send + Sync` with `Pin<Box<dyn Future>>` returns and 5 methods (`fetch_datoms`, `fetch_signed_transactions`, `schema`, `frontier`, `ping`) — **CANONICAL per ADR-FERR-024 + ADR-FERR-025**
+
+The two trait definitions had different async patterns AND different method sets. INV-038's version was outdated and contradicted ADR-024 (which is locked at Decision B = `Pin<Box<dyn Future>>`). INV-025b's version was correct but in the wrong location.
+
+**Fix executed** (4 edits to spec/05):
+1. Replaced INV-FERR-038 lines 412-451 (the `#[async_trait]` Transport block) with the canonical `Pin<Box<dyn Future>>` version from INV-025b. Updated doc comment to reference ADR-FERR-024 + ADR-FERR-025.
+2. Updated INV-FERR-038's `verify_transport_transparency` helper (lines 462-471): replaced `block_on(transport.query(query))` with `futures::executor::block_on(transport.fetch_datoms(filter))` and changed return field comparison from `result.data ==` to `result ==`.
+3. Updated INV-FERR-038's proptest `transport_transparency` (lines 488-518): replaced `local.query(&query)` with `local.fetch_datoms(&filter)` and updated the test data generator from `arb_attribute()` to `attr_prefix in "[a-z]{1,5}/"`.
+4. Replaced INV-FERR-025b's duplicate Transport block (lines 6509-6566) with a single-paragraph cross-reference comment pointing to INV-FERR-038 as the canonical home.
+
+**Verification**: `grep "pub trait Transport"` in spec/05 returns exactly **1 hit** at line 423 (inside INV-FERR-038 Level 2). `grep "async_trait"` returns only the ADR-FERR-024 Options table reference (which correctly documents the rejected option). `grep "local\.query("` returns 0 hits.
+
+**Effort**: ~45 min (vs original 30-45 estimate; the scope expansion to "INV-038 stale Transport" added ~10-15 min).
+
+**FINDING-206 + FINDING-207 — INV-FERR-029 spec amendment in spec/03** — **EXECUTED 2026-04-09**:
+
+**Decision locked**: The canonical tie-breaking rule for same-TxId different-Op datoms is **"Assert wins"** (matches transact semantics where Assert precedes Retract in EAVT order). This is the same rule recommended in §6.4.3 and aligns with the existing `build_live_causal` behavior and bd-l64y refinement sketch. Locked with explicit user authorization (session 022.5 via "Option A then C, finish CRITICAL findings").
+
+**Fix executed** (3 edits to spec/03 INV-FERR-029):
+1. **Level 0 amendment** (FINDING-206): Inserted a "Tie-breaking rule (canonical, amended for bd-l64y)" block after the `|LIVE(S)| ≤ |S|` line. Defines:
+   - `resolve_op : Op × Op → Op` with `Assert > Retract` precedence
+   - Canonical comparison `(tx, op) ≤ₗ (tx', op')` with `rank(Retract)=0, rank(Assert)=1`
+   - Explicit warning that this is the OPPOSITE of Rust's derived `Ord` on `(TxId, Op)` (which gives Retract > Assert because `Op::Assert(0) < Op::Retract(1)`)
+   - Cross-reference to bd-l64y as the regression target with the three affected file:line locations
+2. **Level 2 amendment** (FINDING-207): Inserted a "Three-path equivalence" comment block after `derive_live_set` and before `live_positions_from_sorted_runs`. The block:
+   - Declares the canonical `should_replace(existing, new) -> bool` helper
+   - Documents how each of the three paths (`build_live_causal`, `live_apply`, `merge_causal`) currently maintains LIVE state
+   - Specifies the exact code change needed for each path to use `should_replace`
+   - Explains why `merge_causal`'s current `union_with(std::cmp::max)` is INCORRECT (gives Retract > Assert on tie via raw tuple comparison)
+3. **proptest amendment** (new bd-l64y regression test): Added `test_inv_ferr_029_same_tx_id_assert_wins` proptest after the existing `test_inv_ferr_029_live_resolution`. The new test:
+   - Generates `(e, a, v, tx)` and creates Assert + Retract datoms at the same TxId for the same triple
+   - Exercises ALL THREE paths: `build_live_causal` (batch), `live_apply` (in-place), `merge_causal` (lattice union)
+   - Asserts each path resolves to "Assert wins" individually
+   - Asserts pairwise convergence: `batch == apply` and `apply == merge`
+
+**Effort**: ~50 min (vs original 60-90 estimate; the existing INV-029 structure was clean enough that the amendments slotted in cleanly).
+
+**Cross-cut reconciliation**:
+- bd-l64y is now a regression-test-only bead — its FINDING-191 cross-cut is RESOLVED at the spec layer. The bead's "Fix" section should now reference the canonical tie-breaking rule from INV-FERR-029 Level 0 (deferred to session 025 Phase 3 reconciliation per audit doc §19).
+- The bd-l64y bead audit verdict (NEEDS WORK → EDIT) is unchanged at the bead-side level: the implementation still needs to update merge_causal/live_apply/build_live_causal to use the canonical `should_replace` helper. That implementation work is bd-l64y's actual scope and lands in Phase 4a.5 implementation (session 027+).
+
+#### 6.4.6 Remediation summary (after session 022.5)
+
+| Status | Count | Notes |
+|--------|-------|-------|
+| EXECUTED in session 022 | 6 finding fixes + Pattern F renumber | spec/05 + spec/README.md |
+| **EXECUTED in session 022.5** | **2 CRITICAL findings (219, 206+207)** | spec/05 (Transport relocation, 4 edits) + spec/03 (INV-FERR-029 amendments, 3 edits) |
+| DEFERRED-S025 | 5 findings (bead state changes) | Phase 3 reconciliation per §19 batch script extension |
+| DEFERRED-FOLLOWUP | 0 CRITICAL findings | All 5 §23.8.5 CRITICAL findings now resolved |
+| Phase 1 finding (200) | spec/05 §23.8.5 section number collision | Recorded but not yet remediated; requires §23.8.x renumbering decision (low priority) |
+| Lean tautology/sorry findings (210, 221, 223, 224) | 4 findings | Defer to dedicated Lean proof work session |
+
+**Spec/05 quality after session 022.5**:
+- **5 of 5 CRITICAL findings resolved** ✅ (208, 212+213, 219, 206+207 — ALL CRITICAL spec defects from §23.8.5 are fixed)
+- **5 of 12 MAJOR findings resolved** (no change from main pass)
+- The §23.8.5 cluster + spec/03 INV-FERR-029 are **substantially cleaner** with no remaining CRITICAL findings.
+
+**Spec/03 quality after session 022.5**:
+- INV-FERR-029 now has the canonical tie-breaking rule, three-path equivalence acknowledgment, and bd-l64y regression test.
+- The semantic ambiguity that allowed three implementations to diverge is now closed at the spec layer.
+
+**Net session 022 + 022.5 outcome**: The §23.8.5 spec audit + spec/03 INV-FERR-029 amendment block is the largest semantic-correction batch since session 015. Phase 4a.5 implementation in session 027+ now starts from a substantially cleaner spec base, with zero remaining CRITICAL spec defects in the §23.8.5 cluster.
 
 ---
 

@@ -521,6 +521,40 @@ LIVE(S) ⊆ project_eav(S)
 |LIVE(S)| ≤ |S|
 ```
 
+**Tie-breaking rule (canonical, amended for bd-l64y)**: For same-TxId
+different-Op datoms (an assertion and a retraction with identical TxId for
+the same triple), the resolution is **Assert wins**:
+
+```
+resolve_op : Op × Op → Op
+resolve_op Assert _        = Assert
+resolve_op _      Assert   = Assert
+resolve_op Retract Retract = Retract
+```
+
+Equivalently, define the canonical comparison `≤ₗ` over `(TxId, Op)` pairs:
+
+```
+(tx₁, op₁) ≤ₗ (tx₂, op₂)  iff  tx₁ < tx₂
+                              ∨ (tx₁ = tx₂ ∧ rank(op₁) ≤ rank(op₂))
+where rank(Retract) = 0 and rank(Assert) = 1.
+```
+
+Note that this is the **OPPOSITE** of Rust's derived `Ord` on `(TxId, Op)`,
+which gives `Op::Assert(0) < Op::Retract(1)` and therefore ranks Retract
+HIGHER than Assert on tie. The canonical `≤ₗ` rule matches transact
+semantics: within a single TxId, EAVT sort places Assert before Retract,
+so the Assert is "first" and a derived "keep first" implementation
+naturally produces Assert-wins. The merge path must use `≤ₗ` (NOT
+`std::cmp::max` on raw `(TxId, Op)` tuples) to converge with the
+in-place and batch paths.
+
+This rule is the regression target for **bd-l64y** (three-path tie-breaking
+inconsistency: `merge_causal` in `ferratomic-store/src/merge.rs:228-235`,
+`build_live_causal` in `ferratomic-store/src/query.rs:96-110`, and
+`live_apply` in `ferratomic-store/src/store.rs:460-490` previously diverged
+on this case).
+
 #### Level 1 (State Invariant)
 The current implementation materializes the LIVE projection in two layers:
 - `live_causal : OrdMap<(EntityId, Attribute), OrdMap<Value, (TxId, Op)>>`
@@ -607,6 +641,51 @@ pub(super) fn derive_live_set(
     live
 }
 
+// === Three-path equivalence (INV-FERR-029 canonical tie-break, amended for bd-l64y) ===
+//
+// LIVE state is maintained by THREE code paths in ferratomic-store. All three
+// MUST converge on the canonical "Assert wins on same-TxId tie" rule from
+// Level 0 above. The shared helper:
+//
+//   /// Returns true iff `new` should replace `existing` for the same
+//   /// (entity, attribute, value) triple, per the canonical tie-break rule.
+//   pub(crate) fn should_replace(
+//       existing: (TxId, Op),
+//       new: (TxId, Op),
+//   ) -> bool {
+//       match new.0.cmp(&existing.0) {
+//           Ordering::Greater => true,
+//           Ordering::Less => false,
+//           Ordering::Equal => {
+//               // Same TxId: Assert outranks Retract (Level 0 tie-break).
+//               new.1 == Op::Assert && existing.1 == Op::Retract
+//           }
+//       }
+//   }
+//
+// The three paths must all use this helper (or an equivalent comparison):
+//
+// 1. build_live_causal (above, ferratomic-store/src/query.rs:96):
+//    Currently uses `existing_tx >= datom.tx()` with the "keep first" pattern,
+//    which produces Assert-wins because EAVT sort places Assert first within
+//    a TxId. With `should_replace`, the logic becomes explicit:
+//        `if should_replace(*existing_event, (datom.tx(), datom.op())) { ... }`
+//
+// 2. live_apply (ferratomic-store/src/store.rs:460):
+//    Currently uses `datom.tx() > existing_tx` with the "keep existing on tie"
+//    pattern, which also produces Assert-wins for the same EAVT-sort reason.
+//    With `should_replace`, replace `should_update` computation with
+//        `let should_update = should_replace((existing_tx, op), (datom.tx(), datom.op()));`
+//
+// 3. merge_causal (ferratomic-store/src/merge.rs:228):
+//    Currently uses `entries.union_with(std::cmp::max)` over raw `(TxId, Op)`,
+//    which gives Retract > Assert on tie (because `Op::Retract(1) > Op::Assert(0)`
+//    in derived Ord) — INCORRECT per the canonical rule. Replace with:
+//        `entries.union_with(|a, b| if should_replace(a, b) { b } else { a })`
+//
+// Three-path convergence is regression-tested by `test_inv_ferr_029_same_tx_id_assert_wins`
+// (proptest below), filed as **bd-l64y**.
+
 fn live_positions_from_sorted_runs<K, FKey, FOp>(len: usize, key_at: FKey, op_at: FOp) -> Vec<u32>
 where
     K: PartialEq,
@@ -670,8 +749,63 @@ proptest! {
     ) {
         let store = Store::from_datoms(datoms.into_iter().collect());
 
-        // Reference model: sort by TxId, then assert inserts and retract removes.
-        // The resulting triple set must equal the native LIVE projection.
+        // Reference model: sort by (TxId, Op-rank Assert-wins), then assert
+        // inserts and retract removes. The resulting triple set must equal
+        // the native LIVE projection.
+    }
+
+    /// bd-l64y regression: same-TxId different-Op edge case.
+    /// Verifies build_live_causal, live_apply, and merge_causal all converge
+    /// on the canonical "Assert wins on tie" rule from Level 0.
+    #[test]
+    fn test_inv_ferr_029_same_tx_id_assert_wins(
+        e in arb_entity_id(),
+        a in arb_attribute(),
+        v in arb_value(),
+        tx in arb_tx_id(),
+    ) {
+        // Same (e,a,v) triple, same TxId, opposite Op.
+        let assert_datom = Datom::new(e, a.clone(), v.clone(), tx, Op::Assert);
+        let retract_datom = Datom::new(e, a.clone(), v.clone(), tx, Op::Retract);
+
+        // Path 1: build_live_causal over the union (single batch).
+        let union: BTreeSet<Datom> = [assert_datom.clone(), retract_datom.clone()]
+            .into_iter().collect();
+        let causal_batch = build_live_causal(union.iter());
+        let live_batch = derive_live_set(&causal_batch);
+        let assert_present_batch = live_batch
+            .get(&(e, a.clone()))
+            .map_or(false, |vs| vs.contains(&v));
+
+        // Path 2: live_apply (in-place per-datom transact path).
+        let mut store_apply = Store::genesis();
+        store_apply.live_apply(&assert_datom);
+        store_apply.live_apply(&retract_datom);
+        let assert_present_apply = store_apply
+            .live_values(e, &a)
+            .map_or(false, |vs| vs.contains(&v));
+
+        // Path 3: merge_causal (selective_merge lattice union path).
+        let store_a = Store::from_datoms(BTreeSet::from([assert_datom]));
+        let store_r = Store::from_datoms(BTreeSet::from([retract_datom]));
+        let merged = merge(&store_a, &store_r).unwrap();
+        let assert_present_merge = merged
+            .live_values(e, &a)
+            .map_or(false, |vs| vs.contains(&v));
+
+        // INV-FERR-029 canonical tie-break: Assert wins on same-TxId.
+        prop_assert!(assert_present_batch,
+            "build_live_causal: Assert must win on same-TxId tie");
+        prop_assert!(assert_present_apply,
+            "live_apply: Assert must win on same-TxId tie");
+        prop_assert!(assert_present_merge,
+            "merge_causal: Assert must win on same-TxId tie (bd-l64y regression)");
+
+        // Three-path convergence: all paths must agree on the same result.
+        prop_assert_eq!(assert_present_batch, assert_present_apply,
+            "INV-FERR-029: build_live_causal and live_apply must converge");
+        prop_assert_eq!(assert_present_apply, assert_present_merge,
+            "INV-FERR-029: live_apply and merge_causal must converge");
     }
 }
 ```
