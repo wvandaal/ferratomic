@@ -1,5 +1,46 @@
 # The Alien Stack: Compounding Mathematical Sophistication for Maximum Performance
 
+## Status: Exploratory (per AGENTS.md §"Knowledge Organization Rule")
+
+This document is part of `docs/ideas/` — the **exploratory** zone of the
+project's knowledge base. It is **not the canonical record** for any decision
+about the project. Per the AGENTS.md Knowledge Organization Rule, prescriptive
+statements about the project's design must be codified in canonical sources
+(beads, specs, top-level docs like GOALS.md and AGENTS.md), not in idea
+documents. This document exists to provide macro-level context for the deep
+dive that produced its content; the prescriptive elements it discusses have
+been (or will be) elevated to canonical sources.
+
+**Cross-references to canonical sources for prescriptive content discussed in this document**:
+
+| Prescriptive content | Canonical source | Status |
+|----------------------|------------------|--------|
+| The Six-Dimension Decision Evaluation Framework | `GOALS.md §7` | **Codified 2026-04-09** |
+| The Knowledge Organization Rule itself | `AGENTS.md §"Knowledge Organization Rule"` | **Codified 2026-04-09** |
+| Trait-based DI architecture (`LeafChunkCodec`) | `spec/06-prolly-tree.md` `INV-FERR-045c` | Pending session 023.5 Phase 1 |
+| ~30 alien-stack research beads (Tier 1 through ΩΩΩ) | `.beads/issues.jsonl` (filed 2026-04-09) | **Codified** |
+| 8 fail-fast experiment beads (per doc 013 §IX discipline) | `.beads/issues.jsonl` (bd-EXP-* filed 2026-04-09) | **Codified** |
+| Phase A session sequence (023.5, 023.5.5, 023.6, 023.6.5, 023.7) | Session handoff prompts in `docs/prompts/sessions/` | Pending session 023.5 commit |
+| Decisions D1-D6 for session 023.5 | `INV-FERR-045c` Level 2 contract (pending) | Pending session 023.5 Phase 1 |
+| Performance/space budgets per Tier 1 invariant | `spec/06`/`spec/09` invariant L1 sections (pending) | Pending session 023.6 |
+| The True North numbers (10B in 15 GB) | Aspirational projection — NOT a commitment | Stays exploratory |
+| The "alien tier" classification (Tier 1, Ω, ΩΩ, ΩΩΩ) | Bead priorities P1, P2, P3, P4 | **Codified via bead priorities** |
+
+**What stays in this document**: the macro-level reasoning that produced these
+prescriptive elements, the synthesis across multiple disciplines (cryptography,
+succinct data structures, info theory, category theory, physics), the worked
+examples, the conditional analyses ("if SOC turns out to be correct..."), the
+exploratory framing of speculative artifacts, and the cross-disciplinary
+references. The DOCUMENT is exploratory; the COMMITMENTS extracted from it
+are canonical.
+
+**If you find prescriptive content in this document that does NOT have a
+canonical source listed above**: it is a documentation defect. Either the
+content should be elevated to a canonical source, or it should be reframed as
+exploratory/conditional/speculative.
+
+---
+
 ## Preamble
 
 This document is the twelfth in a sequence:

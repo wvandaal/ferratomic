@@ -42,6 +42,35 @@ Read **GOALS.md §7** (Six-Dimension Decision Evaluation Framework) — the cano
 
 **Critical correction**: Accretiveness is **forward-looking** (does this decision compound positively?), NOT backward-looking (did we avoid breaking anything?). A correction that fixes a wrong design is HIGHLY accretive — it eliminates future debt. See GOALS.md §7.2.
 
+## Knowledge Organization Rule (Canonical vs Exploratory)
+
+**The rule**: ANY prescriptive statement must be codified in the **canonical record**. The canonical record is:
+
+- **`spec/`** — formal invariants, ADRs, NEGs (the source of truth for what the system IS)
+- **`.beads/issues.jsonl`** — concrete tracked work items (beads filed via `br create`)
+- **`GOALS.md`** — project values, value hierarchy, success criteria, decision framework
+- **`AGENTS.md`** (this file) — operational discipline, hard constraints, agent guidelines
+- **`README.md`** — project introduction and design philosophy
+- **Top-level architecture docs** in `docs/design/` (canonical reference architecture)
+
+**`docs/ideas/`** is for **exploratory, speculative, macro-level context only**. Idea documents:
+
+- Explore implications and design directions
+- Provide larger-scope inspiration for humans and agents
+- Are NOT hard commitments
+- Do NOT serve as the canonical record for ANY decision about the project itself
+
+**The test**: If an idea or decision has become a concrete agreed-upon commitment for the project, it MUST be codified in the canonical primary sources (beads, specs, top-level docs). The corresponding `docs/ideas/` document may continue to exist for context, but it must reference the canonical source as authoritative — never the other way around.
+
+**Examples of correct elevation**:
+
+- A new invariant explored in `docs/ideas/` becomes an `INV-FERR-XXX` in `spec/` once committed.
+- A speculative experiment becomes a `bd-XXX` filed via `br create` once it's a concrete work item.
+- A new design pattern (e.g., the Six-Dimension Decision Framework from `docs/ideas/014`) becomes a canonical section in `GOALS.md` once it's adopted as project discipline.
+- A risk identified in `docs/ideas/013` becomes a fail-fast experiment bead with explicit acceptance criteria.
+
+**Failure mode this prevents**: idea documents containing prescriptive commitments that aren't enforced anywhere. Future agents reading the spec or beads see a different story than the idea docs imply, leading to "phantom" commitments (the Pattern H failure mode from session 023). Codifying every commitment in the canonical record eliminates this drift by construction.
+
 ## Quality Standard: GOALS.md §6
 
 Read **GOALS.md §6** (Defensive Engineering Standards) — it is the canonical quality reference. Summary:
