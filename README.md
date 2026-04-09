@@ -171,6 +171,25 @@ No `#[allow(clippy::...)]`. No `cfg` gating that hides code from the type checke
 
 The full defensive engineering standard (11 CI gates, MIRI, ASan, mutation testing, coverage thresholds, supply chain audit, threat modeling, regression discipline) is specified in [GOALS.md §6](GOALS.md).
 
+### 6. The Six-Dimension Decision Evaluation Framework
+
+Every non-trivial design decision is scored across six orthogonal dimensions:
+
+| Dimension | What it measures | Weight |
+|-----------|------------------|--------|
+| **Performance** | Latency, throughput, asymptotic complexity | High |
+| **Efficiency** | Storage density, memory, bandwidth, energy | High |
+| **Accretiveness** | Forward-looking — does this compound positively over future work? | High |
+| **Correctness** | Internal consistency, edge cases, no contradictions | Critical (Tier 1) |
+| **Quality** | Lab-grade adherence to lifecycle/16 + lifecycle/17 + INV-FERR-001 gold standard | High |
+| **Optimality** | Best decision among options considered | Medium |
+
+Each dimension is scored 1-10. Composite is the average. Literal 10.0 requires ALL six dimensions at 10.0 — any dimension below 10.0 must be documented with what would close the gap.
+
+**Critical**: Accretiveness is **forward-looking** (does the choice compound positively?), NOT backward-looking. A correction that fixes a wrong design is HIGHLY accretive — it eliminates future debt. The framework distinguishes Performance from Efficiency because they are different concerns: an algorithm can be FAST but inefficient (extra space), or SLOW but efficient (in-place). For ferratomic, **storage efficiency** is a top priority — billion-scale single-machine deployment requires both axes.
+
+Use the framework before authoring spec invariants, choosing implementations, scoring beads, gating phases, and reviewing PRs. The full framework, the 10.0 rule, the relationship to the value hierarchy, and a worked example are specified in [GOALS.md §7](GOALS.md).
+
 ---
 
 ## How Ferratomic Compares

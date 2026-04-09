@@ -36,6 +36,12 @@ Full verification (pre-tag): `cargo test --workspace --release && cd ferratomic-
 
 ---
 
+## Decision Framework: GOALS.md §7
+
+Read **GOALS.md §7** (Six-Dimension Decision Evaluation Framework) — the canonical scoring framework for any non-trivial design decision. Six dimensions: **Performance, Efficiency, Accretiveness, Correctness (Tier 1), Quality, Optimality**. Each scored 1-10. Composite is the average. Literal 10.0 requires ALL six at 10.0. Use this framework before authoring spec invariants, choosing implementations, scoring beads, gating phases, and reviewing PRs.
+
+**Critical correction**: Accretiveness is **forward-looking** (does this decision compound positively?), NOT backward-looking (did we avoid breaking anything?). A correction that fixes a wrong design is HIGHLY accretive — it eliminates future debt. See GOALS.md §7.2.
+
 ## Quality Standard: GOALS.md §6
 
 Read **GOALS.md §6** (Defensive Engineering Standards) — it is the canonical quality reference. Summary:

@@ -400,3 +400,169 @@ Gate 11: Coverage >= thresholds (no regression)
   coverage below the threshold is rejected.
 - **Lean proofs are unconditional in CI.** Not gated on commit message keywords.
   A code change that breaks a Lean proof fails CI regardless of the commit message.
+
+---
+
+## 7. The Six-Dimension Decision Evaluation Framework
+
+The Value Hierarchy in §3 tells you WHAT to prioritize when goals conflict. The
+Defensive Engineering Standards in §6 tell you HOW to enforce quality at the
+implementation level. This section establishes WHAT framework to use when
+**evaluating any specific design decision** — a spec invariant, an implementation
+choice, a codec, a federation protocol, an optimization, an architectural
+trade-off.
+
+The framework is canonical. It is consulted before every non-trivial decision
+and after every phase gate. It is the qualitative + quantitative complement to
+the value hierarchy.
+
+### 7.1 The Six Dimensions
+
+| Dimension | What it measures | Weight |
+|-----------|------------------|--------|
+| **Performance** | Asymptotic complexity, latency, throughput, response time — what the user experiences | High |
+| **Efficiency** | Storage density, memory footprint, bandwidth, energy, CPU cycles per operation — what the system consumes to deliver Performance | High |
+| **Accretiveness** | Whether the design choice compounds positively over future work — does it create permanent value or future debt? | High |
+| **Correctness** | Internal consistency, no contradictions, no undefined helpers, all edge cases handled, every claim provable | Critical (Tier 1) |
+| **Quality** | Adherence to lifecycle/16 + lifecycle/17 standards, gold-standard match (INV-FERR-001 template), substantive verification across all six layers | High |
+| **Optimality** | Was this the maximally optimal choice among the options considered? Was the option space adequately explored? | Medium |
+
+**Each dimension is scored 1-10. The composite score is the average.**
+
+**The 10.0 rule**: Literal composite 10.0 requires ALL six dimensions at 10.0. Any
+dimension below 10.0 means the composite is below 10.0, and the specific
+dimension(s) below the bar must be documented with an explanation of why and
+what would close the gap.
+
+### 7.2 Why These Six (and Not Fewer)
+
+**Performance and Efficiency are distinct** even though they're often conflated.
+An algorithm can be FAST but inefficient (e.g., quicksort with O(n) extra
+space). An algorithm can be SLOW but efficient (e.g., in-place sorts). Most
+real systems must achieve both. For ferratomic specifically, **storage
+efficiency is a top-tier priority** — the wavelet matrix target (~5 b/d), the
+prolly tree's structural sharing, the homomorphic fingerprint (32 bytes
+regardless of store size), the substrate-independent design — all of these are
+about minimizing what the system consumes to deliver its capabilities. Without
+explicit Efficiency scoring, design discussions drift toward "fast at any
+cost," which would compromise the system's billion-scale goals.
+
+**Accretiveness is forward-looking, not backward-looking.** Earlier in the
+project's history, accretiveness was sometimes treated as "did we avoid
+breaking anything that existed before?" — a backward-looking framing that
+penalized any correction to a previously-incorrect spec or implementation.
+This was perverse: it meant the highest accretiveness came from never fixing
+bugs. The corrected definition: accretiveness measures whether the choice
+**compounds positively over future work**. A correction that replaces a wrong
+design with a right design is HIGHLY accretive (it eliminates future debt). A
+trait that enables future extension without touching existing code is the
+accretive archetype. A feature added without downstream use is anti-accretive.
+A pattern that matches existing conventions is more accretive than one that
+fights them.
+
+**Correctness is Tier 1 (Critical)**, mirroring §3. A composite score with
+Correctness below 10.0 cannot ship to production regardless of how high the
+other dimensions score. The other five dimensions can have trade-offs;
+Correctness cannot.
+
+**Quality matches the lifecycle/16 + lifecycle/17 + INV-FERR-001 gold
+standard**. A spec invariant has Quality 10.0 if it has all six verification
+layers populated with content that is mutually consistent — Lean theorem
+proves Level 0, proptest tests the falsification, Level 2 implements the
+state invariant from Level 1, every cross-reference resolves. An invariant
+missing any layer is structurally incomplete; an invariant where layers
+contradict each other is internally inconsistent. Both are findings that
+reduce Quality below 10.0.
+
+**Optimality is Medium-weight** because it is a meta-judgment ("was this the
+best option?") that depends on whether the option space was explored
+adequately. Optimality 10.0 requires that all reasonable alternatives were
+considered and rejected with explicit reasoning. It's important but
+necessarily less precise than the other five.
+
+### 7.3 How to Use the Framework
+
+**Before authoring a non-trivial spec invariant, implementation, or
+architectural decision**: score it across the six dimensions before committing.
+Document the scores. Identify which dimensions are below 10.0 and explain why.
+If any dimension is below 7.0, reconsider the design.
+
+**After completing a phase or major work item**: re-score the affected
+specs/implementations. Document the progression (what improved, what stayed
+the same, what regressed). Phase gate decisions consult the composite score.
+
+**In bead descriptions**: include the score across the six dimensions when the
+work is non-trivial. This calibrates expectations and lets future agents
+quickly understand the trade-off profile of each piece of work.
+
+**In code review**: a PR is "ready to merge" only if it does not regress any
+dimension. Improvements on one dimension at the cost of another require
+explicit justification.
+
+**In ADRs**: every ADR should score the chosen option AND the rejected options
+across the six dimensions. This makes the trade-off visible and auditable.
+
+### 7.4 Example: Scoring INV-FERR-049 (Snapshot = Root Hash)
+
+To illustrate: scoring the session 023 INV-FERR-049 rewrite (which migrated
+from a single-tree Snapshot model to the multi-tree manifest model).
+
+| Dimension | Pre-rewrite | Post-rewrite | Notes |
+|-----------|-------------|--------------|-------|
+| Performance | 7.5 | 9.0 | Manifest hash → RootSet → tree roots adds two-step indirection but enables O(1) per-tree fast paths |
+| Efficiency | 7.0 | 9.0 | 130 bytes manifest vs implicit single-tree assumption; cleaner storage model |
+| Accretiveness | 6.0 | 9.5 | The rewrite was a correction, not a regression — under the corrected definition (§7.2), it is highly accretive because it locks in the manifest model that all future federation work depends on |
+| Correctness | 7.0 | 10.0 | Resolves FINDING-226 (CRITICAL contradiction with §23.9.0.6) |
+| Quality | 8.0 | 9.0 | Full L0/L1/L2/Lean/proptest/falsification pass; matches INV-FERR-086 template |
+| Optimality | 7.0 | 9.0 | Multi-tree manifest is the right choice given the implementation's 5-store structure; alternatives (single tree, 4-tree collapse) were considered and rejected |
+| **Composite** | **7.08** | **9.25** | The rewrite improved every dimension |
+
+The key insight: under the WRONG accretiveness framing (backward-looking), the
+rewrite would have appeared to REDUCE accretiveness (because it broke the
+prior single-tree API). Under the CORRECT framing, it INCREASES accretiveness
+because it eliminates future debt. This is the difference between scoring as
+a stagnation engine and scoring as a forward-progress engine.
+
+### 7.5 Relationship to the Value Hierarchy (§3)
+
+The framework's six dimensions map onto the value hierarchy as follows:
+
+| Framework dimension | Value hierarchy tier |
+|---------------------|----------------------|
+| Correctness | Tier 1 (Algebraic correctness, Append-only durability, Safety) |
+| Quality | Tier 2 (Verification depth, Architectural clarity, Spec-implementation alignment) |
+| Performance | Tier 3 (Performance at scale) |
+| Efficiency | Tier 3 (Performance at scale — storage efficiency dimension) |
+| Accretiveness | Tier 2 (Architectural clarity) + Tier 3 (Compounding) |
+| Optimality | Meta — applies across all tiers |
+
+The framework is consistent with the hierarchy: Tier 1 dimensions are scored
+"Critical" (cannot ship below 10.0); Tier 2 and Tier 3 dimensions are scored
+"High"; Optimality is "Medium" because it is meta-evaluative.
+
+When the framework conflicts with itself (e.g., Performance vs Efficiency
+trade-off), the value hierarchy is the tiebreaker. When the value hierarchy
+conflicts with itself (e.g., a Tier 3 vs Tier 2 trade-off), it is documented
+explicitly per §3's resolution protocol.
+
+### 7.6 The Scoring Framework Is Itself Subject to the Framework
+
+By the same logic that the framework applies to all decisions: the framework
+itself is a design decision. It scores:
+
+- Performance: 9.5 — fast to apply, no per-decision overhead
+- Efficiency: 10.0 — adds zero runtime cost, only documentation cost
+- Accretiveness: 10.0 — every decision evaluated against it accumulates clarity
+- Correctness: 9.5 — six dimensions are necessary; dropping any leaves a gap
+- Quality: 9.5 — well-documented with examples; some dimensions could be more
+  precisely defined (e.g., "Quality" is partially circular)
+- Optimality: 9.0 — six dimensions is the simplest framework that captures all
+  the relevant concerns; fewer dimensions would conflate Performance and
+  Efficiency or hide Accretiveness
+
+Composite: 9.58. The framework itself is high-quality but not perfect. The 0.42
+gap is dominated by Optimality (could a different framework be even better?)
+and by the partial circularity of Quality (which references the framework's
+own standards).
+
+This is the framework being used on itself, demonstrating its application.

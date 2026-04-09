@@ -828,19 +828,28 @@ Long-horizon research and forward-compatibility work:
 - Optical CAM acceleration (bd-OPTICAL-CAM)
 - Motivic invariant classification (bd-MOTIVIC-INV)
 
-### 9.7 The Five-Dimension Scoring Framework
+### 9.7 The Six-Dimension Scoring Framework (canonical: GOALS.md §7)
 
-The path forward emerged from a structured scoring exercise across five orthogonal dimensions. Each dimension is scored 1-10 and contributes to a composite score. The framework was developed during this deep dive (2026-04-09) and is captured here so future agents can re-apply it consistently.
+The path forward emerged from a structured scoring exercise across six orthogonal dimensions. The framework is **canonical** and lives in `GOALS.md §7 "The Six-Dimension Decision Evaluation Framework"` — the authoritative source. This sub-section captures the alien-stack-specific application.
 
-| Dimension | What it measures | How to score |
-|-----------|------------------|--------------|
-| **Performance** | Asymptotic complexity + concrete latency/throughput targets | Higher = lower latency, higher throughput, smaller asymptotic constants |
-| **Accretiveness** | Whether the design choice compounds positively over time | Higher = decision creates permanent value, reused/extended without rewrite |
-| **Correctness** | Internal consistency, no contradictions, no undefined helpers, edge cases handled | Higher = every claim provable, every cross-reference resolves, every edge case explicit |
-| **Quality** | Adherence to lifecycle/16 + lifecycle/17 standards, gold-standard match | Higher = matches INV-FERR-001 template, substantive Lean theorems, complete falsifications |
-| **Optimality** | Did we make the maximally optimal choice given constraints | Higher = chosen design is provably best among options considered |
+The six dimensions are:
 
-**Composite score**: simple average across the 5 dimensions, with the rule that **literal 10.0 requires all 5 dimensions at 10.0**. A 9.85 composite means at least one dimension is below 10.0 — which dimension and why must be documented.
+| Dimension | Weight |
+|-----------|--------|
+| **Performance** — latency, throughput, asymptotic complexity | High |
+| **Efficiency** — storage density, memory, bandwidth, energy | High |
+| **Accretiveness** — forward-looking compounding value | High |
+| **Correctness** — internal consistency, edge cases, no contradictions | Critical (Tier 1) |
+| **Quality** — lifecycle/16 + lifecycle/17 + INV-FERR-001 gold-standard match | High |
+| **Optimality** — best decision among options considered | Medium |
+
+**The 10.0 rule**: literal composite 10.0 requires ALL six dimensions at 10.0. Any dimension below 10.0 must be documented with its current score and what would close the gap.
+
+**Critical correction (per GOALS.md §7.2)**: Accretiveness is **forward-looking**, not backward-looking. A correction that replaces a wrong design with a right design is HIGHLY accretive (it eliminates future debt). The session 023 INV-FERR-049 rewrite was NOT a regression — it was the highest-accretiveness move possible given the prior single-tree contradiction.
+
+**Critical addition (this section)**: **Efficiency is distinct from Performance**. An algorithm can be FAST but inefficient (extra space). For ferratomic, storage efficiency is a top priority — the wavelet matrix target (~5 b/d), the prolly tree's structural sharing, and the alien stack's density goals all live in the Efficiency dimension. The earlier 5-dimension framework (Performance, Accretiveness, Correctness, Quality, Optimality) hid this concern inside Performance and was corrected to 6 dimensions.
+
+See GOALS.md §7 for the full framework, the 10.0 rule, the relationship to the value hierarchy, the worked example (INV-FERR-049 scoring), and the framework's self-application.
 
 ### 9.8 The Accretiveness Reframing (Critical Correction)
 
@@ -859,22 +868,27 @@ Under this definition:
 
 **Implication for spec/06 work**: The session 023 INV-FERR-049 Snapshot rewrite is HIGHLY accretive (locks in the manifest model that all future federation builds on), not a cost. The session 023.5 trait architecture is HIGHLY accretive (matches Phase 4a's `AdaptiveIndexes` precedent, enables every future codec). Pre-Pattern-H baselines do NOT count as "what we must preserve" because they were defective.
 
-### 9.9 The Composite Score Progression
+### 9.9 The Composite Score Progression (6-dimension)
 
-The path from current state to 10.0:
+The path from current state to 10.0, scored across the six dimensions from GOALS.md §7:
 
-| Checkpoint | Performance | Accretiveness | Correctness | Quality | Optimality | Composite |
-|------------|-------------|---------------|-------------|---------|------------|-----------|
-| **Pre-session-023** (Pattern H still present) | 7.5 | 8.0 | 7.5 | 7.5 | 7.5 | **7.6** |
-| **Session 023 baseline** (Pattern H resolved) | 7.5 | 8.0 | 8.5 | 8.0 | 7.5 | **7.9** |
-| **After session 023.5** (trait + helpers + bd-4vwk) | 8.5 | 9.0 | 9.0 | 9.0 | 9.0 | **~8.9** |
-| **After session 023.5.5** (edge-case hardening) | 8.5 | 9.4 | 9.4 | 9.0 | 9.0 | **~9.06** |
-| **After session 023.6** (Lean + DiffIterator + budgets) | 9.3 | 9.5 | 9.5 | 9.5 | 9.5 | **~9.46** |
-| **After session 023.6.5** (Tier 1 inline integration) | 9.7 | 9.8 | 9.7 | 9.6 | 9.7 | **~9.7** |
-| **After session 023.7** (byte-level Lean precedent) | 9.9 | 9.9 | 9.8 | 9.9 | 9.9 | **~9.88** |
-| **TARGET: literal 10.0** (with Tier 1 fully landed) | 10.0 | 10.0 | 10.0 | 10.0 | 10.0 | **10.0** |
+| Checkpoint | Perf | Eff | Accr | Corr | Qual | Opt | Composite |
+|------------|------|-----|------|------|------|-----|-----------|
+| **Pre-session-023** (Pattern H still present) | 7.5 | 7.0 | 8.0 | 7.5 | 7.5 | 7.5 | **7.50** |
+| **Session 023 baseline** (Pattern H resolved) | 7.5 | 7.0 | 8.0 | 8.5 | 8.0 | 7.5 | **7.75** |
+| **After session 023.5** (trait + helpers + bd-4vwk) | 8.5 | 8.5 | 9.0 | 9.0 | 9.0 | 9.0 | **8.83** |
+| **After session 023.5.5** (edge-case hardening) | 8.5 | 8.5 | 9.4 | 9.4 | 9.0 | 9.0 | **8.97** |
+| **After session 023.6** (Lean + DiffIterator + budgets) | 9.3 | 9.0 | 9.5 | 9.5 | 9.5 | 9.5 | **9.38** |
+| **After session 023.6.5** (Tier 1 inline integration) | 9.7 | 9.7 | 9.8 | 9.7 | 9.6 | 9.7 | **9.70** |
+| **After session 023.7** (byte-level Lean precedent) | 9.9 | 9.9 | 9.9 | 9.8 | 9.9 | 9.9 | **9.88** |
+| **+ Tier 1 Beads landed** (Elias-Fano, BP+RMM, PtrHash, etc.) | 10.0 | 10.0 | 10.0 | 9.9 | 10.0 | 10.0 | **9.98** |
+| **TARGET: literal 10.0** (full Phase A + Phase C Tier 1) | 10.0 | 10.0 | 10.0 | 10.0 | 10.0 | 10.0 | **10.0** |
 
-The progression assumes the Tier 1 high-score beads land alongside Phase A, and the corrected accretiveness framing applies. Without the corrected framing (treating breaking changes as accretiveness costs), the composite would cap at ~9.85 due to the necessary INV-FERR-049 Snapshot rewrite. With the corrected framing, 10.0 is reachable.
+**Efficiency dimension behavior**: starts low (7.0) because pre-session-023 spec/06 had the pre-Pattern-H structural inefficiencies (5 GB internal nodes, 1.2 GB permutations, 3.2 GB CHD verification). Climbs as the alien stack's density wins land — Elias-Fano (14× permutations), BP+RMM (12× internal nodes), PtrHash (128× CHD), wavelet matrix (5 b/d). At ~Phase C completion, Efficiency hits 10.0 as billion-scale single-machine deployment becomes feasible (~15 GB at 10B datoms).
+
+**Correctness dimension behavior**: starts at 7.5 because Pattern H (8 phantom citations) is a real correctness gap. Jumps to 8.5 after session 023 resolves it. Climbs steadily as edge cases get hardened, Lean theorems get strengthened, and undefined helpers get defined inline. Reaches 10.0 after the byte-level Lean precedent + the Tier 1 hardening pass.
+
+The progression uses the **corrected accretiveness framing** (forward-looking, per GOALS.md §7.2). Without that correction, Accretiveness would cap at ~9.7 due to the INV-FERR-049 Snapshot rewrite being scored as a "breaking change" — and the composite would cap at ~9.85. With the corrected framing, the rewrite is HIGHLY accretive (it eliminates future debt), and 10.0 is reachable.
 
 ### 9.10 The Six Structural Decisions for 10.0
 
