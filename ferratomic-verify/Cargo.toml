@@ -106,6 +106,10 @@ path = "proptest/isomorphism_properties.rs"
 name = "proptest_refinement"
 path = "proptest/refinement.rs"
 
+[[test]]
+name = "proptest_federation"
+path = "proptest/federation_properties.rs"
+
 # --- Integration test suites (integration/) ---
 
 [[test]]

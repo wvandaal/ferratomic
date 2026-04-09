@@ -317,3 +317,53 @@ pub fn arb_datom_with_wrong_type() -> impl Strategy<Value = Datom> {
     (arb_entity_id(), mismatched_pairs, arb_tx_id())
         .prop_map(|(e, (attr, val), tx)| Datom::new(e, Attribute::from(attr), val, tx, Op::Assert))
 }
+
+// ---------------------------------------------------------------------------
+// Phase 4a.5 federation type generators
+// ---------------------------------------------------------------------------
+
+/// Arbitrary `ProvenanceType`: one of the 4 lattice elements.
+/// INV-FERR-063: total order Hypothesized < Inferred < Derived < Observed.
+pub fn arb_provenance_type() -> impl Strategy<Value = ferratom::ProvenanceType> {
+    prop_oneof![
+        Just(ferratom::ProvenanceType::Hypothesized),
+        Just(ferratom::ProvenanceType::Inferred),
+        Just(ferratom::ProvenanceType::Derived),
+        Just(ferratom::ProvenanceType::Observed),
+    ]
+}
+
+/// Arbitrary `DatomFilter`: positive-only variants (ADR-FERR-022).
+/// Recursive strategy limited to depth 2 to prevent combinatorial explosion.
+pub fn arb_datom_filter() -> impl Strategy<Value = ferratom::DatomFilter> {
+    let leaf = prop_oneof![
+        Just(ferratom::DatomFilter::All),
+        prop::collection::vec("[a-z]{1,5}/", 1..4)
+            .prop_map(ferratom::DatomFilter::AttributeNamespace),
+        prop::collection::vec(arb_node_id(), 1..4).prop_map(ferratom::DatomFilter::FromNodes),
+        prop::collection::vec(arb_entity_id(), 1..4).prop_map(ferratom::DatomFilter::Entities),
+    ];
+    leaf.prop_recursive(2, 8, 4, |inner| {
+        prop_oneof![
+            prop::collection::vec(inner.clone(), 1..4).prop_map(ferratom::DatomFilter::And),
+            prop::collection::vec(inner, 1..4).prop_map(ferratom::DatomFilter::Or),
+        ]
+    })
+}
+
+/// Arbitrary `TxSignature`: 64 random bytes.
+/// INV-FERR-051: signature newtype.
+pub fn arb_tx_signature() -> impl Strategy<Value = ferratom::TxSignature> {
+    any::<[u8; 64]>().prop_map(ferratom::TxSignature::from_bytes)
+}
+
+/// Arbitrary `TxSigner`: 32 random bytes.
+/// INV-FERR-051: verifying key newtype.
+pub fn arb_tx_signer() -> impl Strategy<Value = ferratom::TxSigner> {
+    any::<[u8; 32]>().prop_map(ferratom::TxSigner::from_bytes)
+}
+
+/// Arbitrary `BTreeSet<Datom>` for datom-set-level property testing.
+pub fn arb_datom_set(size: std::ops::Range<usize>) -> impl Strategy<Value = BTreeSet<Datom>> {
+    prop::collection::btree_set(arb_datom(), size)
+}
