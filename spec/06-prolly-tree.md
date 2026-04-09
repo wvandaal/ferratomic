@@ -1922,12 +1922,13 @@ impl DatomPairChunk {
 /// **Tier 1 optimization path** (session 023.6.5 inline integration):
 /// The current `Vec<(separator, child_hash)>` representation uses
 /// `|children| × (separator_len + 32)` bytes per internal node. At 100M
-/// datoms with k=1024 fanout: ~5 GB of internal node overhead; at 1B: ~50 GB.
-/// Balanced Parentheses tree encoding (Jacobson 1989) + Range Min-Max tree
-/// (Navarro & Sadakane 2014) stores tree structure in `2n + o(n)` bits with
-/// O(1) navigation (parent, first-child, next-sibling). Child hashes stored
-/// separately as `n × 32 bytes`. Total internal overhead drops to ~400 MB at
-/// 100M (12× reduction). Tracked under `bd-yvrnv` (future INV-FERR-045d).
+/// datoms with k=1024 fanout: the internal tree has ~n/(k-1) ≈ 97K
+/// entries, totaling ~10 MB of internal node overhead (97K × ~100 bytes
+/// per entry). BP+RMM (Jacobson 1989 + Navarro & Sadakane 2014) stores
+/// tree structure in `2n + o(n)` bits with O(1) navigation, plus `n × 32`
+/// bytes for child hashes. Total internal overhead drops to ~3.3 MB at
+/// 100M (3× reduction). The gain is more pronounced at higher datom counts
+/// and lower fanout values. Tracked under `bd-yvrnv` (future INV-FERR-045d).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InternalChunk {
     /// Tree level. Leaves are level 0; the root has level == tree height.
@@ -2546,8 +2547,11 @@ def u32_le_decode (bs : List UInt8) : Option (Nat × List UInt8) :=
     proofs in the DatomPair codec. -/
 theorem u32_le_roundtrip (n : Nat) (hn : n < 2^32) (rest : List UInt8) :
     u32_le_decode (u32_le_encode n ++ rest) = some (n, rest) := by
-  simp [u32_le_encode, u32_le_decode, List.append]
+  simp [u32_le_encode, u32_le_decode, List.append, UInt8.toNat_ofNat]
   omega  -- arithmetic identity: the mod/div decomposition recovers n
+  -- Note: UInt8.toNat_ofNat (or equivalent) must be in scope for simp to
+  -- reduce `UInt8.toNat (Nat.toUInt8 x)` to `x % 256`. If not in the
+  -- default simp set, add it explicitly. (Audit finding F08.)
 
 -- =========================================================================
 -- Entry-level encode/decode
@@ -2629,7 +2633,9 @@ theorem datom_pair_roundtrip
     datomPairDecodePayload (datomPairEncodePayload entries) = some entries := by
   simp [datomPairEncodePayload, datomPairDecodePayload]
   -- Step 1: u32_le_roundtrip recovers entry count from the leading 4 bytes.
-  rw [u32_le_roundtrip entries.length h_count []]
+  -- The `rest` argument is `entries.bind encode_entry` (the remaining payload
+  -- bytes after the entry count header). (Audit finding F09.)
+  rw [u32_le_roundtrip entries.length h_count (entries.bind encode_entry)]
   -- Step 2: induction on entries, applying encode_entry_roundtrip at each step.
   -- Each step peels one entry from the `bind` output, recovers it via
   -- decode_entry, and reduces the remaining bytes for the next entry.
@@ -2657,10 +2663,13 @@ theorem datom_pair_encode_injective_canonical
     (e₁ e₂ : List (List UInt8 × List UInt8))
     (h₁ : canonicalDatomPair e₁)
     (h₂ : canonicalDatomPair e₂)
+    (h_lens₁ : e₁.Forall (fun e => e.1.length < 2^32 ∧ e.2.length < 2^32))
+    (h_lens₂ : e₂.Forall (fun e => e.1.length < 2^32 ∧ e.2.length < 2^32))
+    (h_count₁ : e₁.length < 2^32) (h_count₂ : e₂.length < 2^32)
     (h_eq : datomPairEncodePayload e₁ = datomPairEncodePayload e₂) :
     e₁ = e₂ := by
-  have r₁ := datom_pair_roundtrip e₁ h₁
-  have r₂ := datom_pair_roundtrip e₂ h₂
+  have r₁ := datom_pair_roundtrip e₁ h₁ h_lens₁ h_count₁
+  have r₂ := datom_pair_roundtrip e₂ h₂ h_lens₂ h_count₂
   rw [h_eq] at r₁
   -- r₁ : datomPairDecodePayload (datomPairEncodePayload e₂) = some e₁
   -- r₂ : datomPairDecodePayload (datomPairEncodePayload e₂) = some e₂
@@ -2693,6 +2702,9 @@ theorem datom_pair_addr_injective_canonical
     (e₁ e₂ : List (List UInt8 × List UInt8))
     (h₁ : canonicalDatomPair e₁)
     (h₂ : canonicalDatomPair e₂)
+    (h_lens₁ : e₁.Forall (fun e => e.1.length < 2^32 ∧ e.2.length < 2^32))
+    (h_lens₂ : e₂.Forall (fun e => e.1.length < 2^32 ∧ e.2.length < 2^32))
+    (h_count₁ : e₁.length < 2^32) (h_count₂ : e₂.length < 2^32)
     (h_addr :
       blake3 (datomPairEncodePayload e₁) =
       blake3 (datomPairEncodePayload e₂)) :
@@ -2703,7 +2715,7 @@ theorem datom_pair_addr_injective_canonical
   have h_payload :
       datomPairEncodePayload e₁ = datomPairEncodePayload e₂ :=
     blake3_injective h_addr
-  exact datom_pair_encode_injective_canonical e₁ e₂ h₁ h₂ h_payload
+  exact datom_pair_encode_injective_canonical e₁ e₂ h₁ h₂ h_lens₁ h_lens₂ h_count₁ h_count₂ h_payload
 
 /-- Symmetric content-addressing stability for the standard internal node
     format. Same structure as `datom_pair_addr_injective_canonical`,
@@ -3120,28 +3132,78 @@ pub fn diff<'a>(
     Ok(Box::new(DiffIterator::new(root1.clone(), root2.clone(), chunk_store)))
 }
 
-/// Internal diff iterator state. Maintains a stack of node pairs to compare.
-/// The algorithm is a depth-first walk that skips identical subtrees in O(1)
+/// Stack entry for the depth-first diff walk. Three variants handle the
+/// cases identified by the audit (session 023.6 audit findings F01+F02):
+///
+/// - `Compare`: both sides have a subtree hash — load and compare.
+/// - `LeftOnly`: subtree exists only on the left — enumerate all entries
+///   as `DiffEntry::LeftOnly`.
+/// - `RightOnly`: subtree exists only on the right — enumerate all
+///   entries as `DiffEntry::RightOnly`.
+///
+/// This replaces the original `(Hash, Hash)` stack with a `Hash::empty()`
+/// sentinel, which caused `ChunkNotFound` errors (F01 CRITICAL).
+enum DiffStackEntry {
+    Compare(Hash, Hash),
+    LeftOnly(Hash),
+    RightOnly(Hash),
+}
+
+/// Internal diff iterator state. Maintains a stack of `DiffStackEntry`
+/// items to process in depth-first order. Skips identical subtrees in O(1)
 /// by comparing chunk hashes before loading chunk contents.
 struct DiffIterator<'a> {
-    /// Stack of (left_hash, right_hash) pairs to compare.
-    /// Starts with the root pair, recurses into differing children.
-    stack: Vec<(Hash, Hash)>,
-    /// Buffered leaf-level diffs ready to yield.
+    stack: Vec<DiffStackEntry>,
     pending: VecDeque<DiffEntry>,
-    /// The chunk store for resolving hashes to chunks.
     store: &'a dyn ChunkStore,
 }
 
 impl<'a> DiffIterator<'a> {
     fn new(left_root: Hash, right_root: Hash, store: &'a dyn ChunkStore) -> Self {
         DiffIterator {
-            stack: vec![(left_root, right_root)],
+            stack: vec![DiffStackEntry::Compare(left_root, right_root)],
             pending: VecDeque::new(),
             store,
         }
     }
+
+    /// Enumerate ALL entries in a subtree rooted at `hash` as one-sided
+    /// diffs (all LeftOnly or all RightOnly depending on `side`). Handles
+    /// both leaf and internal chunks by recursion: internal chunks push
+    /// their children as further one-sided entries onto the stack.
+    fn enumerate_subtree(&mut self, hash: Hash, side: DiffSide) -> Result<(), FerraError> {
+        let chunk = self.store.get_chunk(&hash)?
+            .ok_or(FerraError::ChunkNotFound(hash))?;
+        let body = deserialize_chunk(chunk.data())?;
+        match body {
+            ProllyChunkBody::Leaf(leaf) => {
+                let datoms = leaf.decode_datoms()?;
+                for (k, v) in datoms {
+                    self.pending.push_back(match side {
+                        DiffSide::Left => DiffEntry::LeftOnly {
+                            key: k, value: v,
+                        },
+                        DiffSide::Right => DiffEntry::RightOnly {
+                            key: k, value: v,
+                        },
+                    });
+                }
+            }
+            ProllyChunkBody::Internal(inode) => {
+                for (_, child_hash) in inode.children().iter().rev() {
+                    self.stack.push(match side {
+                        DiffSide::Left => DiffStackEntry::LeftOnly(child_hash.clone()),
+                        DiffSide::Right => DiffStackEntry::RightOnly(child_hash.clone()),
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
 }
+
+#[derive(Clone, Copy)]
+enum DiffSide { Left, Right }
 
 impl<'a> Iterator for DiffIterator<'a> {
     type Item = Result<DiffEntry, FerraError>;
@@ -3153,79 +3215,104 @@ impl<'a> Iterator for DiffIterator<'a> {
                 return Some(Ok(entry));
             }
 
-            // Phase 2: Pop the next node pair from the stack.
-            let (left_hash, right_hash) = self.stack.pop()?;
+            // Phase 2: Pop the next stack entry.
+            let entry = self.stack.pop()?;
 
-            // O(1) shortcut: identical hashes → identical subtrees → skip.
-            // This is the property that delivers O(d log_k n) complexity:
-            // unchanged subtrees are never expanded, so the work is bounded
-            // by the number of CHANGED paths from leaf to root.
-            if left_hash == right_hash {
-                continue;
-            }
-
-            // Load both chunks. Cost: 2 chunk deserializations per differing
-            // node pair. This is the dominant cost of the algorithm.
-            let left_chunk = match self.store.get_chunk(&left_hash) {
-                Ok(Some(c)) => c,
-                Ok(None) => return Some(Err(FerraError::ChunkNotFound(left_hash))),
-                Err(e) => return Some(Err(e)),
-            };
-            let right_chunk = match self.store.get_chunk(&right_hash) {
-                Ok(Some(c)) => c,
-                Ok(None) => return Some(Err(FerraError::ChunkNotFound(right_hash))),
-                Err(e) => return Some(Err(e)),
-            };
-
-            let left_body = match deserialize_chunk(left_chunk.data()) {
-                Ok(b) => b,
-                Err(e) => return Some(Err(e)),
-            };
-            let right_body = match deserialize_chunk(right_chunk.data()) {
-                Ok(b) => b,
-                Err(e) => return Some(Err(e)),
-            };
-
-            match (left_body, right_body) {
-                // Both leaves: sorted merge-diff of entries.
-                (ProllyChunkBody::Leaf(l), ProllyChunkBody::Leaf(r)) => {
-                    let left_datoms = match l.decode_datoms() {
-                        Ok(d) => d,
-                        Err(e) => return Some(Err(e)),
-                    };
-                    let right_datoms = match r.decode_datoms() {
-                        Ok(d) => d,
-                        Err(e) => return Some(Err(e)),
-                    };
-                    // Sorted merge of two BTreeSets yields the symmetric
-                    // difference in O(|l| + |r|) — linear in the leaf
-                    // sizes, not the store size.
-                    diff_sorted_entries(&left_datoms, &right_datoms, &mut self.pending);
+            match entry {
+                // One-sided subtree: enumerate all entries as LeftOnly
+                // or RightOnly. This handles the case where
+                // merge_join_children found a separator key present in
+                // only one tree (F01 fix).
+                DiffStackEntry::LeftOnly(hash) => {
+                    if let Err(e) = self.enumerate_subtree(hash, DiffSide::Left) {
+                        return Some(Err(e));
+                    }
+                }
+                DiffStackEntry::RightOnly(hash) => {
+                    if let Err(e) = self.enumerate_subtree(hash, DiffSide::Right) {
+                        return Some(Err(e));
+                    }
                 }
 
-                // Both internal: merge-join children by separator key.
-                // Push differing child pairs onto the stack for further
-                // recursion. Equal child hashes are skipped (O(1) per pair).
-                (ProllyChunkBody::Internal(l), ProllyChunkBody::Internal(r)) => {
-                    merge_join_children(
-                        l.children(),
-                        r.children(),
-                        &mut self.stack,
-                    );
-                }
+                DiffStackEntry::Compare(left_hash, right_hash) => {
+                    // O(1) shortcut: identical hashes → identical subtrees.
+                    if left_hash == right_hash {
+                        continue;
+                    }
 
-                // Level mismatch (e.g., one tree is deeper than the other
-                // at this point). This arises when the trees have different
-                // heights. Enumerate all entries from the shallower subtree
-                // as one-sided diffs and recurse into the deeper subtree.
-                // In practice this is rare — prolly trees of similar sizes
-                // have similar heights. Left as `todo!("Phase 4b")` for the
-                // cross-height diff path.
-                _ => {
-                    return Some(Err(FerraError::DiffLevelMismatch {
-                        left: left_hash,
-                        right: right_hash,
-                    }));
+                    // Load both chunks.
+                    let left_chunk = match self.store.get_chunk(&left_hash) {
+                        Ok(Some(c)) => c,
+                        Ok(None) => return Some(Err(FerraError::ChunkNotFound(left_hash))),
+                        Err(e) => return Some(Err(e)),
+                    };
+                    let right_chunk = match self.store.get_chunk(&right_hash) {
+                        Ok(Some(c)) => c,
+                        Ok(None) => return Some(Err(FerraError::ChunkNotFound(right_hash))),
+                        Err(e) => return Some(Err(e)),
+                    };
+
+                    let left_body = match deserialize_chunk(left_chunk.data()) {
+                        Ok(b) => b,
+                        Err(e) => return Some(Err(e)),
+                    };
+                    let right_body = match deserialize_chunk(right_chunk.data()) {
+                        Ok(b) => b,
+                        Err(e) => return Some(Err(e)),
+                    };
+
+                    match (left_body, right_body) {
+                        // Both leaves: sorted merge-diff.
+                        (ProllyChunkBody::Leaf(l), ProllyChunkBody::Leaf(r)) => {
+                            let left_datoms = match l.decode_datoms() {
+                                Ok(d) => d,
+                                Err(e) => return Some(Err(e)),
+                            };
+                            let right_datoms = match r.decode_datoms() {
+                                Ok(d) => d,
+                                Err(e) => return Some(Err(e)),
+                            };
+                            diff_sorted_entries(
+                                &left_datoms, &right_datoms, &mut self.pending,
+                            );
+                        }
+
+                        // Both internal: merge-join children.
+                        (ProllyChunkBody::Internal(l), ProllyChunkBody::Internal(r)) => {
+                            merge_join_children(
+                                l.children(), r.children(), &mut self.stack,
+                            );
+                        }
+
+                        // Cross-height: one side is internal, the other is
+                        // leaf. Enumerate the leaf entries as one-sided
+                        // diffs and push the internal children for further
+                        // descent (F02 fix — no longer errors out).
+                        (ProllyChunkBody::Leaf(leaf), ProllyChunkBody::Internal(inode)) => {
+                            let datoms = match leaf.decode_datoms() {
+                                Ok(d) => d,
+                                Err(e) => return Some(Err(e)),
+                            };
+                            for (k, v) in datoms {
+                                self.pending.push_back(DiffEntry::LeftOnly { key: k, value: v });
+                            }
+                            for (_, child) in inode.children().iter().rev() {
+                                self.stack.push(DiffStackEntry::RightOnly(child.clone()));
+                            }
+                        }
+                        (ProllyChunkBody::Internal(inode), ProllyChunkBody::Leaf(leaf)) => {
+                            let datoms = match leaf.decode_datoms() {
+                                Ok(d) => d,
+                                Err(e) => return Some(Err(e)),
+                            };
+                            for (k, v) in datoms {
+                                self.pending.push_back(DiffEntry::RightOnly { key: k, value: v });
+                            }
+                            for (_, child) in inode.children().iter().rev() {
+                                self.stack.push(DiffStackEntry::LeftOnly(child.clone()));
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -3288,12 +3375,13 @@ fn diff_sorted_entries(
 
 /// Merge-join two sorted children lists by separator key. For each
 /// separator that appears in both sides: if the child hashes differ,
-/// push the pair onto the stack. For separators in only one side:
-/// the entire subtree is a one-sided diff (enumerate its entries).
+/// push a `Compare` entry. For separators in only one side: push a
+/// `LeftOnly` or `RightOnly` entry (the `enumerate_subtree` method
+/// handles recursive descent into one-sided subtrees).
 fn merge_join_children(
     left: &[(Vec<u8>, Hash)],
     right: &[(Vec<u8>, Hash)],
-    stack: &mut Vec<(Hash, Hash)>,
+    stack: &mut Vec<DiffStackEntry>,
 ) {
     let mut l = left.iter().peekable();
     let mut r = right.iter().peekable();
@@ -3301,30 +3389,27 @@ fn merge_join_children(
         match (l.peek(), r.peek()) {
             (Some((lk, lh)), Some((rk, rh))) => match lk.cmp(rk) {
                 Ordering::Less => {
-                    // Left-only subtree: all entries are LeftOnly diffs.
-                    // Push with a sentinel empty hash to force leaf enumeration.
-                    stack.push(((*lh).clone(), Hash::empty()));
+                    stack.push(DiffStackEntry::LeftOnly((*lh).clone()));
                     l.next();
                 }
                 Ordering::Greater => {
-                    stack.push((Hash::empty(), (*rh).clone()));
+                    stack.push(DiffStackEntry::RightOnly((*rh).clone()));
                     r.next();
                 }
                 Ordering::Equal => {
                     if lh != rh {
-                        stack.push(((*lh).clone(), (*rh).clone()));
+                        stack.push(DiffStackEntry::Compare((*lh).clone(), (*rh).clone()));
                     }
-                    // Equal hashes: skip (O(1) — the core shortcut).
                     l.next();
                     r.next();
                 }
             },
             (Some((_, lh)), None) => {
-                stack.push(((*lh).clone(), Hash::empty()));
+                stack.push(DiffStackEntry::LeftOnly((*lh).clone()));
                 l.next();
             }
             (None, Some((_, rh))) => {
-                stack.push((Hash::empty(), (*rh).clone()));
+                stack.push(DiffStackEntry::RightOnly((*rh).clone()));
                 r.next();
             }
             (None, None) => break,
@@ -3473,7 +3558,8 @@ proptest! {
 - `diff(T1, T2)` with `d` changed entries in an `n`-datom store, fanout `k`:
   chunk loads = `2 × d × log_k(n)` (left + right subtree at each level).
   At d=100, k=256, n=100M: 2 × 100 × 3.3 ≈ 660 chunk loads.
-  Each load = ~50 μs (deserialize ~130 KB leaf or ~2 KB internal).
+  Each load = ~50 μs (deserialize ~30 KB leaf at k=256 entries × ~120
+  bytes/entry, or ~2 KB internal).
   **Total latency: ~33 ms for 100 changes in a 100M store.**
 - `diff(T, T)`: O(1), < 1 μs (root hash comparison, zero chunk loads).
 - Memory: O(log_k(n)) stack depth. At k=256, n=100M: ~3 frames × ~64 bytes
@@ -3526,11 +3612,16 @@ theorem diff_chunk_loads_bound (t1 t2 : ProllyTree) (store : ChunkStore)
   sorry -- Tracked: same bead (complexity bound requires cost model formalization)
 
 /-- Diff of identical trees is empty (O(1) check). -/
-theorem diff_identical_empty (t : ProllyTree) (store : ChunkStore) :
+theorem diff_identical_empty (t : ProllyTree) (store : ChunkStore)
+    (h : chunks_of t ⊆ chunks_in store) :
     diff_set (diff t t store) = ∅ := by
-  -- Root hashes are equal → iterator returns immediately with empty result.
-  -- kv_set t △ kv_set t = ∅ by definition of symmetric difference.
-  simp [Finset.symmDiff_self]
+  -- Requires diff_correct to connect `diff_set (diff t t store)` to
+  -- `kv_set t △ kv_set t`, which then simplifies to ∅ via symmDiff_self.
+  have h_correct := diff_correct t t store h h
+  rw [h_correct]
+  exact Finset.symmDiff_self (kv_set t)
+  -- Note: depends on diff_correct (sorry-guarded). This theorem is
+  -- therefore also sorry-guarded transitively. Tracked under bd-cdvdm.
 
 /-- Diff symmetry: the keys in diff(t1, t2) equal the keys in diff(t2, t1).
     Insertions and deletions are swapped but the same keys are covered. -/
@@ -3538,11 +3629,11 @@ theorem diff_keys_symmetric (t1 t2 : ProllyTree) (store : ChunkStore)
     (h1 : chunks_of t1 ⊆ chunks_in store)
     (h2 : chunks_of t2 ⊆ chunks_in store) :
     diff_keys (diff t1 t2 store) = diff_keys (diff t2 t1 store) := by
-  -- Follows from diff_correct + symmetric difference being commutative.
-  have h_fwd := diff_correct t1 t2 store h1 h2
-  have h_rev := diff_correct t2 t1 store h2 h1
-  simp [Finset.symmDiff_comm] at h_fwd h_rev
-  sorry -- Tracked: same bead (requires diff_keys extraction from diff_set)
+  -- Requires: (1) diff_correct to connect diff_set to symmDiff,
+  -- (2) Finset.symmDiff_comm to commute, (3) diff_keys extraction
+  -- from diff_set. The first two are available; the third requires
+  -- defining how diff_keys relates to diff_set.
+  sorry -- Tracked: bd-cdvdm (requires diff_keys extraction from diff_set)
 ```
 
 ---
@@ -4649,6 +4740,15 @@ axiom put_chunk_addr {S : Type} [ChunkStoreClass S] (s : S) (c : Chunk) :
 axiom get_after_put {S : Type} [ChunkStoreClass S] (s : S) (c : Chunk) :
     let (s', addr) := ChunkStoreClass.put_chunk s c
     ChunkStoreClass.get_chunk s' addr = some c
+
+/-- Frame axiom: put_chunk does not affect retrievability of other chunks.
+    Without this, the inductive step of substrate_independence cannot close
+    — putting a new chunk could hypothetically scramble stored chunks.
+    (Session 023.6/023.7 audit finding F06.) -/
+axiom get_other_after_put {S : Type} [ChunkStoreClass S] (s : S) (c : Chunk) (addr : Hash)
+    (h : addr ≠ blake3 (chunk_content c)) :
+    let (s', _) := ChunkStoreClass.put_chunk s c
+    ChunkStoreClass.get_chunk s' addr = ChunkStoreClass.get_chunk s addr
 
 /-- Substrate independence: two stores that have received the same sequence
     of put_chunk operations produce the same get_chunk results for all
