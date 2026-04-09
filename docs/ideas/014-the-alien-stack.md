@@ -828,6 +828,169 @@ Long-horizon research and forward-compatibility work:
 - Optical CAM acceleration (bd-OPTICAL-CAM)
 - Motivic invariant classification (bd-MOTIVIC-INV)
 
+### 9.7 The Five-Dimension Scoring Framework
+
+The path forward emerged from a structured scoring exercise across five orthogonal dimensions. Each dimension is scored 1-10 and contributes to a composite score. The framework was developed during this deep dive (2026-04-09) and is captured here so future agents can re-apply it consistently.
+
+| Dimension | What it measures | How to score |
+|-----------|------------------|--------------|
+| **Performance** | Asymptotic complexity + concrete latency/throughput targets | Higher = lower latency, higher throughput, smaller asymptotic constants |
+| **Accretiveness** | Whether the design choice compounds positively over time | Higher = decision creates permanent value, reused/extended without rewrite |
+| **Correctness** | Internal consistency, no contradictions, no undefined helpers, edge cases handled | Higher = every claim provable, every cross-reference resolves, every edge case explicit |
+| **Quality** | Adherence to lifecycle/16 + lifecycle/17 standards, gold-standard match | Higher = matches INV-FERR-001 template, substantive Lean theorems, complete falsifications |
+| **Optimality** | Did we make the maximally optimal choice given constraints | Higher = chosen design is provably best among options considered |
+
+**Composite score**: simple average across the 5 dimensions, with the rule that **literal 10.0 requires all 5 dimensions at 10.0**. A 9.85 composite means at least one dimension is below 10.0 — which dimension and why must be documented.
+
+### 9.8 The Accretiveness Reframing (Critical Correction)
+
+Earlier in the deep dive, I scored "accretiveness" as a backward-looking property: "did we avoid breaking anything that existed before?" This framing penalized any correction to a previously-incorrect spec — meaning the best accretiveness came from never fixing bugs. This was perverse and the user corrected it explicitly:
+
+> "When I think of accretiveness, I think of design choices that compound positively over time. The dynamic/DI of the implementation would broadly fall into this category: it costs us nothing at runtime, it preserves good separation of concerns, and it gives us flexibility in the future: both at the library level (e.g. if we discover a superior codec down the road) and at the user-level (e.g. if the user wants to migrate)."
+
+**Corrected definition**: Accretiveness is a **forward-looking** property measuring whether the choice compounds positively over future work. High accretiveness means the decision creates permanent value — it's reused, extended, or built upon by downstream work without being rewritten. Low accretiveness means the decision creates tech debt — it will need to be undone, worked around, or re-authored later.
+
+Under this definition:
+
+- A correction that replaces a wrong design with a right design is **highly accretive** because it eliminates future debt
+- A feature added without downstream use is **anti-accretive**
+- A pattern that matches existing conventions is **more accretive** than one that fights them
+- A trait that enables future extension without touching existing code is the **accretive archetype**
+
+**Implication for spec/06 work**: The session 023 INV-FERR-049 Snapshot rewrite is HIGHLY accretive (locks in the manifest model that all future federation builds on), not a cost. The session 023.5 trait architecture is HIGHLY accretive (matches Phase 4a's `AdaptiveIndexes` precedent, enables every future codec). Pre-Pattern-H baselines do NOT count as "what we must preserve" because they were defective.
+
+### 9.9 The Composite Score Progression
+
+The path from current state to 10.0:
+
+| Checkpoint | Performance | Accretiveness | Correctness | Quality | Optimality | Composite |
+|------------|-------------|---------------|-------------|---------|------------|-----------|
+| **Pre-session-023** (Pattern H still present) | 7.5 | 8.0 | 7.5 | 7.5 | 7.5 | **7.6** |
+| **Session 023 baseline** (Pattern H resolved) | 7.5 | 8.0 | 8.5 | 8.0 | 7.5 | **7.9** |
+| **After session 023.5** (trait + helpers + bd-4vwk) | 8.5 | 9.0 | 9.0 | 9.0 | 9.0 | **~8.9** |
+| **After session 023.5.5** (edge-case hardening) | 8.5 | 9.4 | 9.4 | 9.0 | 9.0 | **~9.06** |
+| **After session 023.6** (Lean + DiffIterator + budgets) | 9.3 | 9.5 | 9.5 | 9.5 | 9.5 | **~9.46** |
+| **After session 023.6.5** (Tier 1 inline integration) | 9.7 | 9.8 | 9.7 | 9.6 | 9.7 | **~9.7** |
+| **After session 023.7** (byte-level Lean precedent) | 9.9 | 9.9 | 9.8 | 9.9 | 9.9 | **~9.88** |
+| **TARGET: literal 10.0** (with Tier 1 fully landed) | 10.0 | 10.0 | 10.0 | 10.0 | 10.0 | **10.0** |
+
+The progression assumes the Tier 1 high-score beads land alongside Phase A, and the corrected accretiveness framing applies. Without the corrected framing (treating breaking changes as accretiveness costs), the composite would cap at ~9.85 due to the necessary INV-FERR-049 Snapshot rewrite. With the corrected framing, 10.0 is reachable.
+
+### 9.10 The Six Structural Decisions for 10.0
+
+Independent of the alien stack additions, the original "Path to 10.0" analysis identified six **structural decisions** that needed to be made (not just edits). Each is now resolved:
+
+| # | Decision | Status | Resolution |
+|---|----------|--------|------------|
+| 1 | 4 trees vs 5 trees vs 1 tree (multi-tree architecture) | Resolved | Trait-based DI makes this a per-codec decision; the codec itself owns the chunk-internal structure |
+| 2 | Per-chunk permutation arrays vs separate trees | Resolved | Each codec owns its own internal layout; WaveletMatrixCodec uses per-column wavelets, DatomPairCodec uses sorted pairs |
+| 3 | Manifest as first-class chunk vs raw bytes | Open for session 023.5.5 | Will be resolved during edge-case hardening: discriminator 0x04 reserved for manifest, 162-byte layout with header |
+| 4 | ADR formalizing the multi-tree decision | Subsumed | INV-FERR-045c trait + codec discriminator registry §23.9.8 replaces the need for a standalone ADR |
+| 5 | Performance + space budgets baked into every invariant L1 | Open for session 023.6 | Will be resolved during the budget pass |
+| 6 | Author 3 missing spec elements (ADR-FERR-009, INV-FERR-045b, INV-FERR-046a) | Resolved | INV-FERR-045b deferred to gvil family; INV-FERR-046a is bd-400; ADR-FERR-009 replaced by trait architecture |
+
+### 9.11 The Nine Detail-Level Fixes
+
+Smaller items that close the rest of the gap to 10.0:
+
+| # | Fix | Sessions | Status |
+|---|-----|----------|--------|
+| 1 | Define `Cursor` helper inline | 023.5 Phase 5 | In Phase A scope |
+| 2 | Define new `FerraError` variants inline | 023.5 Phase 5 | In Phase A scope |
+| 3 | Define `Datom::from_canonical_bytes` and `Datom::from_sort_prefix` inline | 023.5 Phase 5 | In Phase A scope |
+| 4 | Define `Hash::genesis` and `Hash::from_bytes` constructor | 023.5 Phase 5 | In Phase A scope |
+| 5 | Define `diff_index` for cross-index diffs | 023.5 Phase 5 | In Phase A scope |
+| 6 | Complete INV-FERR-047 DiffIterator algorithm body (bd-132 source) | 023.6 | In Phase A scope |
+| 7 | Concretize INV-FERR-045a Lean (or match INV-FERR-086 sorry+bead pattern) | 023.6 | In Phase A scope |
+| 8 | Concretize INV-FERR-049 Lean (RootSet manifest serialization) | 023.6 | In Phase A scope |
+| 9 | Author Lean theorems for INV-FERR-047, 048, 050 | 023.6 | In Phase A scope |
+
+All nine fixes are scoped into Phase A sessions 023.5 through 023.7. They were originally specified in the "Path to 10.0" analysis (pre-alien-stack); the alien stack additions are ON TOP of these fixes, not replacements.
+
+### 9.12 The Trait Dispatch Correction (Static Generic → Enum Dispatch)
+
+A critical mid-path correction: I initially recommended **static generic dispatch** (`Store<C: LeafChunkCodec>` as a type parameter). The user pushed back:
+
+> "can you explain why not dynamic? doesn't this cohere more closely with the entire DI idea?"
+
+The user was right. Static generic dispatch is **just generics with extra steps** — not real DI. It locks each store to one codec at compile time, prevents mixed-codec stores, blocks gradual migration, and prevents A/B benchmarking codecs on the same data.
+
+**The corrected answer**: **Enum dispatch**, matching Phase 4a's `AdaptiveIndexes` precedent. The `LeafChunk` is a closed enum with one variant per spec-registered codec. Pattern-match dispatch has zero vtable overhead (monomorphized inside each variant) and supports per-chunk codec selection.
+
+The decision tree:
+
+| Option | Mechanism | Runtime flexibility | Overhead | Mixed-codec stores |
+|--------|-----------|---------------------|----------|--------------------|
+| Static generic | `Store<C: LeafChunkCodec>` — type parameter | None | Zero | **No** (single codec per store) |
+| **Enum dispatch (CHOSEN)** | `enum LeafChunk { DatomPair(...), Wavelet(...), ... }` | **Per-chunk** | **Zero** (monomorphized inside variant; one cycle for the match) | **Yes** |
+| Trait object | `Box<dyn LeafChunkCodec>` | Per-chunk + open world | ~1-2 ns vtable + heap allocation | Yes |
+
+**Rejected**:
+- **Static generic**: not real DI, prevents migration and federation
+- **Trait object**: vtable overhead in the hot path, type erasure breaks Lean static verification, conformance testing can't enumerate open world, ferratomic isn't a plugin platform
+
+This decision is locked. Session 023.5 Phase 1 will author `INV-FERR-045c` with enum dispatch.
+
+### 9.13 Decisions D1-D6 for Session 023.5
+
+Six discrete decisions emerged from the path analysis, each resolved:
+
+**D1: Invariant ID for the conformance trait**
+- **Decision**: `INV-FERR-045c "Leaf Chunk Codec Conformance"`
+- Rationale: Clear sequence (045 base content addressing → 045a DatomPair reference → 045c trait), preserves session 023's 045a in place, leaves 045b reserved for future internal node format evolution.
+
+**D2: Should the trait be `dyn`-compatible? (Static, enum, or dyn dispatch)**
+- **Decision**: **Enum dispatch** (closed-world).
+- Rationale: Matches `AdaptiveIndexes` Phase 4a precedent. Zero runtime overhead. Supports mixed-codec stores. Adding new codecs requires spec evolution (controlled extension, not third-party plugins). See §9.12 above for the full reasoning.
+
+**D3: How far does INV-FERR-045c's conformance testing go?**
+- **Decision**: **Both** — trait-level conformance tests (one per property, runs against any codec) AND per-codec strengthenings.
+- Rationale: Matches how INV-FERR-025 handles backend tests. The trait specifies the MINIMUM test surface; codecs can add codec-specific tests on top.
+
+**D4: Where does the codec discriminator registry live?**
+- **Decision**: New §23.9.8 "Codec Discriminator Registry" in spec/06.
+- Rationale: Cross-cutting registry that multiple invariants reference; deserves its own section. Normative (not informational). Reserves tags 0x01-0x7F for spec-registered codecs and 0x80-0xFF for implementation experimental codecs.
+
+**D5: Is session 023.7 (byte-level Lean concretization) in scope?**
+- **Decision**: **Include 023.7** to push from 9.9 to literal 10.0.
+- Rationale: User said "not 9.5, not 9. 10.0." Real work for a 0.1-point gain, but the gain is real and matches user-stated intent. If session 023.6 finishes and the user is satisfied with 9.88, we can stop there.
+
+**D6: Session 023 commit rebase?**
+- **Decision**: **Option A (additive)** — session 023.5 is ADDITIVE to my session 023 commit `7aafb9f`.
+- Rationale: Preserves git history showing the design evolution. Future implementers see "session 023 shipped a simple model; session 023.5 generalized it to codec DI" — accretive at the commit level as well as the content level.
+
+### 9.14 What Phase A Session 023.5 Phase 1 Authors
+
+Per the decisions above, session 023.5 Phase 1 authors `INV-FERR-045c "Leaf Chunk Codec Conformance"` in `spec/06-prolly-tree.md` with the following structure:
+
+**Header**:
+- Traces to: INV-FERR-005 (Index Bijection), INV-FERR-025 (Index Backend Interchangeability), INV-FERR-045 (Chunk Content Addressing), INV-FERR-046 (History Independence), INV-FERR-074 (Homomorphic Store Fingerprint), INV-FERR-086 (Canonical Datom Format Determinism), ADR-FERR-032 (Lean-Verified Functor Composition)
+- Referenced by: INV-FERR-045a (DatomPair reference implementation), INV-FERR-047, INV-FERR-048, INV-FERR-049, spec/09 gvil.1 (WaveletMatrixCodec)
+- Verification: V:PROP, V:KANI, V:TYPE, V:LEAN
+- Stage: 1
+
+**Level 0 (Algebraic Law)**: 5 conformance theorems (round-trip, determinism, injectivity, fingerprint homomorphism, order independence) with proof sketches.
+
+**Level 1 (State Invariant)**: Operational meaning + enum dispatch rationale + codec discriminator registry (forward reference to §23.9.8).
+
+**Level 2 (Implementation Contract)**: `LeafChunkCodec` trait definition with all method signatures, default boundary_key, CODEC_TAG associated constant. `LeafChunk` enum with DatomPair and Wavelet variants. Conformance test harness skeleton.
+
+**Falsification**: 5 specific witness types (one per conformance property).
+
+**proptest strategy**: 5 proptest strategies (one per property), parameterized over the codec type via a trait test fixture.
+
+**Lean theorem**: Trait-level theorems for the 5 properties, modeled abstractly over `Finset Datom → Bytes`. Per-codec concretization deferred to each codec's own Lean file.
+
+Total: ~450 lines of new spec content. Estimated 1.5-2 hours of focused authoring.
+
+After Phase 1, sessions 023.5 Phases 2-7 handle:
+- Phase 2: Refactor INV-FERR-045a as the DatomPair reference codec implementation (rename, content preserved)
+- Phase 3: Update §23.9.0 sub-sections to be trait-aware
+- Phase 4: Address bd-4vwk acceptance items
+- Phase 5: Fill in helper definitions (Cursor, FerraError variants, Datom helpers, Hash helpers, diff_index)
+- Phase 6: Add performance budgets to DatomPairCodec L1
+- Phase 7: Commit + push
+
 ---
 
 ## Part X: Bead Catalog
