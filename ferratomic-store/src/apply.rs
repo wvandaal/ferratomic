@@ -133,25 +133,6 @@ impl Store {
         Ok(())
     }
 
-    /// Apply a committed transaction to the store.
-    ///
-    /// INV-FERR-004: strict growth -- the store gains at least one datom.
-    /// INV-FERR-005: all indexes are updated in lockstep.
-    /// INV-FERR-007: epoch is incremented, producing a strictly greater
-    /// epoch than any previous transaction on this store.
-    /// INV-FERR-009: schema evolution -- if the transaction defines new
-    /// attributes (via `db/ident`, `db/valueType`, `db/cardinality`),
-    /// they are installed into the schema for future validation.
-    ///
-    /// # Errors
-    ///
-    /// Returns `FerraError::EmptyTransaction` if the committed transaction
-    /// carries no datoms (should not happen for validly committed
-    /// transactions, but defended against per NEG-FERR-001).
-    /// HI-011: `tx_id` is provided by the caller (`Database::transact` ticks
-    /// the `HybridClock` under the write lock). This replaces the previous
-    /// `TxId::with_node(epoch, 0, node)` which used epoch-as-physical --
-    /// breaking INV-FERR-015 (HLC monotonicity) and INV-FERR-016 (causality).
     /// Apply a committed transaction to the store (D18: `TransactContext`).
     ///
     /// INV-FERR-004: strict growth -- the store gains at least one datom.

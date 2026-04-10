@@ -336,3 +336,129 @@ fn test_bug_bd_85v1_bijection_canary_returns_invariant_violation() {
         "bd-85v1: release bijection canary must return InvariantViolation, got {result:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// INV-FERR-060: genesis_with_identity
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_inv_ferr_060_genesis_with_identity() {
+    let sk = ed25519_dalek::SigningKey::from_bytes(&[42u8; 32]);
+    let db = Database::genesis_with_identity(&sk).expect("genesis_with_identity");
+
+    // Two identity transactions: schema definition + value assertion.
+    assert_eq!(db.epoch(), 2, "INV-FERR-060: identity txs advance epoch");
+
+    // Schema should include store/public-key and store/created.
+    let schema = db.schema();
+    assert!(
+        schema.get(&Attribute::from("store/public-key")).is_some(),
+        "INV-FERR-060: schema must include store/public-key"
+    );
+    assert!(
+        schema.get(&Attribute::from("store/created")).is_some(),
+        "INV-FERR-060: schema must include store/created"
+    );
+}
+
+#[test]
+fn test_inv_ferr_060_identity_signer_matches_declared_key() {
+    let sk = ed25519_dalek::SigningKey::from_bytes(&[42u8; 32]);
+    let pk = sk.verifying_key();
+    let db = Database::genesis_with_identity(&sk).expect("genesis_with_identity");
+
+    // Find the tx/signer datom in the snapshot.
+    let snap = db.snapshot();
+    let signer_datom = snap
+        .datoms()
+        .find(|d| d.attribute().as_str() == "tx/signer")
+        .expect("INV-FERR-060: identity tx must emit tx/signer datom");
+
+    // The signer value should be the public key bytes.
+    let signer = ferratom::TxSigner::try_from(signer_datom.value())
+        .expect("INV-FERR-060: tx/signer must be valid TxSigner bytes");
+    assert_eq!(
+        signer.as_bytes(),
+        pk.as_bytes(),
+        "INV-FERR-060: identity tx signer must match declared public key"
+    );
+}
+
+#[test]
+fn test_inv_ferr_060_unsigned_genesis_unchanged() {
+    // Existing unsigned genesis must still work.
+    let db = Database::genesis();
+    assert_eq!(db.epoch(), 0, "unsigned genesis starts at epoch 0");
+    assert!(
+        db.schema().get(&Attribute::from("db/doc")).is_some(),
+        "unsigned genesis has db/doc attribute"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// INV-FERR-051: transact_signed
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_inv_ferr_051_transact_signed_emits_signature() {
+    let sk = ed25519_dalek::SigningKey::from_bytes(&[7u8; 32]);
+    let db = Database::genesis();
+    let node = NodeId::from_bytes([1u8; 16]);
+
+    let tx = Transaction::new(node)
+        .assert_datom(
+            EntityId::from_content(b"signed-entity"),
+            Attribute::from("db/doc"),
+            Value::String("signed-value".into()),
+        )
+        .commit(&db.schema())
+        .expect("valid tx");
+
+    let receipt = db.transact_signed(tx, &sk).expect("transact_signed");
+    assert_eq!(receipt.epoch(), 1);
+
+    // The receipt datoms should include tx/signature and tx/signer.
+    let has_sig = receipt
+        .datoms()
+        .iter()
+        .any(|d| d.attribute().as_str() == "tx/signature");
+    let has_signer = receipt
+        .datoms()
+        .iter()
+        .any(|d| d.attribute().as_str() == "tx/signer");
+    assert!(
+        has_sig,
+        "INV-FERR-051: transact_signed must emit tx/signature datom"
+    );
+    assert!(
+        has_signer,
+        "INV-FERR-051: transact_signed must emit tx/signer datom"
+    );
+}
+
+#[test]
+fn test_inv_ferr_051_transact_signed_provenance_emitted() {
+    let sk = ed25519_dalek::SigningKey::from_bytes(&[7u8; 32]);
+    let db = Database::genesis();
+    let node = NodeId::from_bytes([1u8; 16]);
+
+    let tx = Transaction::new(node)
+        .assert_datom(
+            EntityId::from_content(b"prov-entity"),
+            Attribute::from("db/doc"),
+            Value::String("prov-value".into()),
+        )
+        .commit(&db.schema())
+        .expect("valid tx");
+
+    let receipt = db.transact_signed(tx, &sk).expect("transact_signed");
+
+    let has_provenance = receipt
+        .datoms()
+        .iter()
+        .any(|d| d.attribute().as_str() == "tx/provenance");
+    assert!(
+        has_provenance,
+        "INV-FERR-063: transact_signed must emit tx/provenance datom"
+    );
+}

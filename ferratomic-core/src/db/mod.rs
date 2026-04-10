@@ -53,12 +53,25 @@ use crate::{
 // Identity transaction helper (INV-FERR-060)
 // ---------------------------------------------------------------------------
 
-/// Build the self-signed identity transaction for `genesis_with_identity`.
+/// Tx 1: Define `store/public-key` and `store/created` schema attributes.
 ///
-/// Defines `store/public-key` (Bytes) and `store/created` (Instant)
-/// attributes via schema-as-data, then asserts the store's public key
-/// and creation timestamp.
-fn build_identity_tx(
+/// Uses only genesis-schema attributes (`db/ident`, `db/valueType`,
+/// `db/cardinality`), so `commit()` against the genesis schema succeeds.
+fn build_identity_schema_tx(
+    node: ferratom::NodeId,
+    schema: &Schema,
+) -> Result<crate::writer::Transaction<crate::writer::Committed>, FerraError> {
+    let tx = crate::writer::Transaction::new(node);
+    let tx = define_schema_attr(tx, "store/public-key", "db.type/bytes");
+    let tx = define_schema_attr(tx, "store/created", "db.type/instant");
+    tx.commit(schema).map_err(FerraError::from)
+}
+
+/// Tx 2: Assert the store's public key and creation timestamp.
+///
+/// Requires `store/public-key` and `store/created` in the schema
+/// (installed by schema evolution from tx 1).
+fn build_identity_value_tx(
     node: ferratom::NodeId,
     pubkey: &ed25519_dalek::VerifyingKey,
     schema: &Schema,
@@ -72,22 +85,19 @@ fn build_identity_tx(
     )
     .unwrap_or(i64::MAX);
 
-    let tx = crate::writer::Transaction::new(node);
-    let tx = define_schema_attr(tx, "store/public-key", "db.type/bytes");
-    let tx = define_schema_attr(tx, "store/created", "db.type/instant");
-
-    tx.assert_datom(
-        store_eid,
-        ferratom::Attribute::from("store/public-key"),
-        ferratom::Value::Bytes(pubkey.as_bytes().as_slice().into()),
-    )
-    .assert_datom(
-        store_eid,
-        ferratom::Attribute::from("store/created"),
-        ferratom::Value::Instant(now_ms),
-    )
-    .commit(schema)
-    .map_err(FerraError::from)
+    crate::writer::Transaction::new(node)
+        .assert_datom(
+            store_eid,
+            ferratom::Attribute::from("store/public-key"),
+            ferratom::Value::Bytes(pubkey.as_bytes().as_slice().into()),
+        )
+        .assert_datom(
+            store_eid,
+            ferratom::Attribute::from("store/created"),
+            ferratom::Value::Instant(now_ms),
+        )
+        .commit(schema)
+        .map_err(FerraError::from)
 }
 
 /// Add schema-defining datoms for a new attribute (db/ident + db/valueType + db/cardinality).
@@ -304,8 +314,16 @@ impl Database<Ready> {
         node_bytes.copy_from_slice(&node_hash.as_bytes()[..16]);
         let node = ferratom::NodeId::from_bytes(node_bytes);
 
-        let tx = build_identity_tx(node, &pubkey, &db.schema())?;
-        db.transact_signed(tx, signing_key)?;
+        // Tx 1: define store/public-key and store/created attributes.
+        // Uses only genesis-schema attributes (db/ident, db/valueType, etc.).
+        let schema_tx = build_identity_schema_tx(node, &db.schema())?;
+        db.transact_signed(schema_tx, signing_key)?;
+
+        // Tx 2: assert identity values. Now store/public-key and
+        // store/created are in the schema (installed by schema evolution).
+        let value_tx = build_identity_value_tx(node, &pubkey, &db.schema())?;
+        db.transact_signed(value_tx, signing_key)?;
+
         Ok(db)
     }
 
