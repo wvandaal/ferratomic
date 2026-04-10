@@ -21,6 +21,12 @@ features = ["test-utils"]
 path = "../ferratomic-core"
 features = ["test-utils"]
 
+[dependencies.ferratomic-positional]
+path = "../ferratomic-positional"
+
+[dependencies.blake3]
+version = "1"
+
 # --- Fuzz targets ---
 
 [[bin]]
@@ -54,6 +60,20 @@ bench = false
 [[bin]]
 name = "fuzz_merge_commutativity"
 path = "fuzz_targets/fuzz_merge_commutativity.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_canonical_bytes"
+path = "fuzz_targets/fuzz_canonical_bytes.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_codec_payload"
+path = "fuzz_targets/fuzz_codec_payload.rs"
 test = false
 doc = false
 bench = false
