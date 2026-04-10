@@ -88,13 +88,16 @@ queries, the evaluator fans out to all stores concurrently, collects per-store r
 and merges via set union. For non-monotonic queries, the evaluator materializes all
 stores into a single in-memory store, then evaluates locally.
 
-**V1 remote query boundary**: In V1, remote queries are filter-based — the 7
-`WireQueryExpr` variants (All, AttributeEq, EntityEq, ValueEq, And, Or, Not)
-defined in INV-FERR-038a. These are monotonic by CALM (filter is a monotone
-function over set union). Non-monotonic queries — joins, projections,
-aggregation, set difference — have no wire encoding in V1 and execute via
-full local materialization only. Wire encoding for non-monotonic queries is
-Phase 4d scope (Datalog query engine).
+**V1 remote query boundary**: In V1, remote queries are filter-based — the 6
+`DatomFilter` variants available for wire encoding are: `All`,
+`AttributeNamespace`, `Entities`, `FromNodes`, `And`, `Or`. These are
+monotonic by CALM (filter is a monotone function over set union). The `Not`,
+`Custom`, and `AfterEpoch` variants are excluded from V1 wire encoding per
+ADR-FERR-022 (`Not` breaks monotonicity; `Custom` is non-serializable;
+`AfterEpoch` requires causal clock synchronization). Non-monotonic queries —
+joins, projections, aggregation, set difference — have no wire encoding in
+V1 and execute via full local materialization only. Wire encoding for
+non-monotonic queries is Phase 4d scope (Datalog query engine).
 
 #### Level 2 (Implementation Contract)
 ```rust
@@ -2020,19 +2023,9 @@ impl Federation {
     ) -> Result<(), MigrationError>;
 }
 
-/// Federated query result.
-pub struct FederatedResult {
-    /// Merged results from all responding stores.
-    pub results: QueryResult,
-    /// Per-store metadata: latency, datom count, status.
-    pub store_responses: Vec<StoreResponse>,
-    /// True if any store timed out or errored (INV-FERR-041).
-    pub partial: bool,
-}
-
-// StoreResponse and ResponseStatus: see canonical definitions in
-// INV-FERR-037 Level 2 above. Repeated here for code block completeness.
-// Canonical definition has INV-FERR-038 latency semantics documentation.
+// FederatedResult, StoreResponse, ResponseStatus, TransportResult:
+// see canonical definitions in INV-FERR-037 Level 2 above.
+// Not repeated here — use the canonical definitions.
 
 /// Merge receipt from selective_merge.
 pub struct MergeReceipt {

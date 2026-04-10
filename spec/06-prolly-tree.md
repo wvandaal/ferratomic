@@ -3081,13 +3081,18 @@ purity), C2 (Content-Addressed Identity), ADR-FERR-008 (Prolly Tree Block Store)
     is_boundary(I₁, key_bytes, pw) = is_boundary(I₂, key_bytes, pw)
 
 Proof:
-  The rolling hash algorithm (Gear hash with a fixed 256-entry random table),
-  the boundary predicate (hash & mask == mask where mask = (1 << pw) - 1),
-  and the CDF bounds (min_chunk_size, max_chunk_size) are ALL fully specified
-  below — no implementation-defined behavior. T1 follows from the algorithm
-  being a pure function of its byte input with fixed constants. T2 follows
-  from the function having no state beyond its arguments. T3 follows from
-  T1 + the boundary predicate being a pure function of rolling_hash output.
+  The rolling hash algorithm (Gear hash), the 256-entry random table (derived
+  deterministically from the fixed seed b"ferratomic-gear-hash-table" via
+  BLAKE3 XOF — changing this seed is a breaking change requiring a new INV
+  version), the boundary predicate (hash & mask == mask where mask =
+  (1 << pw) - 1), and the CDF bounds (min_chunk_size=32, max_chunk_size=1024)
+  are ALL fully specified below — no implementation-defined behavior. T1
+  follows from the algorithm being a pure function of its byte input with
+  fixed constants. T2 follows from the function having no state beyond its
+  arguments. T3 follows from T1 + the boundary predicate being a pure
+  function of rolling_hash output. The pattern_width is a store-wide constant
+  determined at store creation; changing it after creation changes all chunk
+  boundaries and creates an incompatible store format.
 ```
 
 #### Level 1 (State Invariant)
@@ -5154,13 +5159,14 @@ T2 (Crash consistency):
   never a corrupted intermediate.
 
 Proof:
-  The write-temp → fsync-temp → rename protocol provides T1 on POSIX
-  filesystems: rename is atomic by POSIX specification. T2 follows because:
-  if crash before rename, the temp file is discarded (old manifest survives);
-  if crash after rename, the new manifest is durable (fsync guarantees the
-  temp file's contents are on disk before rename). The manifest register is
-  linearizable because rename is a single atomic operation that takes effect
-  at one point in time.
+  The write-temp → fsync-temp → rename → fsync-dir protocol provides T1 on
+  POSIX filesystems: rename is atomic by POSIX specification. T2 follows
+  because: if crash before rename, the temp file is discarded (old manifest
+  survives); if crash after rename but before dir fsync, the rename may not
+  be durable on journaled filesystems (ext4) — dir fsync ensures the rename
+  reaches stable storage. After dir fsync, the new manifest is durable. The
+  manifest register is linearizable because rename is a single atomic
+  operation that takes effect at one point in time.
 ```
 
 #### Level 1 (State Invariant)
@@ -5195,6 +5201,14 @@ pub fn update_manifest(manifest_path: &Path, new_hash: &Hash) -> Result<(), Ferr
 
     // Step 3: Atomic rename (POSIX guarantees)
     std::fs::rename(&tmp_path, manifest_path)?;
+
+    // Step 4: fsync parent directory (ensures rename is durable on
+    // journaled filesystems like ext4 — without this, a power loss
+    // after rename can lose the directory metadata update)
+    if let Some(parent) = manifest_path.parent() {
+        let dir = File::open(parent)?;
+        dir.sync_all()?;
+    }
 
     Ok(())
 }
@@ -5290,7 +5304,12 @@ Proof:
   T2: the writer emits ChunkWrites before the RootUpdate that references
   them — this is the WAL-before-manifest discipline, analogous to
   INV-FERR-008's WAL-before-checkpoint.
-  T3: put_chunk is idempotent (content-addressed, same hash → same content).
+  T3: put_chunk is idempotent — content-addressed stores store ONLY the chunk
+  content (addressed by BLAKE3 hash) with no additional metadata (timestamps,
+  monotonic counters, version numbers). Two sequential put_chunk calls with
+  identical content produce bit-for-bit identical store state. This is a
+  precondition on ChunkStore implementations (INV-FERR-050): implementations
+  that include non-content metadata in put_chunk break idempotency.
   update_manifest is idempotent (writing the same hash twice is a no-op).
 ```
 
@@ -5449,9 +5468,20 @@ root hash. The retained set includes:
 
 GC NEVER deletes a chunk that is reachable from any retained root. After GC,
 all retained roots remain fully resolvable — `resolve(store, root)` succeeds
-for every root in the retained set. Concurrent readers holding ArcSwap
-references are safe: their snapshot roots are included in the retained set,
-so their chunks survive GC.
+for every root in the retained set.
+
+**ArcSwap synchronization**: The retained set must be computed atomically with
+respect to ArcSwap reader acquisition. Specifically: GC acquires the set of
+all active snapshot references (via `ArcSwap::load` guards) BEFORE starting
+the mark phase. Any reader that acquires a snapshot reference AFTER the
+retained set is computed may reference roots not in the retained set — but
+this is safe because the GC sweep only deletes chunks not reachable from the
+retained set, and the new reader's root either (a) shares chunks with a
+retained root (those chunks survive) or (b) references chunks not yet subject
+to GC (they were written after the retained set was computed). The key
+invariant: between computing the retained set and completing the sweep, no
+new roots are REMOVED from the store. Roots may be ADDED (new checkpoints),
+but that only increases reachable chunks, never decreases them.
 
 #### Level 2 (Implementation Contract)
 
