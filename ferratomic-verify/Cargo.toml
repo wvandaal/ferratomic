@@ -138,6 +138,10 @@ path = "integration/test_thresholds.rs"
 name = "integration_federation"
 path = "integration/test_federation.rs"
 
+[[test]]
+name = "integration_bootstrap"
+path = "integration/test_bootstrap.rs"
+
 # --- Kani bounded model checking harnesses (kani/) ---
 
 [[test]]
