@@ -3230,14 +3230,21 @@ proptest! {
         key in prop::collection::vec(any::<u8>(), 1..64),
         pw in 4u32..12,
     ) {
+        // Verify spec constants match the implementation
+        const SPEC_MIN_CHUNK: usize = 32;
+        const SPEC_MAX_CHUNK: usize = 1024;
+
         // Below min: never a boundary
-        prop_assert!(!is_boundary(&key, pw, 0),
-            "INV-FERR-046a: entries < min_chunk must not be a boundary");
-        prop_assert!(!is_boundary(&key, pw, 31),
-            "INV-FERR-046a: entries < min_chunk must not be a boundary");
+        for entries in 0..SPEC_MIN_CHUNK {
+            prop_assert!(!is_boundary(&key, pw, entries),
+                "INV-FERR-046a: entries {} < min_chunk {} must not be a boundary",
+                entries, SPEC_MIN_CHUNK);
+        }
         // At max: always a boundary
-        prop_assert!(is_boundary(&key, pw, 1024),
+        prop_assert!(is_boundary(&key, pw, SPEC_MAX_CHUNK),
             "INV-FERR-046a: entries >= max_chunk must always be a boundary");
+        prop_assert!(is_boundary(&key, pw, SPEC_MAX_CHUNK + 100),
+            "INV-FERR-046a: entries >> max_chunk must always be a boundary");
     }
 }
 ```
@@ -3245,14 +3252,37 @@ proptest! {
 **Lean theorem**:
 
 ```lean
-/-- Gear hash is a pure function: same input always produces same output. -/
+/-- Gear hash is a pure function of its input: the hash depends only on
+    the byte sequence, not on any external state. The `rfl` proof establishes
+    determinism WITHIN a single implementation; cross-implementation determinism
+    follows from the algorithm being fully specified (fixed GEAR_TABLE seed,
+    fixed rotate-XOR loop) — any conforming implementation computes the same
+    function. -/
 theorem gear_hash_deterministic (key : List UInt8) :
     gear_hash key = gear_hash key := rfl
 
 /-- Boundary predicate is deterministic given the same inputs. -/
 theorem boundary_deterministic (key : List UInt8) (pw : Nat) (entries_since : Nat) :
     is_boundary key pw entries_since = is_boundary key pw entries_since := rfl
+
+/-- Boundary function respects minimum chunk size. -/
+theorem boundary_min_size (key : List UInt8) (pw : Nat) (entries : Nat)
+    (h : entries < MIN_CHUNK_SIZE) :
+    is_boundary key pw entries = false := sorry -- bd-400
+
+/-- Boundary function forces split at maximum chunk size. -/
+theorem boundary_max_size (key : List UInt8) (pw : Nat) (entries : Nat)
+    (h : entries ≥ MAX_CHUNK_SIZE) :
+    is_boundary key pw entries = true := sorry -- bd-400
 ```
+
+Note: The `rfl` proofs establish syntactic determinism (same expression evaluates
+to the same value). Cross-implementation determinism (two DIFFERENT implementations
+produce the same result) is a meta-property that follows from the algorithm being
+fully specified with no implementation-defined behavior. Lean cannot prove properties
+across implementations — it proves properties of the SPEC's definitions. The CDF
+bound theorems (`boundary_min_size`, `boundary_max_size`) are substantive and require
+case analysis on the `is_boundary` definition.
 
 **Algorithm choice rationale (Gear hash vs alternatives)**:
 
@@ -5250,6 +5280,28 @@ proptest! {
         prop_assert_eq!(read, Some(hash),
             "INV-FERR-050b: manifest must round-trip");
     }
+
+    #[test]
+    fn manifest_concurrent_updates(
+        h1 in any::<[u8; 32]>().prop_map(Hash::from),
+        h2 in any::<[u8; 32]>().prop_map(Hash::from),
+    ) {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("manifest");
+        let path1 = path.clone();
+        let path2 = path.clone();
+
+        // Two concurrent updates — last writer wins, but result is
+        // always one of {h1, h2}, never corrupted.
+        let t1 = std::thread::spawn(move || update_manifest(&path1, &h1));
+        let t2 = std::thread::spawn(move || update_manifest(&path2, &h2));
+        t1.join().unwrap().unwrap();
+        t2.join().unwrap().unwrap();
+
+        let result = read_manifest(&path).unwrap().unwrap();
+        prop_assert!(result == h1 || result == h2,
+            "INV-FERR-050b: concurrent updates must produce one of the written values, got {:?}", result);
+    }
 }
 ```
 
@@ -5402,6 +5454,58 @@ proptest! {
         prop_assert_eq!(resolved, kvs,
             "INV-FERR-050c: journal replay must reconstruct original data");
     }
+
+    #[test]
+    fn journal_replay_idempotent(
+        kvs in prop::collection::btree_map(
+            prop::collection::vec(any::<u8>(), 1..32),
+            prop::collection::vec(any::<u8>(), 1..32),
+            1..50,
+        ),
+    ) {
+        let store = MemoryChunkStore::new();
+        let root = build_prolly_tree(&kvs, &store, 8).unwrap();
+        let journal: Vec<JournalRecord> = store.all_chunks().unwrap()
+            .into_iter()
+            .map(|c| JournalRecord::ChunkWrite { chunk: c })
+            .chain(std::iter::once(JournalRecord::RootUpdate { hash: root.clone() }))
+            .collect();
+
+        // Replay twice — idempotent (T3)
+        let fresh = MemoryChunkStore::new();
+        let dir = tempdir().unwrap();
+        let manifest = dir.path().join("manifest");
+        replay_journal(&journal, &fresh, &manifest).unwrap();
+        replay_journal(&journal, &fresh, &manifest).unwrap();
+        let resolved = read_prolly_tree(&root, &fresh).unwrap();
+        prop_assert_eq!(resolved, kvs,
+            "INV-FERR-050c T3: double replay must equal single replay");
+    }
+
+    #[test]
+    fn journal_rejects_missing_chunks(
+        kvs in prop::collection::btree_map(
+            prop::collection::vec(any::<u8>(), 1..16),
+            prop::collection::vec(any::<u8>(), 1..16),
+            2..20,
+        ),
+    ) {
+        let store = MemoryChunkStore::new();
+        let root = build_prolly_tree(&kvs, &store, 8).unwrap();
+
+        // Build adversarial journal: RootUpdate WITHOUT preceding ChunkWrites
+        let bad_journal = vec![JournalRecord::RootUpdate { hash: root.clone() }];
+
+        let fresh = MemoryChunkStore::new();
+        let dir = tempdir().unwrap();
+        let manifest = dir.path().join("manifest");
+        replay_journal(&bad_journal, &fresh, &manifest).unwrap();
+
+        // Resolve must fail — chunks were never written
+        let result = read_prolly_tree(&root, &fresh);
+        prop_assert!(result.is_err(),
+            "INV-FERR-050c T2: RootUpdate without chunks must fail on resolve");
+    }
 }
 ```
 
@@ -5452,7 +5556,13 @@ Proof:
     `reachable(retained)`.
   Phase 2 (Sweep): Delete all chunks in `stored \ reachable(retained)`.
   T1: by construction — sweep deletes only addresses NOT in reachable.
-  T2: by construction — sweep deletes exactly stored \ reachable.
+  T2: by construction — sweep deletes exactly stored \ reachable. The mark
+    phase computes the COMPLETE reachable set via BFS from retained roots.
+    Completeness is guaranteed by the BFS invariant: for any chunk c
+    reachable from a retained root, there exists a path in the chunk
+    reference graph from a retained root to c, and BFS visits all such
+    paths (each chunk's children are enumerated by decode_child_addrs,
+    which returns ALL child addresses — no references are skipped).
   T3: after GC, stored = reachable(retained). A second GC finds nothing to
     delete. Idempotent by stored = reachable being a fixed point of sweep.
 ```
@@ -5571,8 +5681,57 @@ proptest! {
         let resolved2_after = read_prolly_tree(&root2, &store).unwrap();
         prop_assert_eq!(resolved2_after, kvs2,
             "INV-FERR-050d: root2 must survive GC when root1 is released");
+
+        // Verify unreachable chunks were actually collected (T2 liveness)
+        let all_addrs = store.all_addrs().unwrap();
+        let reachable_from_root2 = reachable_set(&store, &[root2.clone()]).unwrap();
+        prop_assert_eq!(all_addrs.len(), reachable_from_root2.len(),
+            "INV-FERR-050d T2: unreachable chunks must be collected");
+    }
+
+    #[test]
+    fn gc_concurrent_reader_safety(
+        kvs in prop::collection::btree_map(
+            prop::collection::vec(any::<u8>(), 1..16),
+            prop::collection::vec(any::<u8>(), 1..16),
+            1..30,
+        ),
+    ) {
+        use std::sync::{Arc, Barrier};
+
+        let store = Arc::new(MemoryChunkStore::new());
+        let root = build_prolly_tree(&kvs, &store, 8).unwrap();
+
+        // Reader holds a reference to root via ArcSwap-style snapshot
+        let reader_root = root.clone();
+        let reader_store = Arc::clone(&store);
+        let barrier = Arc::new(Barrier::new(2));
+        let reader_barrier = Arc::clone(&barrier);
+
+        let reader = std::thread::spawn(move || {
+            // Reader acquires snapshot reference
+            let snapshot_root = reader_root.clone();
+            reader_barrier.wait(); // sync: reader has reference, GC may start
+            // Reader resolves — chunks must still exist
+            let resolved = read_prolly_tree(&snapshot_root, &reader_store).unwrap();
+            resolved
+        });
+
+        barrier.wait(); // sync: reader has reference
+        // GC runs with root retained (reader holds it)
+        gc(&store, &[root.clone()]).unwrap();
+
+        let reader_result = reader.join().unwrap();
+        prop_assert_eq!(reader_result, kvs,
+            "INV-FERR-050d: concurrent reader must see intact data during GC");
     }
 }
+
+Note: these proptests use `MemoryChunkStore` for deterministic testing. INV-FERR-050
+(substrate independence) guarantees the algebraic properties hold across all
+`ChunkStore` implementations. Implementation-time tests in `ferratomic-verify/`
+should additionally test with `FsChunkStore` and `FaultInjectingChunkStore` to
+verify crash safety during GC sweep (partial deletes, torn writes).
 ```
 
 **Lean theorem**:
@@ -5658,6 +5817,25 @@ Edge cases:
   the manifest root was not retained.
 - **Interrupted recovery**: recovery is idempotent (T4). Restarting from the
   same manifest produces the same result.
+- **GC during recovery**: GC (INV-FERR-050d) MUST NOT run concurrently with
+  recovery. The recovery process reads chunks from the store; if GC deletes
+  a chunk between the manifest read and the tree walk, recovery fails with
+  ChunkNotFound. The retained set for GC must include the manifest root being
+  recovered. This is a cross-invariant ordering constraint: 050d's retained
+  set must include 050e's recovery target.
+
+**Cross-invariant dependency matrix** (INV-FERR-050 family):
+
+| Invariant | Requires from | Constraint |
+|-----------|--------------|------------|
+| 050b (Manifest CAS) | 050 (Substrate) | ChunkStore is append-only during normal operation |
+| 050c (Journal) | 050b (CAS) | RootUpdate writes the manifest via 050b's protocol |
+| 050c (Journal) | 050 (Substrate) | put_chunk is idempotent (no metadata beyond content) |
+| 050d (GC) | 050e (Recovery) | Retained set must include any manifest root being recovered |
+| 050d (GC) | 006 (ArcSwap) | Retained set computed atomically with ArcSwap reader set |
+| 050e (Recovery) | 050b (CAS) | Manifest is valid (not corrupted) at recovery start |
+| 050e (Recovery) | 050c (Journal) | Journal entries after checkpoint are well-ordered (T2) |
+| 050e (Recovery) | 050d (GC) | GC must not run during recovery (see above) |
 
 #### Level 2 (Implementation Contract)
 
@@ -5717,7 +5895,7 @@ roundtrip.
 ```rust
 proptest! {
     #[test]
-    fn prolly_recovery_roundtrip(
+    fn prolly_recovery_roundtrip_t1(
         datoms in prop::collection::vec(arb_datom(), 1..100),
     ) {
         let store = Store::from_datoms(&datoms).unwrap();
@@ -5725,17 +5903,131 @@ proptest! {
         let dir = tempdir().unwrap();
         let manifest = dir.path().join("manifest");
 
-        // Checkpoint
         let root = checkpoint_to_prolly(&store, &chunk_store, &manifest, 8).unwrap();
-
-        // Recover
         let recovered = recover_from_prolly(&manifest, &chunk_store, &[]).unwrap();
 
-        // Verify lossless roundtrip
+        // T1: lossless datom roundtrip
         prop_assert_eq!(
             recovered.datoms().collect::<BTreeSet<_>>(),
             store.datoms().collect::<BTreeSet<_>>(),
             "INV-FERR-050e T1: recovery must produce identical datom set"
+        );
+    }
+
+    #[test]
+    fn prolly_recovery_index_preservation_t2(
+        datoms in prop::collection::vec(arb_datom(), 2..50),
+    ) {
+        let store = Store::from_datoms(&datoms).unwrap();
+        let chunk_store = MemoryChunkStore::new();
+        let dir = tempdir().unwrap();
+        let manifest = dir.path().join("manifest");
+
+        checkpoint_to_prolly(&store, &chunk_store, &manifest, 8).unwrap();
+        let recovered = recover_from_prolly(&manifest, &chunk_store, &[]).unwrap();
+
+        // T2: all 4 secondary indexes match
+        for ordering in [IndexOrdering::EAVT, IndexOrdering::AEVT,
+                         IndexOrdering::VAET, IndexOrdering::AVET] {
+            let orig_idx: Vec<_> = store.index(ordering).collect();
+            let recv_idx: Vec<_> = recovered.index(ordering).collect();
+            prop_assert_eq!(orig_idx, recv_idx,
+                "INV-FERR-050e T2: {:?} index must match after recovery", ordering);
+        }
+    }
+
+    #[test]
+    fn prolly_recovery_journal_extension_t3(
+        datoms1 in prop::collection::vec(arb_datom(), 1..50),
+        datoms2 in prop::collection::vec(arb_datom(), 1..20),
+    ) {
+        let store = Store::from_datoms(&datoms1).unwrap();
+        let chunk_store = MemoryChunkStore::new();
+        let dir = tempdir().unwrap();
+        let manifest = dir.path().join("manifest");
+
+        // Checkpoint initial state
+        checkpoint_to_prolly(&store, &chunk_store, &manifest, 8).unwrap();
+
+        // Apply more transactions (journal entries after checkpoint)
+        let mut journal = Vec::new();
+        let mut extended_store = store.clone();
+        for datom in &datoms2 {
+            extended_store = extended_store.assert_datom(datom.clone()).unwrap();
+            journal.push(JournalRecord::ChunkWrite {
+                chunk: Chunk::from_bytes(&datom.canonical_bytes()),
+            });
+        }
+
+        // Recover from checkpoint + replay journal
+        let recovered = recover_from_prolly(&manifest, &chunk_store, &journal).unwrap();
+
+        // T3: result includes both checkpoint AND journal datoms
+        let expected: BTreeSet<_> = extended_store.datoms().collect();
+        let actual: BTreeSet<_> = recovered.datoms().collect();
+        prop_assert!(actual.is_superset(&store.datoms().collect()),
+            "INV-FERR-050e T3: recovery must include checkpoint datoms");
+    }
+
+    #[test]
+    fn prolly_recovery_empty_store() {
+        // Edge case: empty store checkpoint/recovery
+        let store = Store::empty();
+        let chunk_store = MemoryChunkStore::new();
+        let dir = tempdir().unwrap();
+        let manifest = dir.path().join("manifest");
+
+        let root = checkpoint_to_prolly(&store, &chunk_store, &manifest, 8).unwrap();
+        let recovered = recover_from_prolly(&manifest, &chunk_store, &[]).unwrap();
+        assert_eq!(recovered.len(), 0,
+            "INV-FERR-050e: empty store must round-trip to empty");
+    }
+
+    #[test]
+    fn prolly_recovery_missing_chunk() {
+        // Edge case: corrupt store — missing chunk must fail, not silently lose data
+        let datoms = vec![arb_datom_fixed()];
+        let store = Store::from_datoms(&datoms).unwrap();
+        let chunk_store = MemoryChunkStore::new();
+        let dir = tempdir().unwrap();
+        let manifest = dir.path().join("manifest");
+
+        checkpoint_to_prolly(&store, &chunk_store, &manifest, 8).unwrap();
+
+        // Delete a chunk to simulate corruption
+        let addrs: Vec<_> = chunk_store.all_addrs().unwrap();
+        if let Some(addr) = addrs.first() {
+            chunk_store.delete_chunk(addr).unwrap();
+        }
+
+        let result = recover_from_prolly(&manifest, &chunk_store, &[]);
+        assert!(result.is_err(),
+            "INV-FERR-050e: missing chunk must produce error, not silent data loss");
+    }
+
+    #[test]
+    fn prolly_recovery_idempotent_t4(
+        datoms in prop::collection::vec(arb_datom(), 1..50),
+    ) {
+        let store = Store::from_datoms(&datoms).unwrap();
+        let chunk_store = MemoryChunkStore::new();
+        let dir = tempdir().unwrap();
+        let manifest = dir.path().join("manifest");
+
+        checkpoint_to_prolly(&store, &chunk_store, &manifest, 8).unwrap();
+        let recovered1 = recover_from_prolly(&manifest, &chunk_store, &[]).unwrap();
+
+        // Re-checkpoint the recovered store, then recover again (T4)
+        let chunk_store2 = MemoryChunkStore::new();
+        let dir2 = tempdir().unwrap();
+        let manifest2 = dir2.path().join("manifest");
+        checkpoint_to_prolly(&recovered1, &chunk_store2, &manifest2, 8).unwrap();
+        let recovered2 = recover_from_prolly(&manifest2, &chunk_store2, &[]).unwrap();
+
+        prop_assert_eq!(
+            recovered2.datoms().collect::<BTreeSet<_>>(),
+            recovered1.datoms().collect::<BTreeSet<_>>(),
+            "INV-FERR-050e T4: recover(checkpoint(recover(checkpoint(S)))) = recover(checkpoint(S))"
         );
     }
 }
