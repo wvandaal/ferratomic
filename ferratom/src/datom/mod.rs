@@ -817,4 +817,118 @@ mod tests {
             }
         }
     }
+
+    // -- INV-FERR-086: canonical_bytes round-trip ----------------------------
+
+    /// Helper: build a datom with a specific Value variant for round-trip testing.
+    fn datom_with_value(value: Value) -> Datom {
+        Datom::new(
+            EntityId::from_content(b"test"),
+            Attribute::from("test/attr"),
+            value,
+            TxId::new(100, 1, 42),
+            Op::Assert,
+        )
+    }
+
+    /// `INV-FERR-086`: `canonical_bytes` round-trip for all 11 `Value` variants.
+    /// Each variant must survive serialize then deserialize without loss.
+    #[test]
+    fn test_inv_ferr_086_canonical_bytes_round_trip_all_variants() {
+        let variants = vec![
+            datom_with_value(Value::Keyword(Arc::from("test/kw"))),
+            datom_with_value(Value::String(Arc::from("hello world"))),
+            datom_with_value(Value::Long(42)),
+            datom_with_value(Value::Long(-1)),
+            datom_with_value(Value::Long(i64::MAX)),
+            datom_with_value(Value::Double(
+                NonNanFloat::new(1.234_567_89).expect("not NaN"),
+            )),
+            datom_with_value(Value::Double(NonNanFloat::new(0.0).expect("not NaN"))),
+            datom_with_value(Value::Bool(true)),
+            datom_with_value(Value::Bool(false)),
+            datom_with_value(Value::Instant(1_700_000_000_000)),
+            datom_with_value(Value::Uuid([0xAB; 16])),
+            datom_with_value(Value::Bytes(Arc::from(vec![1u8, 2, 3, 4].as_slice()))),
+            datom_with_value(Value::Bytes(Arc::from(Vec::<u8>::new().as_slice()))),
+            datom_with_value(Value::Ref(EntityId::from_content(b"ref target"))),
+            datom_with_value(Value::BigInt(i128::MAX)),
+            datom_with_value(Value::BigInt(i128::MIN)),
+            datom_with_value(Value::BigDec(123_456_789_012_345)),
+        ];
+
+        for (i, d) in variants.iter().enumerate() {
+            let bytes = d.canonical_bytes();
+            let recovered = Datom::from_canonical_bytes(&bytes).unwrap_or_else(|e| {
+                panic!(
+                    "INV-FERR-086: variant {i} ({:?}) failed to parse: {e}",
+                    d.value()
+                )
+            });
+            assert_eq!(
+                &recovered,
+                d,
+                "INV-FERR-086: variant {i} round-trip failed for {:?}",
+                d.value()
+            );
+        }
+    }
+
+    /// INV-FERR-086: Assert vs Retract round-trips correctly.
+    #[test]
+    fn test_inv_ferr_086_canonical_bytes_op_round_trip() {
+        let assert_datom = datom_with_value(Value::Long(1));
+        let retract_datom = Datom::new(
+            assert_datom.entity(),
+            assert_datom.attribute().clone(),
+            assert_datom.value().clone(),
+            assert_datom.tx(),
+            Op::Retract,
+        );
+
+        let a_bytes = assert_datom.canonical_bytes();
+        let r_bytes = retract_datom.canonical_bytes();
+        assert_ne!(
+            a_bytes, r_bytes,
+            "Assert and Retract must produce different bytes"
+        );
+
+        let a_recovered = Datom::from_canonical_bytes(&a_bytes).expect("assert round-trip");
+        let r_recovered = Datom::from_canonical_bytes(&r_bytes).expect("retract round-trip");
+        assert_eq!(a_recovered.op(), Op::Assert);
+        assert_eq!(r_recovered.op(), Op::Retract);
+    }
+
+    /// `INV-FERR-086`: `canonical_bytes` is deterministic.
+    #[test]
+    fn test_inv_ferr_086_canonical_bytes_deterministic() {
+        let d = sample_datom();
+        assert_eq!(d.canonical_bytes(), d.canonical_bytes());
+    }
+
+    /// INV-FERR-086: distinct datoms produce distinct canonical bytes (injectivity).
+    #[test]
+    fn test_inv_ferr_086_canonical_bytes_injective() {
+        let d1 = datom_with_value(Value::Long(1));
+        let d2 = datom_with_value(Value::Long(2));
+        assert_ne!(
+            d1.canonical_bytes(),
+            d2.canonical_bytes(),
+            "INV-FERR-086: distinct datoms must have distinct canonical bytes"
+        );
+    }
+
+    /// INV-FERR-086: truncated canonical bytes are rejected.
+    #[test]
+    fn test_inv_ferr_086_from_canonical_bytes_rejects_truncated() {
+        let d = sample_datom();
+        let bytes = d.canonical_bytes();
+        // Truncate at various points — all must fail
+        for len in [0, 1, 31, 32, 33, bytes.len() - 1] {
+            assert!(
+                Datom::from_canonical_bytes(&bytes[..len]).is_err(),
+                "INV-FERR-086: truncation at {len} bytes must be rejected"
+            );
+        }
+    }
 }

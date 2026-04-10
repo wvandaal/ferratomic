@@ -151,6 +151,12 @@ impl LeafChunkCodec for DatomPairCodec {
 impl DatomPairCodec {
     /// Encode a `DatomPairChunk` as the codec's payload bytes.
     /// Layout: `[entry_count: u32-le][entries: (key_len, key, val_len, val)*]`
+    ///
+    /// Entry count, key lengths, and value lengths are encoded as `u32-le`.
+    /// Inputs exceeding `u32::MAX` (~4 billion entries or ~4 GB keys/values)
+    /// are saturated to `u32::MAX`, producing a non-round-trippable payload.
+    /// This is acceptable because prolly tree chunks are bounded by the
+    /// rolling hash boundary function to ~256-4096 entries with sub-KB keys.
     #[must_use]
     pub fn encode_payload(chunk: &DatomPairChunk) -> Vec<u8> {
         let cap = 4 + chunk
@@ -342,15 +348,6 @@ fn datom_set_to_pair_chunk(datoms: &BTreeSet<Datom>) -> DatomPairChunk {
     DatomPairChunk::from_sorted_unchecked(entries)
 }
 
-/// Inverse: rebuild a `BTreeSet<Datom>` from a `DatomPairChunk`.
-/// For the content-hash-keyed primary tree, this requires a reverse lookup
-/// from hash to datom — which is not possible without the original datoms.
-/// In practice, round-trip at the `BTreeSet`<Datom> level goes through the
-/// `canonical_bytes` encoding, not the `content_hash` encoding.
-///
-/// For now, this returns an error indicating that full datom recovery
-/// requires the `canonical_bytes` key encoding (Phase 5 of session 023.5).
-///
 /// Inverse: rebuild a `BTreeSet<Datom>` from a `DatomPairChunk` by parsing
 /// each key as `canonical_bytes → Datom` (per `S23.9.0.3`).
 /// The value field (`content_hash`) is cross-reference only and is NOT used
@@ -652,5 +649,60 @@ mod tests {
             matches!(result, Err(FerraError::TruncatedChunk)),
             "Truncated payload must be rejected"
         );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Proptest: random input conformance (INV-FERR-045c T1, GOALS.md §6.5)
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod proptests {
+    use ferratomic_verify::generators::{arb_datom, arb_datom_set};
+    use proptest::prelude::*;
+
+    use super::*;
+
+    proptest! {
+        /// INV-FERR-045c T1: trait-level round-trip with random datom sets.
+        /// `DatomPairCodec::decode(encode(D)) == Ok(D)` for random D.
+        #[test]
+        fn trait_level_round_trip(datoms in arb_datom_set(0..50)) {
+            let encoded = DatomPairCodec::encode(&datoms);
+            let decoded = DatomPairCodec::decode(&encoded)
+                .expect("INV-FERR-045c T1: trait-level round-trip must succeed");
+            prop_assert_eq!(decoded, datoms);
+        }
+
+        /// INV-FERR-045c T2: determinism with random datom sets.
+        #[test]
+        fn trait_level_deterministic(datoms in arb_datom_set(0..50)) {
+            let b1 = DatomPairCodec::encode(&datoms);
+            let b2 = DatomPairCodec::encode(&datoms);
+            prop_assert_eq!(b1, b2, "INV-FERR-045c T2: encode must be deterministic");
+        }
+
+        /// INV-FERR-045c T3: injectivity with random datom sets.
+        #[test]
+        fn trait_level_injective(
+            d1 in arb_datom_set(1..30),
+            d2 in arb_datom_set(1..30),
+        ) {
+            prop_assume!(d1 != d2);
+            prop_assert_ne!(
+                DatomPairCodec::encode(&d1),
+                DatomPairCodec::encode(&d2),
+                "INV-FERR-045c T3: distinct sets must encode differently"
+            );
+        }
+
+        /// INV-FERR-086: Datom canonical_bytes round-trip with random datoms.
+        #[test]
+        fn datom_canonical_bytes_round_trip(d in arb_datom()) {
+            let bytes = d.canonical_bytes();
+            let recovered = Datom::from_canonical_bytes(&bytes)
+                .expect("INV-FERR-086: canonical_bytes must round-trip");
+            prop_assert_eq!(recovered, d);
+        }
     }
 }
