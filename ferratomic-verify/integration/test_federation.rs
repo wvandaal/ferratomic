@@ -211,29 +211,12 @@ fn test_inv_ferr_038_local_transport_equivalence() {
     );
 }
 
-/// Block on a future synchronously (no runtime needed for `ready` futures).
+/// Block on a ready future synchronously via tokio (dev-dep).
 fn futures_lite_block<F: std::future::Future>(f: F) -> F::Output {
-    // LocalTransport returns std::future::ready, so poll once suffices.
-    let mut f = std::pin::pin!(f);
-    let waker = noop_waker();
-    let mut cx = std::task::Context::from_waker(&waker);
-    match f.as_mut().poll(&mut cx) {
-        std::task::Poll::Ready(val) => val,
-        std::task::Poll::Pending => panic!("LocalTransport future should be ready immediately"),
-    }
-}
-
-/// Minimal no-op waker for polling ready futures.
-fn noop_waker() -> std::task::Waker {
-    use std::task::{RawWaker, RawWakerVTable};
-    fn no_op(_: *const ()) {}
-    fn clone(p: *const ()) -> RawWaker {
-        RawWaker::new(p, &VTABLE)
-    }
-    const VTABLE: RawWakerVTable = RawWakerVTable::new(clone, no_op, no_op, no_op);
-    // SAFETY: the waker does nothing — no resources to manage.
-    // This is the standard pattern for polling ready futures.
-    unsafe { std::task::Waker::from_raw(RawWaker::new(std::ptr::null(), &VTABLE)) }
+    tokio::runtime::Builder::new_current_thread()
+        .build()
+        .expect("tokio runtime")
+        .block_on(f)
 }
 
 // -- INV-FERR-031: Genesis determinism with 25 attributes ------------------
