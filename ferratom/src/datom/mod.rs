@@ -9,11 +9,16 @@
 mod entity;
 mod value;
 
+use std::sync::Arc;
+
 pub use entity::EntityId;
 use serde::{Deserialize, Serialize};
 pub use value::{Attribute, AttributeId, AttributeIntern, NonNanFloat, Value};
 
-use crate::clock::TxId;
+use crate::{
+    clock::{NodeId, TxId},
+    error::FerraError,
+};
 
 // ---------------------------------------------------------------------------
 // Op
@@ -180,6 +185,58 @@ impl Datom {
             Value::BigDec(n) => hash_tagged_fixed(hasher, 10, &n.to_le_bytes()),
         }
     }
+
+    /// Canonical byte serialization per `INV-FERR-086`.
+    ///
+    /// Deterministic, self-delimiting, cross-implementation-reproducible.
+    /// This is the byte representation that chunk codecs store as the
+    /// key in `DatomPairChunk` entries (per `S23.9.0.2`).
+    ///
+    /// Layout:
+    /// - entity: `[u8; 32]`
+    /// - attribute: `u16-le` length + UTF-8
+    /// - value: `u8` tag + payload (see `INV-FERR-086` value tags)
+    /// - tx: `u64-le` physical + `u32-le` logical + `[u8; 16]` node
+    /// - op: `u8` (`0x00` = Assert, `0x01` = Retract)
+    #[must_use]
+    pub fn canonical_bytes(&self) -> Vec<u8> {
+        let mut buf = Vec::with_capacity(128);
+        buf.extend_from_slice(self.entity.as_bytes());
+        canonical_attr_bytes(&self.attribute, &mut buf);
+        canonical_value_bytes(&self.value, &mut buf);
+        canonical_tx_bytes(&self.tx, &mut buf);
+        buf.push(match self.op {
+            Op::Assert => 0x00,
+            Op::Retract => 0x01,
+        });
+        buf
+    }
+
+    /// Reconstruct a `Datom` from its canonical byte representation.
+    ///
+    /// Inverse of [`Datom::canonical_bytes`]. Returns `FerraError` on
+    /// truncated or malformed input.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FerraError::TruncatedChunk`] if the bytes are too short
+    /// to contain a valid datom.
+    pub fn from_canonical_bytes(bytes: &[u8]) -> Result<Self, FerraError> {
+        let mut offset = 0;
+        let entity = parse_entity(bytes, &mut offset)?;
+        let attribute = parse_attribute(bytes, &mut offset)?;
+        let (value, vlen) = parse_canonical_value(&bytes[offset..])?;
+        offset += vlen;
+        let tx = parse_tx(bytes, &mut offset)?;
+        let op = parse_op(bytes, &mut offset)?;
+        Ok(Self {
+            entity,
+            attribute,
+            value,
+            tx,
+            op,
+        })
+    }
 }
 
 /// INV-FERR-012: Datom identity is determined by content hash.
@@ -187,6 +244,283 @@ impl crate::traits::ContentAddressed for Datom {
     fn content_hash(&self) -> [u8; 32] {
         Datom::content_hash(self)
     }
+}
+
+/// Parse entity (32 bytes) from canonical bytes.
+fn parse_entity(bytes: &[u8], offset: &mut usize) -> Result<EntityId, FerraError> {
+    if *offset + 32 > bytes.len() {
+        return Err(FerraError::TruncatedChunk);
+    }
+    let mut b = [0u8; 32];
+    b.copy_from_slice(&bytes[*offset..*offset + 32]);
+    *offset += 32;
+    Ok(EntityId::from_trusted_bytes(b))
+}
+
+/// Parse attribute (u16-le length + UTF-8) from canonical bytes.
+fn parse_attribute(bytes: &[u8], offset: &mut usize) -> Result<Attribute, FerraError> {
+    if *offset + 2 > bytes.len() {
+        return Err(FerraError::TruncatedChunk);
+    }
+    let len = u16::from_le_bytes(
+        bytes[*offset..*offset + 2]
+            .try_into()
+            .map_err(|_| FerraError::TruncatedChunk)?,
+    ) as usize;
+    *offset += 2;
+    if *offset + len > bytes.len() {
+        return Err(FerraError::TruncatedChunk);
+    }
+    let Ok(s) = core::str::from_utf8(&bytes[*offset..*offset + len]) else {
+        return Err(FerraError::NonCanonicalChunk);
+    };
+    *offset += len;
+    Ok(Attribute::from(s))
+}
+
+/// Parse `TxId` (u64-le + u32-le + [u8; 16] = 28 bytes) from canonical bytes.
+fn parse_tx(bytes: &[u8], offset: &mut usize) -> Result<TxId, FerraError> {
+    if *offset + 28 > bytes.len() {
+        return Err(FerraError::TruncatedChunk);
+    }
+    let physical = u64::from_le_bytes(
+        bytes[*offset..*offset + 8]
+            .try_into()
+            .map_err(|_| FerraError::TruncatedChunk)?,
+    );
+    *offset += 8;
+    let logical = u32::from_le_bytes(
+        bytes[*offset..*offset + 4]
+            .try_into()
+            .map_err(|_| FerraError::TruncatedChunk)?,
+    );
+    *offset += 4;
+    let mut node = [0u8; 16];
+    node.copy_from_slice(&bytes[*offset..*offset + 16]);
+    *offset += 16;
+    Ok(TxId::with_node(physical, logical, NodeId::from_bytes(node)))
+}
+
+/// Parse Op (1 byte) from canonical bytes.
+fn parse_op(bytes: &[u8], offset: &mut usize) -> Result<Op, FerraError> {
+    if *offset >= bytes.len() {
+        return Err(FerraError::TruncatedChunk);
+    }
+    let op = match bytes[*offset] {
+        0x00 => Op::Assert,
+        0x01 => Op::Retract,
+        _ => return Err(FerraError::NonCanonicalChunk),
+    };
+    *offset += 1;
+    Ok(op)
+}
+
+/// Serialize an attribute to canonical bytes: u16-le length + UTF-8.
+fn canonical_attr_bytes(attr: &Attribute, buf: &mut Vec<u8>) {
+    let b = attr.as_str().as_bytes();
+    let len = u16::try_from(b.len()).unwrap_or(u16::MAX);
+    buf.extend_from_slice(&len.to_le_bytes());
+    buf.extend_from_slice(b);
+}
+
+/// Serialize a `TxId` to canonical bytes: u64-le + u32-le + [u8; 16].
+fn canonical_tx_bytes(tx: &TxId, buf: &mut Vec<u8>) {
+    buf.extend_from_slice(&tx.physical().to_le_bytes());
+    buf.extend_from_slice(&tx.logical().to_le_bytes());
+    buf.extend_from_slice(tx.node().as_bytes());
+}
+
+/// Serialize a `Value` to canonical bytes per `INV-FERR-086` value tag table.
+fn canonical_value_bytes(value: &Value, buf: &mut Vec<u8>) {
+    match value {
+        Value::Keyword(s) => push_tag_u16_str(buf, 0x01, s.as_bytes()),
+        Value::String(s) => push_tag_u32_bytes(buf, 0x02, s.as_bytes()),
+        Value::Long(n) => {
+            buf.push(0x03);
+            buf.extend_from_slice(&n.to_le_bytes());
+        }
+        Value::Double(f) => {
+            buf.push(0x04);
+            buf.extend_from_slice(&(f.into_inner() + 0.0).to_le_bytes());
+        }
+        Value::Bool(b) => {
+            buf.push(0x05);
+            buf.push(u8::from(*b));
+        }
+        Value::Instant(ms) => {
+            buf.push(0x06);
+            buf.extend_from_slice(&ms.to_le_bytes());
+        }
+        Value::Uuid(bytes) => {
+            buf.push(0x07);
+            buf.extend_from_slice(bytes);
+        }
+        Value::Bytes(blob) => push_tag_u32_bytes(buf, 0x08, blob),
+        Value::Ref(eid) => {
+            buf.push(0x09);
+            buf.extend_from_slice(eid.as_bytes());
+        }
+        Value::BigInt(n) => {
+            buf.push(0x0A);
+            buf.extend_from_slice(&n.to_le_bytes());
+        }
+        Value::BigDec(n) => {
+            buf.push(0x0B);
+            buf.extend_from_slice(&n.to_le_bytes());
+        }
+    }
+}
+
+fn push_tag_u16_str(buf: &mut Vec<u8>, tag: u8, data: &[u8]) {
+    buf.push(tag);
+    let len = u16::try_from(data.len()).unwrap_or(u16::MAX);
+    buf.extend_from_slice(&len.to_le_bytes());
+    buf.extend_from_slice(data);
+}
+
+fn push_tag_u32_bytes(buf: &mut Vec<u8>, tag: u8, data: &[u8]) {
+    buf.push(tag);
+    let len = u32::try_from(data.len()).unwrap_or(u32::MAX);
+    buf.extend_from_slice(&len.to_le_bytes());
+    buf.extend_from_slice(data);
+}
+
+/// Parse a `Value` from canonical bytes. Returns the value and bytes consumed.
+fn parse_canonical_value(bytes: &[u8]) -> Result<(Value, usize), FerraError> {
+    if bytes.is_empty() {
+        return Err(FerraError::TruncatedChunk);
+    }
+    let tag = bytes[0];
+    let rest = &bytes[1..];
+    match tag {
+        0x01 | 0x02 | 0x08 => parse_varlen_value(tag, rest),
+        0x03..=0x07 | 0x09..=0x0B => parse_fixed_value(tag, rest),
+        _ => Err(FerraError::NonCanonicalChunk),
+    }
+}
+
+/// Parse variable-length value variants (Keyword u16, String u32, Bytes u32).
+fn parse_varlen_value(tag: u8, rest: &[u8]) -> Result<(Value, usize), FerraError> {
+    match tag {
+        0x01 => {
+            if rest.len() < 2 {
+                return Err(FerraError::TruncatedChunk);
+            }
+            let len = u16::from_le_bytes(
+                rest[..2]
+                    .try_into()
+                    .map_err(|_| FerraError::TruncatedChunk)?,
+            ) as usize;
+            if rest.len() < 2 + len {
+                return Err(FerraError::TruncatedChunk);
+            }
+            let s = core::str::from_utf8(&rest[2..2 + len])
+                .map_err(|_| FerraError::NonCanonicalChunk)?;
+            Ok((Value::Keyword(Arc::from(s)), 1 + 2 + len))
+        }
+        0x02 => {
+            if rest.len() < 4 {
+                return Err(FerraError::TruncatedChunk);
+            }
+            let len = u32::from_le_bytes(
+                rest[..4]
+                    .try_into()
+                    .map_err(|_| FerraError::TruncatedChunk)?,
+            ) as usize;
+            if rest.len() < 4 + len {
+                return Err(FerraError::TruncatedChunk);
+            }
+            let s = core::str::from_utf8(&rest[4..4 + len])
+                .map_err(|_| FerraError::NonCanonicalChunk)?;
+            Ok((Value::String(Arc::from(s)), 1 + 4 + len))
+        }
+        0x08 => {
+            if rest.len() < 4 {
+                return Err(FerraError::TruncatedChunk);
+            }
+            let len = u32::from_le_bytes(
+                rest[..4]
+                    .try_into()
+                    .map_err(|_| FerraError::TruncatedChunk)?,
+            ) as usize;
+            if rest.len() < 4 + len {
+                return Err(FerraError::TruncatedChunk);
+            }
+            Ok((Value::Bytes(Arc::from(&rest[4..4 + len])), 1 + 4 + len))
+        }
+        _ => Err(FerraError::NonCanonicalChunk),
+    }
+}
+
+/// Parse fixed-size value variants (Long, Double, Bool, Instant, Uuid, Ref, `BigInt`, `BigDec`).
+fn parse_fixed_value(tag: u8, rest: &[u8]) -> Result<(Value, usize), FerraError> {
+    match tag {
+        0x03 => read_i64(rest).map(|n| (Value::Long(n), 1 + 8)),
+        0x04 => {
+            let f = read_f64(rest)?;
+            let nnf = NonNanFloat::new(f).ok_or(FerraError::NonCanonicalChunk)?;
+            Ok((Value::Double(nnf), 1 + 8))
+        }
+        0x05 => {
+            if rest.is_empty() {
+                return Err(FerraError::TruncatedChunk);
+            }
+            Ok((Value::Bool(rest[0] != 0), 1 + 1))
+        }
+        0x06 => read_i64(rest).map(|n| (Value::Instant(n), 1 + 8)),
+        0x07 => {
+            if rest.len() < 16 {
+                return Err(FerraError::TruncatedChunk);
+            }
+            let mut uuid = [0u8; 16];
+            uuid.copy_from_slice(&rest[..16]);
+            Ok((Value::Uuid(uuid), 1 + 16))
+        }
+        0x09 => {
+            if rest.len() < 32 {
+                return Err(FerraError::TruncatedChunk);
+            }
+            let mut eid = [0u8; 32];
+            eid.copy_from_slice(&rest[..32]);
+            Ok((Value::Ref(EntityId::from_trusted_bytes(eid)), 1 + 32))
+        }
+        0x0A => read_i128(rest).map(|n| (Value::BigInt(n), 1 + 16)),
+        0x0B => read_i128(rest).map(|n| (Value::BigDec(n), 1 + 16)),
+        _ => Err(FerraError::NonCanonicalChunk),
+    }
+}
+
+fn read_i64(rest: &[u8]) -> Result<i64, FerraError> {
+    if rest.len() < 8 {
+        return Err(FerraError::TruncatedChunk);
+    }
+    Ok(i64::from_le_bytes(
+        rest[..8]
+            .try_into()
+            .map_err(|_| FerraError::TruncatedChunk)?,
+    ))
+}
+
+fn read_f64(rest: &[u8]) -> Result<f64, FerraError> {
+    if rest.len() < 8 {
+        return Err(FerraError::TruncatedChunk);
+    }
+    Ok(f64::from_le_bytes(
+        rest[..8]
+            .try_into()
+            .map_err(|_| FerraError::TruncatedChunk)?,
+    ))
+}
+
+fn read_i128(rest: &[u8]) -> Result<i128, FerraError> {
+    if rest.len() < 16 {
+        return Err(FerraError::TruncatedChunk);
+    }
+    Ok(i128::from_le_bytes(
+        rest[..16]
+            .try_into()
+            .map_err(|_| FerraError::TruncatedChunk)?,
+    ))
 }
 
 /// Hash a discriminant tag followed by length-prefixed variable-length bytes.

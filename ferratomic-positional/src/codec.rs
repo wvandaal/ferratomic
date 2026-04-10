@@ -323,15 +323,20 @@ pub fn framework_fingerprint(chunk: &DatomPairChunk) -> [u8; 32] {
 // ---------------------------------------------------------------------------
 
 /// Convert a `BTreeSet<Datom>` into a `DatomPairChunk` using the primary
-/// tree encoding: key = `content_hash` bytes, value = `content_hash` (32 bytes).
+/// tree encoding per `S23.9.0.2`:
+/// - key = `canonical_bytes(d)` (per `INV-FERR-086`, reversible)
+/// - value = `content_hash(d)` (32-byte BLAKE3 cross-reference)
+///
+/// VERIFY-DRIFT-003 root cause fix: switched from `content_hash` keys
+/// (one-way, preventing round-trip) to `canonical_bytes` keys (reversible,
+/// enabling `from_canonical_bytes` in `pair_chunk_to_datom_set`).
 fn datom_set_to_pair_chunk(datoms: &BTreeSet<Datom>) -> DatomPairChunk {
     let entries: Vec<(Vec<u8>, Vec<u8>)> = datoms
         .iter()
         .map(|d| {
-            let hash = d.content_hash();
-            // Key: content hash bytes (canonical ordering matches Datom's Ord)
-            // Value: same content hash (cross-reference per S23.9.0.2)
-            (hash.to_vec(), hash.to_vec())
+            let key = d.canonical_bytes();
+            let value = d.content_hash().to_vec();
+            (key, value)
         })
         .collect();
     DatomPairChunk::from_sorted_unchecked(entries)
@@ -346,24 +351,25 @@ fn datom_set_to_pair_chunk(datoms: &BTreeSet<Datom>) -> DatomPairChunk {
 /// For now, this returns an error indicating that full datom recovery
 /// requires the `canonical_bytes` key encoding (Phase 5 of session 023.5).
 ///
-/// **VERIFY-DRIFT-003**: The Lean T4 proof (`fingerprint_codec_invariant`)
-/// assumes working trait-level round-trip. Until this function is
-/// implemented, the trait-level `DatomPairCodec::decode` does not satisfy
-/// T1 (round-trip). The payload-level API (`encode_payload`/`decode_payload`)
-/// DOES round-trip correctly — only the `BTreeSet<Datom>` conversion is
-/// stubbed. To close this drift: implement `Datom::from_canonical_bytes`
-/// in ferratom and switch `datom_set_to_pair_chunk` to use `canonical_bytes`
-/// as the key (per S23.9.0.2), then implement this inverse.
-fn pair_chunk_to_datom_set(_chunk: &DatomPairChunk) -> Result<BTreeSet<Datom>, FerraError> {
-    // Content-hash keys are one-way — cannot reconstruct Datom from hash.
-    // The real implementation uses canonical_bytes as key (per S23.9.0.2),
-    // which IS reversible via Datom::from_canonical_bytes.
-    // This placeholder exists for the trait-level API; the payload-level
-    // API (encode_payload / decode_payload) works on DatomPairChunk
-    // directly and round-trips correctly.
-    Err(FerraError::NotImplemented(
-        "pair_chunk_to_datom_set requires canonical_bytes key encoding",
-    ))
+/// Inverse: rebuild a `BTreeSet<Datom>` from a `DatomPairChunk` by parsing
+/// each key as `canonical_bytes → Datom` (per `S23.9.0.3`).
+/// The value field (`content_hash`) is cross-reference only and is NOT used
+/// for reconstruction.
+///
+/// VERIFY-DRIFT-003 root cause fix: now functional (was a stub returning
+/// `NotImplemented`). Uses `Datom::from_canonical_bytes` to reverse the
+/// `canonical_bytes` encoding.
+///
+/// # Errors
+///
+/// Returns [`FerraError::TruncatedChunk`] or [`FerraError::NonCanonicalChunk`]
+/// if any key fails to parse as a valid canonical datom encoding.
+fn pair_chunk_to_datom_set(chunk: &DatomPairChunk) -> Result<BTreeSet<Datom>, FerraError> {
+    chunk
+        .entries()
+        .iter()
+        .map(|(key, _value)| Datom::from_canonical_bytes(key))
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
