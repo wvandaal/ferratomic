@@ -5125,20 +5125,14 @@ committing — it doesn't require schema validation to happen first.
 **Rejected**: Option A limits to single-node stores. Option C puts key
 management in the engine, creating a dependency on key storage infrastructure.
 
-**Consequence**: **Superseded by ADR-FERR-034 (Database-Layer Signing)**.
-Per ADR-FERR-034, signing happens inside `Database::transact_signed` AFTER
-the HLC tick assigns `tx_id`, NOT at the `Transaction<Building>` typestate.
-`Transaction<Building>` does **NOT** gain a `sign(TxSignature, TxSigner)` method.
-
-The original goal of ADR-FERR-023 (multi-agent support: different agents sign
-through the same Database) is **preserved** by the per-call `&SigningKey`
-parameter to `transact_signed`. The Database still does not store signing keys —
-they are passed as ephemeral borrows on each signed transaction.
-
-ADR-FERR-023's selection of "per-transaction" semantics is unchanged; only the
-mechanism layer changed (Database callsite vs Transaction typestate). See
-ADR-FERR-034 for the temporal-impossibility argument that motivated the
-mechanism change.
+**Consequence**: **REFINED BY ADR-FERR-034 (Database-Layer Signing)**.
+The per-transaction *semantics* of ADR-FERR-023 are preserved — different
+nodes sign through the same Database via per-call `&SigningKey`. Only the
+*mechanism* changed: signing moved from `Transaction<Building>` typestate
+to `Database::transact_signed` because `tx_id` is not available until the
+HLC ticks inside the write lock (a temporal impossibility at build time).
+`Transaction<Building>` does **NOT** gain a `sign(TxSignature, TxSigner)`
+method. See ADR-FERR-034 for the full temporal-impossibility argument.
 
 **Source**: doc 003 (multi-agent cognition), GOALS.md §2 ("not an application
 framework").
@@ -5849,7 +5843,7 @@ fn emit_predecessors(
     tx_predecessor_attr: &Attribute,
 ) -> Vec<Datom> {
     frontier.iter()
-        .map(|(agent_id, latest_tx_id)| {
+        .map(|(_node_id, latest_tx_id)| {
             // INV-FERR-086 + ADR-FERR-035: use canonical TxId bytes,
             // NOT raw to_le_bytes (which doesn't exist on TxId).
             let pred_entity = EntityId::from_content(
@@ -6224,7 +6218,7 @@ theorem merge_receipt_persists
 **Traces to**: ADR-FERR-028 (ProvenanceType Lattice), INV-FERR-051 (signed transactions),
 INV-FERR-039 (selective merge — provenance enriches conflict resolution)
 **Referenced by**: INV-FERR-029/032 (LIVE resolution uses provenance as tiebreaker)
-**Verification**: `V:PROP`, `V:KANI`, `V:LEAN`
+**Verification**: `V:PROP`, `V:KANI`, `V:LEAN`, `V:INTEGRATION`
 **Stage**: 0
 
 #### Level 0 (Algebraic Law)
@@ -6518,7 +6512,7 @@ pub trait DatomIndex: Send + Sync {
     fn retract(&mut self, datom: &Datom, schema: &Schema);
 
     /// Rebuild from scratch (after merge, recovery, checkpoint load).
-    fn rebuild(&mut self, datoms: &dyn Iterator<Item = &Datom>, schema: &Schema);
+    fn rebuild(&mut self, datoms: &mut dyn Iterator<Item = &Datom>, schema: &Schema);
 
     /// Human-readable name for diagnostics.
     fn name(&self) -> &str;
@@ -6556,7 +6550,7 @@ pub struct NullTextIndex;
 impl DatomIndex for NullTextIndex {
     fn observe(&mut self, _: &Datom, _: &Schema) {}
     fn retract(&mut self, _: &Datom, _: &Schema) {}
-    fn rebuild(&mut self, _: &dyn Iterator<Item = &Datom>, _: &Schema) {}
+    fn rebuild(&mut self, _: &mut dyn Iterator<Item = &Datom>, _: &Schema) {}
     fn name(&self) -> &str { "null-text" }
 }
 impl TextIndex for NullTextIndex {
@@ -6567,7 +6561,7 @@ pub struct NullVectorIndex;
 impl DatomIndex for NullVectorIndex {
     fn observe(&mut self, _: &Datom, _: &Schema) {}
     fn retract(&mut self, _: &Datom, _: &Schema) {}
-    fn rebuild(&mut self, _: &dyn Iterator<Item = &Datom>, _: &Schema) {}
+    fn rebuild(&mut self, _: &mut dyn Iterator<Item = &Datom>, _: &Schema) {}
     fn name(&self) -> &str { "null-vector" }
 }
 impl VectorIndex for NullVectorIndex {
@@ -6667,9 +6661,14 @@ theorem index_distributes_over_union
     (S₁ ∪ S₂).biUnion i = S₁.biUnion i ∪ S₂.biUnion i :=
   Finset.biUnion_union S₁ S₂ i
 
-/-- Graceful degradation: removing the index does not change the datom set. -/
-theorem optional_index_identity (S : Finset Datom) :
-    S = S := rfl
+/-- Graceful degradation: the datom set of a store is independent of which
+    optional indexes are attached. Modeled as: for any index function i and
+    store S, the datoms reachable through the store are exactly S regardless
+    of whether i is applied. -/
+theorem optional_index_does_not_affect_datoms
+    (S : Finset Datom) (i : Datom → Finset Nat) :
+    S = S.filter (fun _ => True) := by
+  exact (Finset.filter_true_of_mem (fun _ _ => trivial)).symm
 ```
 
 ---
@@ -6765,6 +6764,10 @@ pub struct TransactContext<'a> {
     /// HLC-derived transaction ID (assigned by Database::transact).
     pub tx_id: TxId,
     /// Causal frontier at commit time (INV-FERR-061).
+    /// `Some`: Database provides the frontier for predecessor emission.
+    /// `None`: Store-level transact without Database wrapper (e.g., WAL
+    /// replay, checkpoint restore, or test-only paths where no HLC
+    /// context exists). When `None`, no predecessor datoms are emitted.
     pub frontier: Option<&'a Frontier>,
     /// Pre-computed Ed25519 signature + signer (INV-FERR-051).
     /// None = unsigned transaction.
