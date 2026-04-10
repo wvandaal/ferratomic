@@ -19,6 +19,7 @@ ferratomic-store = { path = "../ferratomic-store" }
 im = { workspace = true }
 arc-swap = { workspace = true }
 blake3 = { workspace = true }
+ed25519-dalek = { workspace = true }
 bincode = { workspace = true }
 bitvec = { workspace = true }
 rayon = "1"

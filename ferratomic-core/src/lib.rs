@@ -229,6 +229,7 @@ pub use ferratomic_index as indexes;
 pub use ferratomic_store::merge;
 pub(crate) mod mmap;
 pub mod observer;
+pub mod signing;
 pub use ferratomic_positional as positional;
 pub(crate) mod snapshot;
 pub mod storage;

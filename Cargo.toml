@@ -36,6 +36,9 @@ serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
 zstd = "0.13"
 
+# Crypto: Ed25519 signing (INV-FERR-051)
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+
 # Async: asupersync is the primary runtime (ADR-FERR-002)
 # Pinned 2026-03-30 for reproducible builds.
 asupersync = { git = "https://github.com/Dicklesworthstone/asupersync.git", rev = "27da8095395a230044d7ce603665778ddf46fe00" }
