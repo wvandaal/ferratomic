@@ -60,6 +60,114 @@ pub trait Transport: Send + Sync {
     ) -> Pin<Box<dyn Future<Output = Result<Duration, FerraError>> + Send + 'a>>;
 }
 
+// ---------------------------------------------------------------------------
+// LocalTransport — in-process federation (INV-FERR-038)
+// ---------------------------------------------------------------------------
+
+use std::{collections::BTreeMap, sync::Arc};
+
+use crate::db::{Database, Ready};
+
+/// In-process transport backed by a local [`Database`].
+///
+/// INV-FERR-038: Transport transparency — `LocalTransport` implements the
+/// same `Transport` trait as network transports, making local and remote
+/// stores interchangeable in federation code.
+///
+/// All methods return immediately via `std::future::ready` (zero latency).
+pub struct LocalTransport {
+    db: Arc<Database<Ready>>,
+}
+
+impl LocalTransport {
+    /// Wrap a database in a `LocalTransport`.
+    #[must_use]
+    pub fn new(db: Arc<Database<Ready>>) -> Self {
+        Self { db }
+    }
+}
+
+impl Transport for LocalTransport {
+    fn fetch_datoms<'a>(
+        &'a self,
+        filter: &'a DatomFilter,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<Datom>, FerraError>> + Send + 'a>> {
+        let snap = self.db.snapshot();
+        let datoms: Vec<Datom> = snap
+            .datoms()
+            .filter(|d| filter.matches(d))
+            .cloned()
+            .collect();
+        Box::pin(std::future::ready(Ok(datoms)))
+    }
+
+    fn fetch_signed_transactions<'a>(
+        &'a self,
+        filter: &'a DatomFilter,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<SignedTransactionBundle>, FerraError>> + Send + 'a>>
+    {
+        let snap = self.db.snapshot();
+        let bundles = group_into_bundles(&snap, filter);
+        Box::pin(std::future::ready(Ok(bundles)))
+    }
+
+    fn schema<'a>(
+        &'a self,
+    ) -> Pin<Box<dyn Future<Output = Result<Schema, FerraError>> + Send + 'a>> {
+        Box::pin(std::future::ready(Ok(self.db.schema())))
+    }
+
+    fn frontier<'a>(
+        &'a self,
+    ) -> Pin<Box<dyn Future<Output = Result<Frontier, FerraError>> + Send + 'a>> {
+        Box::pin(std::future::ready(Ok(self.db.frontier())))
+    }
+
+    fn ping<'a>(
+        &'a self,
+    ) -> Pin<Box<dyn Future<Output = Result<Duration, FerraError>> + Send + 'a>> {
+        Box::pin(std::future::ready(Ok(Duration::ZERO)))
+    }
+}
+
+/// Group snapshot datoms into `SignedTransactionBundle` per `TxId`.
+///
+/// ADR-FERR-025: Transaction is the natural unit of federation.
+/// Datoms are grouped by their `TxId`, then each group is converted
+/// to a bundle via `SignedTransactionBundle::from_store_datoms`.
+fn group_into_bundles(
+    snap: &crate::store::Snapshot,
+    filter: &DatomFilter,
+) -> Vec<SignedTransactionBundle> {
+    // Group datoms by TxId. Include ALL datoms for a TxId if ANY
+    // user datom in that TxId matches the filter.
+    let mut groups: BTreeMap<ferratom::TxId, Vec<Datom>> = BTreeMap::new();
+
+    // First pass: identify TxIds with matching user datoms.
+    for datom in snap.datoms() {
+        if filter.matches(datom) {
+            groups.entry(datom.tx()).or_default().push(datom.clone());
+        }
+    }
+
+    // Second pass: collect tx/* metadata for accepted TxIds.
+    for datom in snap.datoms() {
+        if datom.attribute().as_str().starts_with("tx/") {
+            if let Some(group) = groups.get_mut(&datom.tx()) {
+                if !group.contains(datom) {
+                    group.push(datom.clone());
+                }
+            }
+        }
+    }
+
+    // Build bundles.
+    groups
+        .into_iter()
+        .map(|(tx_id, datoms)| SignedTransactionBundle::from_store_datoms(&datoms, tx_id))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

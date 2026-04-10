@@ -366,6 +366,16 @@ impl Database<Ready> {
         store.schema().clone()
     }
 
+    /// Causal frontier (INV-FERR-061).
+    ///
+    /// Returns an empty frontier until frontier tracking is wired into
+    /// the transact path. Phase 4a.5 uses this as a placeholder; Phase 4c
+    /// will maintain the frontier incrementally via `Frontier::advance`.
+    #[must_use]
+    pub fn frontier(&self) -> ferratom::Frontier {
+        ferratom::Frontier::new()
+    }
+
     /// Access the current epoch.
     ///
     /// INV-FERR-007: the epoch is strictly monotonically increasing.
