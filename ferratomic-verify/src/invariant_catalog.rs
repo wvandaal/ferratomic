@@ -86,13 +86,15 @@ impl Invariant {
     }
 }
 
-/// Invariant catalog: 70 entries (68 INV-FERR + 2 CI-FERR).
+/// Invariant catalog: 78 entries (76 INV-FERR + 2 CI-FERR).
 ///
-/// Covers INV-FERR-001 through INV-FERR-077 + INV-FERR-084 + CI-FERR-001-002.
-/// INV-FERR-078-083, 085 (spec/09 remaining) not yet cataloged.
-/// Order matches spec module order: 01-core, 02-concurrency, 03-performance,
-/// 04-decisions, 05-federation, 06-prolly, 07-refinement, 08-verification,
-/// 09-performance-architecture.
+/// Covers `INV-FERR-001` through `INV-FERR-077` plus sub-invariants
+/// `045a`, `045c`, `025b`, `086`, `060`..`063`, `084`, and `CI-FERR-001`..`002`.
+/// `INV-FERR-078`..`083`, `085` (spec/09 remaining) not yet cataloged.
+///
+/// Order: 01-core, 02-concurrency, 03-performance, 04-decisions,
+/// 05-federation (incl. Phase 4a.5), 06-prolly, 07-refinement,
+/// 08-verification, 09-performance-architecture.
 pub const CATALOG: &[Invariant] = &[
     // -----------------------------------------------------------------------
     // 01-core-invariants.md: INV-FERR-001..012 (Stage 0)
@@ -621,7 +623,8 @@ pub const CATALOG: &[Invariant] = &[
         type_level: None,
     },
     // -----------------------------------------------------------------------
-    // 06-prolly-tree.md: INV-FERR-045..050 (Stage 1)
+    // 06-prolly-tree.md: INV-FERR-045, 045a, 045c, 046..050 (Stage 1)
+    // Session 023.5-023.7 + verification audit (VERIFY-DRIFT-007..020 fixes)
     // -----------------------------------------------------------------------
     Invariant {
         id: "INV-FERR-045",
@@ -634,55 +637,83 @@ pub const CATALOG: &[Invariant] = &[
         integration_test: None,
         type_level: None,
     },
+    // VERIFY-DRIFT-018: INV-FERR-045a and 045c were missing from the catalog.
+    Invariant {
+        id: "INV-FERR-045a",
+        name: "DatomPair Reference Codec",
+        stage: Stage::Stage1,
+        lean_theorem: Some("datom_pair_roundtrip"),
+        proptest_fn: Some("datom_pair_payload_roundtrip"),
+        kani_harness: None,
+        stateright_model: None,
+        integration_test: None,
+        type_level: Some("DatomPairChunk validated constructor (sorted, deduplicated)"),
+    },
+    Invariant {
+        id: "INV-FERR-045c",
+        name: "Leaf Chunk Codec Conformance",
+        stage: Stage::Stage1,
+        lean_theorem: Some("conforming_implies_all_five"),
+        proptest_fn: Some("test_t1_empty_chunk_payload_round_trip"),
+        kani_harness: None,
+        stateright_model: None,
+        integration_test: None,
+        type_level: Some("LeafChunkCodec trait + LeafChunk closed-world enum dispatch"),
+    },
+    // VERIFY-DRIFT-011: Updated to richer ProllyTreeHistoryIndep.lean theorems.
     Invariant {
         id: "INV-FERR-046",
         name: "Prolly Tree History Independence",
         stage: Stage::Stage1,
-        lean_theorem: Some("history_independence"),
+        lean_theorem: Some("history_independence_perm"),
         proptest_fn: None,
         kani_harness: None,
         stateright_model: None,
         integration_test: None,
         type_level: None,
     },
+    // VERIFY-DRIFT-007: ProllyTreeDiff.lean exists, was None.
     Invariant {
         id: "INV-FERR-047",
         name: "O(d) Diff Complexity",
         stage: Stage::Stage1,
-        lean_theorem: None,
+        lean_theorem: Some("diff_identical_empty"),
         proptest_fn: None,
         kani_harness: None,
         stateright_model: None,
         integration_test: None,
         type_level: None,
     },
+    // VERIFY-DRIFT-008: ProllyTreeTransfer.lean exists, was None.
     Invariant {
         id: "INV-FERR-048",
         name: "Chunk-Based Federation Transfer",
         stage: Stage::Stage1,
-        lean_theorem: None,
+        lean_theorem: Some("transfer_minimal"),
         proptest_fn: None,
         kani_harness: None,
         stateright_model: None,
         integration_test: None,
         type_level: None,
     },
+    // VERIFY-DRIFT-009: Updated to richer ProllyTreeSnapshot.lean theorems.
     Invariant {
         id: "INV-FERR-049",
         name: "Snapshot = Root Hash",
         stage: Stage::Stage1,
-        lean_theorem: Some("snapshot_deterministic"),
+        lean_theorem: Some("rs_snapshot_roundtrip"),
         proptest_fn: None,
         kani_harness: None,
         stateright_model: None,
         integration_test: None,
         type_level: None,
     },
+    // VERIFY-DRIFT-010: ProllyTreeSubstrate.lean exists, was None.
     Invariant {
         id: "INV-FERR-050",
         name: "Block Store Substrate Independence",
         stage: Stage::Stage1,
-        lean_theorem: None,
+        lean_theorem: Some("substrate_independence"),
         proptest_fn: None,
         kani_harness: None,
         stateright_model: None,
@@ -742,6 +773,76 @@ pub const CATALOG: &[Invariant] = &[
         stage: Stage::Stage1,
         lean_theorem: Some("vkc_authentic"),
         proptest_fn: None,
+        kani_harness: None,
+        stateright_model: None,
+        integration_test: None,
+        type_level: None,
+    },
+    // -----------------------------------------------------------------------
+    // 05-federation.md §23.8.5: Phase 4a.5 Federation Foundations
+    // INV-FERR-060..063, 025b, 086 (mixed stages 0/1)
+    // -----------------------------------------------------------------------
+    Invariant {
+        id: "INV-FERR-060",
+        name: "Store Identity Persistence",
+        stage: Stage::Stage0,
+        lean_theorem: Some("identity_persists_merge"),
+        proptest_fn: None, // requires genesis_with_identity (bd-mklv)
+        kani_harness: None,
+        stateright_model: None,
+        integration_test: None,
+        type_level: None,
+    },
+    Invariant {
+        id: "INV-FERR-061",
+        name: "Causal Predecessor Completeness",
+        stage: Stage::Stage0,
+        lean_theorem: Some("predecessor_acyclic"),
+        proptest_fn: None, // requires emit_predecessors (bd-3t63)
+        kani_harness: None,
+        stateright_model: None,
+        integration_test: None,
+        type_level: None,
+    },
+    Invariant {
+        id: "INV-FERR-062",
+        name: "Merge Receipt Completeness",
+        stage: Stage::Stage0,
+        lean_theorem: Some("merge_receipt_present"),
+        proptest_fn: None, // requires selective_merge (bd-sup6)
+        kani_harness: None,
+        stateright_model: None,
+        integration_test: None,
+        type_level: None,
+    },
+    Invariant {
+        id: "INV-FERR-063",
+        name: "Provenance Lattice Total Order",
+        stage: Stage::Stage0,
+        lean_theorem: Some("provenance_total"),
+        proptest_fn: Some("inv_ferr_063_provenance_total_order"),
+        kani_harness: None,
+        stateright_model: None,
+        integration_test: None,
+        type_level: Some("ProvenanceType manual Ord via integer rank"),
+    },
+    Invariant {
+        id: "INV-FERR-025b",
+        name: "Universal Index Algebra & Graceful Degradation",
+        stage: Stage::Stage1,
+        lean_theorem: Some("index_distributes_over_union"),
+        proptest_fn: None, // Stage 1 — impl deferred to Phase 4b
+        kani_harness: None,
+        stateright_model: None,
+        integration_test: None,
+        type_level: None,
+    },
+    Invariant {
+        id: "INV-FERR-086",
+        name: "Canonical Datom Format Determinism",
+        stage: Stage::Stage0,
+        lean_theorem: None, // sorry for injectivity (bd-aqg9h scope)
+        proptest_fn: None, // requires canonical_bytes (not yet impl)
         kani_harness: None,
         stateright_model: None,
         integration_test: None,
@@ -1004,13 +1105,14 @@ pub fn invariants_without_test() -> Vec<&'static str> {
 mod tests {
     use super::*;
 
-    /// ADR-FERR-013: catalog must contain all 70 invariants (68 INV + 2 CI).
+    /// ADR-FERR-013: catalog must contain all 78 invariants (76 INV + 2 CI).
     ///
     /// Breakdown: 12 core (001-012) + 12 concurrency (013-024) +
     /// 8 performance (025-032) + 4 decisions (033-036) +
-    /// 8 federation (037-044) + 6 prolly (045-050) +
-    /// 5 VKN (051-055) + 4 verification (056-059) +
-    /// 9 perf-architecture (070-077, 084) + 2 CI-FERR (001-002).
+    /// 8 federation (037-044) + 6 Phase 4a.5 (060-063, 025b, 086) +
+    /// 8 prolly (045-050, 045a, 045c) + 5 VKN (051-055) +
+    /// 4 verification (056-059) + 9 perf-architecture (070-077, 084) +
+    /// 2 CI-FERR (001-002).
     /// Not yet cataloged: INV-FERR-078-083, 085.
     ///
     /// Update this count and breakdown if the spec adds or removes invariants.
@@ -1018,8 +1120,8 @@ mod tests {
     fn test_catalog_count() {
         assert_eq!(
             CATALOG.len(),
-            70,
-            "ADR-FERR-013: expected 70 invariants (68 INV-FERR + 2 CI-FERR), got {}",
+            78,
+            "ADR-FERR-013: expected 78 invariants (76 INV-FERR + 2 CI-FERR), got {}",
             CATALOG.len()
         );
     }
@@ -1043,16 +1145,16 @@ mod tests {
     fn test_coverage_by_stage() {
         let counts = coverage_by_stage();
 
-        // Stage 0: 46 original + 4 perf-architecture (070, 071, 072, 076) = 50
+        // Stage 0: 50 original + 5 Phase 4a.5 (060, 061, 062, 063, 086) = 55
         assert_eq!(
-            counts[0].2, 50,
-            "Stage 0 total: expected 50, got {}",
+            counts[0].2, 55,
+            "Stage 0 total: expected 55, got {}",
             counts[0].2
         );
-        // Stage 1: 14 original + 5 perf-architecture (073, 074, 075, 077, 084) = 19
+        // Stage 1: 19 original + 2 prolly codec (045a, 045c) + 1 Phase 4a.5 (025b) = 22
         assert_eq!(
-            counts[1].2, 19,
-            "Stage 1 total: expected 19, got {}",
+            counts[1].2, 22,
+            "Stage 1 total: expected 22, got {}",
             counts[1].2
         );
         // Stage 2: unchanged = 1

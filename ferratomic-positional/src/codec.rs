@@ -298,8 +298,19 @@ impl LeafChunk {
 #[must_use]
 pub fn framework_fingerprint(chunk: &DatomPairChunk) -> [u8; 32] {
     let mut acc = [0u8; 32];
-    for (key, _value) in chunk.entries() {
-        let h = blake3::hash(key);
+    for (key, value) in chunk.entries() {
+        // Hash the FULL entry (key ++ value), not just the key.
+        // Per INV-FERR-074 + INV-FERR-086: the per-datom hash is
+        // BLAKE3(canonical_bytes(d)), which encodes ALL five datom fields.
+        // In the DatomPair codec, key = canonical sort key, value =
+        // content_hash — both are part of the datom's canonical identity.
+        // VERIFY-DRIFT-002: prior code hashed only keys, creating a
+        // semantic mismatch with the Lean axiom frameworkFingerprint
+        // which operates on Finset Datom (the full datom).
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(key);
+        hasher.update(value);
+        let h = hasher.finalize();
         for (a, b) in acc.iter_mut().zip(h.as_bytes().iter()) {
             *a ^= b;
         }
@@ -334,6 +345,15 @@ fn datom_set_to_pair_chunk(datoms: &BTreeSet<Datom>) -> DatomPairChunk {
 ///
 /// For now, this returns an error indicating that full datom recovery
 /// requires the `canonical_bytes` key encoding (Phase 5 of session 023.5).
+///
+/// **VERIFY-DRIFT-003**: The Lean T4 proof (`fingerprint_codec_invariant`)
+/// assumes working trait-level round-trip. Until this function is
+/// implemented, the trait-level `DatomPairCodec::decode` does not satisfy
+/// T1 (round-trip). The payload-level API (`encode_payload`/`decode_payload`)
+/// DOES round-trip correctly — only the `BTreeSet<Datom>` conversion is
+/// stubbed. To close this drift: implement `Datom::from_canonical_bytes`
+/// in ferratom and switch `datom_set_to_pair_chunk` to use `canonical_bytes`
+/// as the key (per S23.9.0.2), then implement this inverse.
 fn pair_chunk_to_datom_set(_chunk: &DatomPairChunk) -> Result<BTreeSet<Datom>, FerraError> {
     // Content-hash keys are one-way — cannot reconstruct Datom from hash.
     // The real implementation uses canonical_bytes as key (per S23.9.0.2),

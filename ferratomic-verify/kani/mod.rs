@@ -115,6 +115,7 @@ pub(crate) mod helpers {
 mod anti_entropy;
 mod backpressure_bounds;
 mod clock;
+mod codec_conformance;
 mod crdt_laws;
 mod durability;
 mod error_exhaustiveness;

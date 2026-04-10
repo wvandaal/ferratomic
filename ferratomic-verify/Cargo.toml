@@ -9,6 +9,7 @@ description = "Formal verification suite: Lean 4 proofs, Stateright models, Kani
 [dependencies]
 ferratom = { path = "../ferratom", features = ["test-utils"] }
 ferratomic-db = { path = "../ferratomic-core", features = ["test-utils"] }
+ferratomic-positional = { path = "../ferratomic-positional", features = ["test-utils"] }
 proptest = { workspace = true }
 stateright = { workspace = true }
 ordered-float = { workspace = true }
