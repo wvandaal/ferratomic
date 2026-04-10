@@ -19,7 +19,7 @@ Phases 0-3 COMPLETE. **Phase 4a CLOSED 2026-04-08 at composite 9.55-9.57 / A+.**
 | 2: Tests (red phase) | DONE |
 | 3: Type definitions | DONE |
 | **4a: Core implementation** | **CLOSED at A+ 2026-04-08 (v0.4.0-gate)** |
-| **4a.5: Federation foundations** | **NEXT (diamond track 1)** |
+| **4a.5: Federation foundations** | **CLOSED 2026-04-10 (session 025)** |
 | **4b: Performance + canonical spec form** | **NEXT (diamond track 2)** |
 | 4c: Federation/transport | — |
 | 4d: Datalog query engine | — |
