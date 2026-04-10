@@ -1,6 +1,6 @@
 //! Schema: attribute definitions and validation types.
 //! INV-FERR-009: Schema validation at transact boundary.
-//! INV-FERR-031: Genesis determinism (19 axiomatic meta-schema attributes).
+//! INV-FERR-031: Genesis determinism (25 axiomatic meta-schema attributes).
 
 use std::{collections::BTreeMap, sync::Arc};
 
@@ -121,7 +121,7 @@ impl AttributeDef {
 /// The schema: an ordered mapping from attribute names to their definitions.
 ///
 /// INV-FERR-009: Schema-as-data. Schema evolution is a transaction.
-/// INV-FERR-031: Genesis creates 19 axiomatic attributes that bootstrap
+/// INV-FERR-031: Genesis creates 25 axiomatic attributes that bootstrap
 /// all subsequent schema definitions.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Schema {

@@ -312,7 +312,7 @@ proptest! {
 
     /// INV-FERR-031: Two independent genesis() calls produce identical stores.
     ///
-    /// Genesis determinism: the 19 axiomatic meta-schema attributes, empty
+    /// Genesis determinism: the 25 axiomatic meta-schema attributes, empty
     /// datom set, epoch 0, and genesis node are all fixed. Any deviation
     /// between two calls indicates non-determinism in schema construction.
     ///

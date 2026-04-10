@@ -846,7 +846,9 @@ pub const CATALOG: &[Invariant] = &[
         kani_harness: None,
         stateright_model: None,
         integration_test: None,
-        type_level: None,
+        type_level: Some(
+            "Fixed-layout TLV encoding with no padding — determinism by construction",
+        ),
     },
     // -----------------------------------------------------------------------
     // 08-verification-infrastructure.md: INV-FERR-056..059 (mixed stages 0/1/2)

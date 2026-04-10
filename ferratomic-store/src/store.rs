@@ -243,10 +243,10 @@ impl Store {
         })
     }
 
-    /// Deterministic genesis store with the 19 axiomatic meta-schema attributes.
+    /// Deterministic genesis store with the 25 axiomatic meta-schema attributes.
     ///
     /// INV-FERR-031: every call to `genesis()` produces an identical store.
-    /// The 19 attributes are the ONLY hardcoded elements in the engine.
+    /// The 25 attributes are the ONLY hardcoded elements in the engine.
     /// Every other attribute is defined by transacting datoms that reference
     /// these 19. This is the schema-as-data bootstrap (C3, C7).
     ///

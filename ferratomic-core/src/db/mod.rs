@@ -205,7 +205,7 @@ impl Database<Ready> {
     /// Create a new database from a genesis store (no WAL).
     ///
     /// INV-FERR-031: The initial store is deterministic -- identical on
-    /// every call. The genesis store contains the 19 axiomatic meta-schema
+    /// every call. The genesis store contains the 25 axiomatic meta-schema
     /// attributes and no datoms.
     ///
     /// Without a WAL, transactions are not durable across crashes. Use
