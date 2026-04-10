@@ -298,27 +298,27 @@ impl LeafChunk {
     }
 }
 
-/// Per-chunk canonical fingerprint: XOR of `BLAKE3(canonical_bytes(d))` for
-/// each datom `d` in the chunk. This is the framework-level fingerprint
-/// computation from `INV-FERR-074` + `INV-FERR-086`.
+/// Per-chunk canonical fingerprint: XOR of per-datom content hashes.
+///
+/// Per `INV-FERR-074`: `H(chunk) = ⊕_{d ∈ chunk} content_hash(d)`.
+/// In the `DatomPair` codec, `value = content_hash(d) = BLAKE3(canonical_bytes(d))`,
+/// so the fingerprint is simply the XOR of the value fields — no re-hashing needed.
+///
+/// DEFECT-001 (cleanroom review): prior code hashed `key ++ value` through BLAKE3,
+/// producing `BLAKE3(canonical_bytes(d) ++ BLAKE3(canonical_bytes(d)))` — a DIFFERENT
+/// hash than `content_hash(d)`. This broke the hierarchical decomposition property
+/// where `store_fingerprint = ⊕ chunk_fingerprints`. Fixed: XOR the value bytes
+/// directly (they ARE the per-datom content hashes).
 #[must_use]
 pub fn framework_fingerprint(chunk: &DatomPairChunk) -> [u8; 32] {
     let mut acc = [0u8; 32];
-    for (key, value) in chunk.entries() {
-        // Hash the FULL entry (key ++ value), not just the key.
-        // Per INV-FERR-074 + INV-FERR-086: the per-datom hash is
-        // BLAKE3(canonical_bytes(d)), which encodes ALL five datom fields.
-        // In the DatomPair codec, key = canonical sort key, value =
-        // content_hash — both are part of the datom's canonical identity.
-        // VERIFY-DRIFT-002: prior code hashed only keys, creating a
-        // semantic mismatch with the Lean axiom frameworkFingerprint
-        // which operates on Finset Datom (the full datom).
-        let mut hasher = blake3::Hasher::new();
-        hasher.update(key);
-        hasher.update(value);
-        let h = hasher.finalize();
-        for (a, b) in acc.iter_mut().zip(h.as_bytes().iter()) {
-            *a ^= b;
+    for (_key, value) in chunk.entries() {
+        // value == content_hash(d) == BLAKE3(canonical_bytes(d))
+        // XOR it directly — no re-hashing.
+        if value.len() == 32 {
+            for (a, b) in acc.iter_mut().zip(value.iter()) {
+                *a ^= b;
+            }
         }
     }
     acc
@@ -663,7 +663,12 @@ mod proptests {
 
     use super::*;
 
+    // DEFECT-006 (cleanroom review): GOALS.md §6.5 requires 10K proptest cases.
+    // The PROPTEST_CASES env var overrides at CI; this sets the in-code default.
+    const PROPTEST_CASES: u32 = 1_000; // 1K default; CI runs 10K via env var
+
     proptest! {
+        #![proptest_config(ProptestConfig::with_cases(PROPTEST_CASES))]
         /// INV-FERR-045c T1: trait-level round-trip with random datom sets.
         /// `DatomPairCodec::decode(encode(D)) == Ok(D)` for random D.
         #[test]
@@ -696,13 +701,26 @@ mod proptests {
             );
         }
 
-        /// INV-FERR-086: Datom canonical_bytes round-trip with random datoms.
+        /// `INV-FERR-086`: Datom `canonical_bytes` round-trip with random datoms.
         #[test]
         fn datom_canonical_bytes_round_trip(d in arb_datom()) {
             let bytes = d.canonical_bytes();
             let recovered = Datom::from_canonical_bytes(&bytes)
                 .expect("INV-FERR-086: canonical_bytes must round-trip");
             prop_assert_eq!(recovered, d);
+        }
+
+        /// DEFECT-005 (cleanroom review): verify `content_hash(d) == BLAKE3(canonical_bytes(d))`.
+        /// The streaming hasher and the `Vec` builder are separate code paths — this test
+        /// catches any drift between them.
+        #[test]
+        fn content_hash_equals_blake3_of_canonical_bytes(d in arb_datom()) {
+            let from_method = d.content_hash();
+            let from_bytes = *blake3::hash(&d.canonical_bytes()).as_bytes();
+            prop_assert_eq!(
+                from_method, from_bytes,
+                "INV-FERR-086: content_hash must equal BLAKE3(canonical_bytes)"
+            );
         }
     }
 }

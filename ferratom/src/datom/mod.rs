@@ -222,6 +222,12 @@ impl Datom {
         offset += vlen;
         let tx = parse_tx(bytes, &mut offset)?;
         let op = parse_op(bytes, &mut offset)?;
+        // DEFECT-002 (cleanroom review): reject trailing bytes.
+        // Without this, two distinct byte sequences can decode to the same
+        // Datom, violating parse injectivity and enabling adversarial input.
+        if offset != bytes.len() {
+            return Err(FerraError::TrailingBytes);
+        }
         Ok(Self {
             entity,
             attribute,
@@ -454,11 +460,18 @@ fn parse_fixed_value(tag: u8, rest: &[u8]) -> Result<(Value, usize), FerraError>
             let nnf = NonNanFloat::new(f).ok_or(FerraError::NonCanonicalChunk)?;
             Ok((Value::Double(nnf), 1 + 8))
         }
+        // DEFECT-004 (cleanroom review): only 0x00/0x01 are canonical Bool encodings.
+        // Accepting 0x02-0xFF as `true` creates 255 distinct encodings for the same
+        // value, breaking parse injectivity and enabling fingerprint divergence.
         0x05 => {
             if rest.is_empty() {
                 return Err(FerraError::TruncatedChunk);
             }
-            Ok((Value::Bool(rest[0] != 0), 1 + 1))
+            match rest[0] {
+                0x00 => Ok((Value::Bool(false), 1 + 1)),
+                0x01 => Ok((Value::Bool(true), 1 + 1)),
+                _ => Err(FerraError::NonCanonicalChunk),
+            }
         }
         0x06 => read_i64(rest).map(|n| (Value::Instant(n), 1 + 8)),
         0x07 => {
