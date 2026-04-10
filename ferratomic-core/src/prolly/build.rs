@@ -50,11 +50,12 @@ pub fn build_prolly_tree(
         let addr = *chunk.addr();
         chunk_store.put_chunk(&chunk)?;
 
-        let separator = group.first().map(|(k, _)| (*k).clone()).unwrap_or_default();
+        // group is guaranteed non-empty by split_at_boundaries
+        let separator = (*group[0].0).clone();
         leaf_addrs.push((separator, addr));
     }
 
-    build_internal_nodes(&leaf_addrs, chunk_store, pattern_width)
+    build_internal_nodes(&leaf_addrs, chunk_store, pattern_width, 1)
 }
 
 /// Split sorted key-value pairs into groups at boundary keys.
@@ -137,10 +138,13 @@ fn serialize_internal_chunk(
 }
 
 /// Build internal nodes recursively until a single root remains.
+///
+/// `level` tracks the tree depth: 1 = one above leaves, 2 = two above, etc.
 fn build_internal_nodes(
     child_addrs: &[(Vec<u8>, Hash)],
     chunk_store: &dyn ChunkStore,
     pattern_width: u32,
+    level: u8,
 ) -> Result<Hash, FerraError> {
     if child_addrs.len() == 1 {
         return Ok(child_addrs[0].1);
@@ -161,8 +165,6 @@ fn build_internal_nodes(
         groups.push(current);
     }
 
-    let level = 1u8;
-
     let mut next_level_addrs: Vec<(Vec<u8>, Hash)> = Vec::with_capacity(groups.len());
     for group in &groups {
         let serialized = serialize_internal_chunk(level, group)?;
@@ -170,11 +172,17 @@ fn build_internal_nodes(
         let addr = *chunk.addr();
         chunk_store.put_chunk(&chunk)?;
 
-        let separator = group.first().map(|(k, _)| k.clone()).unwrap_or_default();
+        // group is guaranteed non-empty by the split loop above
+        let separator = group[0].0.clone();
         next_level_addrs.push((separator, addr));
     }
 
-    build_internal_nodes(&next_level_addrs, chunk_store, pattern_width)
+    build_internal_nodes(
+        &next_level_addrs,
+        chunk_store,
+        pattern_width,
+        level.saturating_add(1),
+    )
 }
 
 /// Deserialize a leaf chunk back to key-value pairs.
@@ -404,5 +412,40 @@ mod tests {
         assert_eq!(addrs.len(), 2);
         assert_eq!(addrs[0], [0xAA; 32]);
         assert_eq!(addrs[1], [0xBB; 32]);
+    }
+
+    // DEFECT-003 regression tests: deserialization error paths
+    #[test]
+    fn test_deserialize_empty_input() {
+        assert!(matches!(
+            deserialize_leaf_chunk(&[]),
+            Err(FerraError::EmptyChunk)
+        ));
+    }
+
+    #[test]
+    fn test_deserialize_wrong_tag() {
+        assert!(matches!(
+            deserialize_leaf_chunk(&[0xFF, 0, 0, 0, 0]),
+            Err(FerraError::UnknownCodecTag(0xFF))
+        ));
+    }
+
+    #[test]
+    fn test_deserialize_truncated() {
+        // Tag byte only — missing count
+        assert!(matches!(
+            deserialize_leaf_chunk(&[0x01]),
+            Err(FerraError::TruncatedChunk)
+        ));
+    }
+
+    #[test]
+    fn test_deserialize_trailing_bytes() {
+        // Valid empty chunk (tag=0x01, count=0) + extra byte
+        assert!(matches!(
+            deserialize_leaf_chunk(&[0x01, 0, 0, 0, 0, 0xFF]),
+            Err(FerraError::TrailingBytes)
+        ));
     }
 }
