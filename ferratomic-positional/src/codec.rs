@@ -256,14 +256,18 @@ pub enum LeafChunk {
 
 impl LeafChunk {
     /// Encode to on-disk bytes: `[CODEC_TAG][payload]`.
+    /// Single allocation: the codec tag is prepended directly to the payload
+    /// buffer rather than copying into a second `Vec`.
     #[must_use]
     pub fn encode(&self) -> Vec<u8> {
         match self {
             Self::DatomPair(chunk) => {
-                let payload = DatomPairCodec::encode_payload(chunk);
-                let mut bytes = Vec::with_capacity(1 + payload.len());
-                bytes.push(DatomPairCodec::CODEC_TAG);
-                bytes.extend(payload);
+                // Build the payload, then insert the tag at the front.
+                // Vec::splice at index 0 is O(n) but avoids a second allocation.
+                // Alternative: have encode_payload take a &mut Vec and a starting offset.
+                // For the reference codec at ~30KB chunks, the memmove cost is negligible.
+                let mut bytes = DatomPairCodec::encode_payload(chunk);
+                bytes.insert(0, DatomPairCodec::CODEC_TAG);
                 bytes
             }
         }
@@ -341,7 +345,11 @@ fn datom_set_to_pair_chunk(datoms: &BTreeSet<Datom>) -> DatomPairChunk {
         .iter()
         .map(|d| {
             let key = d.canonical_bytes();
-            let value = d.content_hash().to_vec();
+            // Derive value from key: content_hash(d) == BLAKE3(canonical_bytes(d))
+            // (verified by proptest content_hash_equals_blake3_of_canonical_bytes).
+            // This avoids serializing each datom twice — the key already contains
+            // the canonical bytes, so hashing it once gives the content hash.
+            let value = blake3::hash(&key).as_bytes().to_vec();
             (key, value)
         })
         .collect();
@@ -663,9 +671,9 @@ mod proptests {
 
     use super::*;
 
-    // DEFECT-006 (cleanroom review): GOALS.md §6.5 requires 10K proptest cases.
-    // The PROPTEST_CASES env var overrides at CI; this sets the in-code default.
-    const PROPTEST_CASES: u32 = 1_000; // 1K default; CI runs 10K via env var
+    // GOALS.md §6.5: proptest confidence >= 99.97% at 10K cases.
+    // The PROPTEST_CASES env var can override; this sets the in-code default.
+    const PROPTEST_CASES: u32 = 10_000;
 
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(PROPTEST_CASES))]
