@@ -1,7 +1,7 @@
 # Ferratomic Continuation — Session 025
 
 > Generated: 2026-04-10
-> Last commit: `51c0bb1` "test(fuzz): add fuzz targets for canonical_bytes + codec payload"
+> Last commit: `418c7a8` "docs: session 024 closeout — QUICKSTART + continuation handoff"
 > Branch: main (synced with master)
 
 ## Read First
@@ -32,7 +32,14 @@
   (all 11 Value variants, with parse helpers factored under 50 LOC each)
 - 6 new FerraError variants (TruncatedChunk, TrailingBytes, NonCanonicalChunk, EmptyChunk,
   UnknownCodecTag, NotImplemented)
-- content_hash() unified with canonical_bytes by the other agent (session 024 Phase 4a.5)
+- content_hash() unified with canonical_bytes by the other agent (session 024 Phase 4a.5).
+  **CRITICAL context**: the other agent REWROTE `Datom::content_hash()` in
+  `ferratom/src/datom/mod.rs` to stream the INV-FERR-086 canonical format (u16 attr lengths,
+  0x01-0x0B value tags) instead of the old ad-hoc format (u64 attr lengths, 0-10 tags).
+  They also deleted 3 helper functions (hash_tagged_bytes, hash_tagged_fixed, hash_value)
+  and replaced them with canonical_value_hash + hash_tag_u16_str + hash_tag_u32_bytes.
+  The other agent's handoff is at `docs/prompts/sessions/2026-04-10-session-024-continuation.md`
+  (if it exists) — read it for the full scope of their Phase 4a.5 changes
 
 **Lean mechanization**:
 - 7 new .lean files (807 lines): ProllyTreeCodec, DatomPair, Foundation, HistoryIndep,
@@ -81,10 +88,12 @@
 
 ### Stopping Point
 
-**Exactly where I stopped**: All code is committed and pushed at `51c0bb1`. Working tree is
-clean (the other agent may have in-progress changes in other files — treat as normal per
-multi-agent rule). The codec implementation is functionally complete: trait, reference impl,
-tests, proptests, Kani harnesses, fuzz targets, Lean proofs.
+**Exactly where I stopped**: All code is committed and pushed at `418c7a8`. Working tree is
+clean for MY files. The other agent has in-progress changes in 9+ files (ferratom/src/datom/*,
+ferratom/src/error.rs, ferratomic-verify/integration/*, ferratomic-verify/kani/*) — treat
+these as normal per the multi-agent rule (do NOT stash, revert, or overwrite). The codec
+implementation is functionally complete: trait, reference impl, tests, proptests, Kani
+harnesses, fuzz targets, Lean proofs.
 
 **Last thing verified working**: `cargo test --package ferratomic-positional --lib codec` (23 pass),
 `cargo test --package ferratom --lib datom::tests::test_inv_ferr_086` (5 pass), fuzz crate
@@ -116,6 +125,19 @@ bv --robot-next   # Top pick with reasoning
   ferratom/src/provenance.rs, ferratomic-store/src/schema_evolution.rs)
 - Phase 4b prolly tree BUILDER (build_prolly_tree, split_at_boundaries) is the next
   implementation target after codec — uses the codec types as input
+
+### Alternative Tracks (if user doesn't want bd-b7pfg)
+
+1. **Phase 4b prolly tree builder** — implement `build_prolly_tree` in Rust using
+   the `LeafChunkCodec` trait + `DatomPairChunk` types from codec.rs. The spec algorithm
+   is fully authored in spec/06 (INV-FERR-046 Level 2).
+2. **spec/09 perf audit** — per the True North Roadmap (memory: `roadmap_audit_to_implementation.md`),
+   this was the original session 024 scope before the alien stack deep dive redirected us.
+3. **Lean proof completion** — mechanize the remaining axioms in ProllyTreeDatomPair.lean
+   (u32_le_roundtrip, datom_pair_roundtrip concrete proofs) and ProllyTreeDiff.lean
+   (diff_correct, diff_chunk_loads_bound).
+4. **Phase 4a.5 support** — the other agent may need help with federation implementation.
+   Check their status via `bv --robot-triage`.
 
 ## Hard Constraints
 
