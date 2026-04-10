@@ -88,6 +88,14 @@ queries, the evaluator fans out to all stores concurrently, collects per-store r
 and merges via set union. For non-monotonic queries, the evaluator materializes all
 stores into a single in-memory store, then evaluates locally.
 
+**V1 remote query boundary**: In V1, remote queries are filter-based — the 7
+`WireQueryExpr` variants (All, AttributeEq, EntityEq, ValueEq, And, Or, Not)
+defined in INV-FERR-038a. These are monotonic by CALM (filter is a monotone
+function over set union). Non-monotonic queries — joins, projections,
+aggregation, set difference — have no wire encoding in V1 and execute via
+full local materialization only. Wire encoding for non-monotonic queries is
+Phase 4d scope (Datalog query engine).
+
 #### Level 2 (Implementation Contract)
 ```rust
 /// A federation of datom stores, potentially heterogeneous in transport.
@@ -1156,8 +1164,13 @@ for a non-monotonic query, the entire query fails with `MaterializationIncomplet
 #### Level 2 (Implementation Contract)
 ```rust
 /// Per-store response metadata.
+/// INV-FERR-038: `latency` is caller-measured round-trip time (not a wire field).
+/// Server-side execution time, if needed, is carried in TransportResult metadata
+/// and is Phase 4c wire scope.
 pub struct StoreResponse {
     pub store_id: StoreId,
+    /// Caller-measured round-trip latency (wall clock from send to receive).
+    /// NOT a wire field — measured by the federation evaluator.
     pub latency: Duration,
     pub datom_count: usize,
     pub status: ResponseStatus,
@@ -1171,6 +1184,15 @@ pub enum ResponseStatus {
     Error(FerraError),
     /// Store was skipped (e.g., query didn't need this shard)
     Skipped,
+}
+
+/// Result from querying a single store (local or remote).
+/// This is the return type of Transport::query and query_store_with_timeout.
+pub struct TransportResult {
+    /// The datoms matching the query.
+    pub data: BTreeSet<Datom>,
+    /// Number of datoms in the result set.
+    pub datom_count: usize,
 }
 
 /// Federated query result with per-store metadata.
@@ -2008,22 +2030,9 @@ pub struct FederatedResult {
     pub partial: bool,
 }
 
-/// Per-store response metadata.
-pub struct StoreResponse {
-    pub store_id: StoreId,
-    pub latency: Duration,
-    pub datom_count: usize,
-    pub status: ResponseStatus,
-}
-
-/// Response status.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ResponseStatus {
-    Ok,
-    Timeout,
-    Error(String),
-    Skipped,
-}
+// StoreResponse and ResponseStatus: see canonical definitions in
+// INV-FERR-037 Level 2 above. Repeated here for code block completeness.
+// Canonical definition has INV-FERR-038 latency semantics documentation.
 
 /// Merge receipt from selective_merge.
 pub struct MergeReceipt {
@@ -2133,11 +2142,9 @@ These scenarios demonstrate selective merge (INV-FERR-039) in practice:
 
 ### §23.8.6: Security & Trust
 
-#### INV-FERR-043: Schema Compatibility Check
+#### INV-FERR-043: Schema Compatibility Check *(summary — canonical definition in §23.8.3)*
 
-**Traces to**: INV-FERR-009 (Schema Validation), INV-FERR-039 (Selective Merge)
-**Verification**: `V:PROP`
-**Stage**: 1
+**Stage**: 1 *(see canonical L0/L1/L2 definition at INV-FERR-043 in §23.8.3 above)*
 
 Before any merge (full or selective) between two stores, the schema compatibility
 MUST be verified. Compatibility means:
@@ -2181,11 +2188,9 @@ pub fn verify_schema_compatibility(
 (e.g., attribute `:task/priority` is `Long` in one store and `String` in another),
 producing a store with conflicting attribute definitions.
 
-#### INV-FERR-044: Namespace Isolation
+#### INV-FERR-044: Namespace Isolation *(summary — canonical definition in §23.8.3)*
 
-**Traces to**: INV-FERR-039 (Selective Merge), C8 (Substrate Independence)
-**Verification**: `V:PROP`
-**Stage**: 1
+**Stage**: 1 *(see canonical L0/L1/L2 definition at INV-FERR-044 in §23.8.3 above)*
 
 Selective merge can restrict to specific attribute namespaces, providing defense
 in depth against unintended knowledge transfer. The `AttributeNamespace` filter

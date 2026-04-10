@@ -5127,6 +5127,600 @@ theorem substrate_independence
 
 ---
 
+### INV-FERR-050b: Manifest CAS Correctness
+
+**Traces to**: INV-FERR-050 (Block Store Substrate Independence), INV-FERR-049
+(Snapshot = Root Hash), INV-FERR-008 (WAL Fsync Ordering)
+**Verification**: `V:PROP`, `V:KANI`
+**Stage**: 1
+
+#### Level 0 (Algebraic Law)
+
+```
+The manifest is a linearizable register: a single mutable value (the current
+RootSet hash) updated atomically.
+
+Let manifest_state : Time → Hash be the manifest value over time.
+
+T1 (Atomicity):
+  ∀ write w at time t: manifest_state transitions from old_hash to new_hash
+  in a single indivisible step. No reader observes a partial state between
+  old_hash and new_hash.
+
+T2 (Crash consistency):
+  ∀ crashes c at time t:
+    manifest_state(t+) ∈ {manifest_state(t-), new_hash}
+  A crash during a manifest update results in either the old or new value,
+  never a corrupted intermediate.
+
+Proof:
+  The write-temp → fsync-temp → rename protocol provides T1 on POSIX
+  filesystems: rename is atomic by POSIX specification. T2 follows because:
+  if crash before rename, the temp file is discarded (old manifest survives);
+  if crash after rename, the new manifest is durable (fsync guarantees the
+  temp file's contents are on disk before rename). The manifest register is
+  linearizable because rename is a single atomic operation that takes effect
+  at one point in time.
+```
+
+#### Level 1 (State Invariant)
+
+The manifest file stores the current RootSet hash (32 bytes) that identifies the
+latest checkpoint. Updates follow a crash-safe protocol:
+
+1. Write the new hash to a temporary file (manifest.tmp)
+2. fsync the temporary file (ensure bytes are on disk)
+3. Rename manifest.tmp → manifest (atomic on POSIX)
+
+If the process crashes at any point: before rename, the old manifest is intact;
+after rename, the new manifest is durable. No state is lost between manifest
+versions. Concurrent manifest updates are serialized by the filesystem's rename
+semantics — the last rename wins, and all prior renames' data is durable.
+
+#### Level 2 (Implementation Contract)
+
+```rust
+/// Update the manifest to point to a new RootSet hash.
+/// Write-temp → fsync → rename for crash safety.
+/// INV-FERR-050b: atomic, crash-consistent.
+pub fn update_manifest(manifest_path: &Path, new_hash: &Hash) -> Result<(), FerraError> {
+    let tmp_path = manifest_path.with_extension("tmp");
+
+    // Step 1: Write to temp file
+    let mut file = File::create(&tmp_path)?;
+    file.write_all(new_hash.as_bytes())?;
+
+    // Step 2: fsync temp (data is on disk before rename)
+    file.sync_all()?;
+
+    // Step 3: Atomic rename (POSIX guarantees)
+    std::fs::rename(&tmp_path, manifest_path)?;
+
+    Ok(())
+}
+
+/// Read the current manifest hash. Returns None if no manifest exists
+/// (fresh store — genesis state).
+pub fn read_manifest(manifest_path: &Path) -> Result<Option<Hash>, FerraError> {
+    match std::fs::read(manifest_path) {
+        Ok(bytes) if bytes.len() == 32 => {
+            let arr: [u8; 32] = bytes.try_into()
+                .map_err(|_| FerraError::InvalidManifestSize {
+                    expected: 32, actual: bytes.len()
+                })?;
+            Ok(Some(Hash::from(arr)))
+        }
+        Ok(bytes) => Err(FerraError::InvalidManifestSize {
+            expected: 32, actual: bytes.len()
+        }),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(FerraError::Io(e)),
+    }
+}
+```
+
+**Falsification**: Two concurrent manifest updates where one update's data is
+lost — i.e., update_manifest(H₁) and update_manifest(H₂) both return Ok, but
+read_manifest returns neither H₁ nor H₂ (returns a corrupted or stale value).
+
+**proptest strategy**:
+
+```rust
+proptest! {
+    #[test]
+    fn manifest_roundtrip(hash in any::<[u8; 32]>().prop_map(Hash::from)) {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("manifest");
+        update_manifest(&path, &hash).unwrap();
+        let read = read_manifest(&path).unwrap();
+        prop_assert_eq!(read, Some(hash),
+            "INV-FERR-050b: manifest must round-trip");
+    }
+}
+```
+
+**Lean theorem**:
+
+```lean
+/-- Manifest CAS is a linearizable register: read-after-write returns
+    the written value. -/
+theorem manifest_read_after_write (h : Hash) (s : ManifestState) :
+    read_manifest (update_manifest s h) = some h := sorry -- bd-18a
+```
+
+---
+
+### INV-FERR-050c: Journal Replayability
+
+**Traces to**: INV-FERR-050 (Block Store Substrate Independence), INV-FERR-050b
+(Manifest CAS), INV-FERR-014 (Recovery Correctness), INV-FERR-008 (WAL Fsync)
+**Verification**: `V:PROP`, `V:KANI`
+**Stage**: 1
+
+#### Level 0 (Algebraic Law)
+
+```
+The journal is an ordered sequence of ChunkWrite and RootUpdate records.
+
+Let J = [r₁, r₂, ..., rₘ] be a journal.
+Let replay(J, S₀) apply each record to initial ChunkStore state S₀:
+  - ChunkWrite(chunk): put_chunk(S, chunk) → S'
+  - RootUpdate(hash):  update_manifest(S, hash) → S'
+
+T1 (Replay correctness):
+  ∀ journal J, ∀ initial empty store S₀:
+    replay(J, S₀).manifest = last_root_update(J)  (if any)
+    ∧ ∀ RootUpdate(h) ∈ J: resolve(replay(J, S₀), h) succeeds
+      (all roots referenced by RootUpdates are resolvable after replay)
+
+T2 (Ordering):
+  ∀ RootUpdate(h) at position i in J:
+    ∀ chunks c reachable from h: ∃ ChunkWrite(c) at position j < i in J
+    ∨ c was already in S₀
+  (Every chunk referenced by a root update was written before the update.)
+
+T3 (Idempotency):
+  replay(J, replay(J, S₀)) = replay(J, S₀)
+  (Replaying twice produces the same state — put_chunk is idempotent by
+  content-addressing.)
+
+Proof:
+  T1: replay processes records sequentially. The last RootUpdate sets the
+  manifest. All ChunkWrites preceding it ensure the chunks are present.
+  T2: the writer emits ChunkWrites before the RootUpdate that references
+  them — this is the WAL-before-manifest discipline, analogous to
+  INV-FERR-008's WAL-before-checkpoint.
+  T3: put_chunk is idempotent (content-addressed, same hash → same content).
+  update_manifest is idempotent (writing the same hash twice is a no-op).
+```
+
+#### Level 1 (State Invariant)
+
+The journal records chunk writes and root updates in the order they occurred.
+Replaying the journal from an empty store reconstructs a valid chunk store where
+all root hashes are resolvable. The writer MUST emit all ChunkWrite records for
+a tree's chunks BEFORE the corresponding RootUpdate — this is the ordering
+invariant that makes replay correct. If the process crashes mid-journal-write,
+replay processes only the complete records (partial records are detected by
+length/CRC and discarded), which may leave the manifest at an older root or
+at no root (genesis state). No data is silently corrupted.
+
+#### Level 2 (Implementation Contract)
+
+```rust
+/// Journal record types.
+#[derive(Debug, Clone)]
+pub enum JournalRecord {
+    /// A chunk was written to the store. Must precede any RootUpdate that
+    /// references this chunk or any chunk reachable from it.
+    ChunkWrite { chunk: Chunk },
+    /// The manifest root was updated. All chunks reachable from `hash`
+    /// must have been written via ChunkWrite records earlier in the journal.
+    RootUpdate { hash: Hash },
+}
+
+/// Replay a journal from an initial (typically empty) chunk store state.
+/// Applies records in order. Returns the final manifest hash (if any).
+///
+/// INV-FERR-050c: replay is idempotent and ordering-safe.
+pub fn replay_journal(
+    journal: &[JournalRecord],
+    chunk_store: &dyn ChunkStore,
+    manifest_path: &Path,
+) -> Result<Option<Hash>, FerraError> {
+    let mut latest_root: Option<Hash> = None;
+
+    for record in journal {
+        match record {
+            JournalRecord::ChunkWrite { chunk } => {
+                chunk_store.put_chunk(chunk)?;
+            }
+            JournalRecord::RootUpdate { hash } => {
+                update_manifest(manifest_path, hash)?;
+                latest_root = Some(hash.clone());
+            }
+        }
+    }
+
+    Ok(latest_root)
+}
+```
+
+**Falsification**: A RootUpdate(h) record at position i in the journal where
+some chunk c reachable from h has no ChunkWrite(c) record at any position j < i.
+After replay, resolve(store, h) fails with ChunkNotFound.
+
+**proptest strategy**:
+
+```rust
+proptest! {
+    #[test]
+    fn journal_replay_correct(
+        kvs in prop::collection::btree_map(
+            prop::collection::vec(any::<u8>(), 1..32),
+            prop::collection::vec(any::<u8>(), 1..32),
+            1..50,
+        ),
+    ) {
+        let store = MemoryChunkStore::new();
+        let root = build_prolly_tree(&kvs, &store, 8).unwrap();
+
+        // Build journal from the store's chunk set
+        let journal: Vec<JournalRecord> = store.all_chunks().unwrap()
+            .into_iter()
+            .map(|c| JournalRecord::ChunkWrite { chunk: c })
+            .chain(std::iter::once(JournalRecord::RootUpdate { hash: root.clone() }))
+            .collect();
+
+        // Replay into a fresh store
+        let fresh_store = MemoryChunkStore::new();
+        let dir = tempdir().unwrap();
+        let manifest = dir.path().join("manifest");
+        replay_journal(&journal, &fresh_store, &manifest).unwrap();
+
+        // Verify round-trip
+        let resolved = read_prolly_tree(&root, &fresh_store).unwrap();
+        prop_assert_eq!(resolved, kvs,
+            "INV-FERR-050c: journal replay must reconstruct original data");
+    }
+}
+```
+
+**Lean theorem**:
+
+```lean
+/-- Journal replay is idempotent: replaying the same journal twice
+    produces the same chunk store state. -/
+theorem replay_idempotent (J : List JournalRecord) (S₀ : ChunkStore) :
+    replay J (replay J S₀) = replay J S₀ := sorry -- bd-18a
+```
+
+---
+
+### INV-FERR-050d: GC Safety (No Reachable Chunk Collected)
+
+**Traces to**: INV-FERR-050 (Block Store Substrate Independence), INV-FERR-049
+(Snapshot = Root Hash), INV-FERR-006 (Snapshot Isolation — ArcSwap readers)
+**Verification**: `V:PROP`, `V:MODEL`
+**Stage**: 1
+
+#### Level 0 (Algebraic Law)
+
+```
+Let retained : Set Hash be the set of root hashes that must remain resolvable
+(current manifest root + any root held by an active reader via ArcSwap).
+
+Let reachable(R) = { c : Chunk | c is transitively referenced from any h ∈ R }
+  (transitive closure of the chunk reference graph starting from retained roots).
+
+Let collected : Set Hash be the set of chunk addresses deleted by GC.
+
+T1 (Safety):
+  reachable(retained) ∩ collected = ∅
+  (No chunk reachable from any retained root is ever collected.)
+
+T2 (Liveness):
+  collected ⊆ stored \ reachable(retained)
+  (Only unreachable chunks are collected.)
+
+T3 (Idempotency):
+  gc(gc(S, retained)) = gc(S, retained)
+  (Running GC twice with the same retained set is the same as running once.)
+
+Proof:
+  The GC algorithm has two phases:
+  Phase 1 (Mark): BFS/DFS from all roots in `retained`, collecting the set
+    `reachable(retained)`.
+  Phase 2 (Sweep): Delete all chunks in `stored \ reachable(retained)`.
+  T1: by construction — sweep deletes only addresses NOT in reachable.
+  T2: by construction — sweep deletes exactly stored \ reachable.
+  T3: after GC, stored = reachable(retained). A second GC finds nothing to
+    delete. Idempotent by stored = reachable being a fixed point of sweep.
+```
+
+#### Level 1 (State Invariant)
+
+Garbage collection deletes chunks that are no longer reachable from any retained
+root hash. The retained set includes:
+
+1. The current manifest root (latest checkpoint)
+2. Any root held by an active reader (ArcSwap snapshot references, INV-FERR-006)
+3. Any application-pinned roots (e.g., historical snapshots kept for audit)
+
+GC NEVER deletes a chunk that is reachable from any retained root. After GC,
+all retained roots remain fully resolvable — `resolve(store, root)` succeeds
+for every root in the retained set. Concurrent readers holding ArcSwap
+references are safe: their snapshot roots are included in the retained set,
+so their chunks survive GC.
+
+#### Level 2 (Implementation Contract)
+
+```rust
+/// Garbage-collect unreachable chunks from a chunk store.
+/// INV-FERR-050d: reachable(retained) ∩ collected = ∅.
+pub fn gc(
+    chunk_store: &dyn ChunkStore,
+    retained_roots: &[Hash],
+) -> Result<GcResult, FerraError> {
+    // Phase 1: Mark — BFS from all retained roots
+    let mut reachable: HashSet<Hash> = HashSet::new();
+    let mut queue: VecDeque<Hash> = retained_roots.iter().cloned().collect();
+
+    while let Some(addr) = queue.pop_front() {
+        if !reachable.insert(addr.clone()) {
+            continue; // already visited
+        }
+        if let Some(chunk) = chunk_store.get_chunk(&addr)? {
+            let children = decode_child_addrs(&chunk)?;
+            for child in children {
+                if !reachable.contains(&child) {
+                    queue.push_back(child);
+                }
+            }
+        }
+    }
+
+    // Phase 2: Sweep — delete only unreachable chunks
+    let all_addrs = chunk_store.all_addrs()?;
+    let mut collected = 0u64;
+    for addr in &all_addrs {
+        if !reachable.contains(addr) {
+            chunk_store.delete_chunk(addr)?;
+            collected += 1;
+        }
+    }
+
+    Ok(GcResult { reachable: reachable.len() as u64, collected })
+}
+
+#[derive(Debug)]
+pub struct GcResult {
+    pub reachable: u64,
+    pub collected: u64,
+}
+```
+
+**Falsification**: A root hash h is in the retained set, GC runs, and
+`resolve(store, h)` subsequently fails with `ChunkNotFound`. This would mean
+a reachable chunk was incorrectly collected.
+
+**proptest strategy**:
+
+```rust
+proptest! {
+    #[test]
+    fn gc_preserves_retained(
+        kvs1 in prop::collection::btree_map(
+            prop::collection::vec(any::<u8>(), 1..16),
+            prop::collection::vec(any::<u8>(), 1..16),
+            1..30,
+        ),
+        kvs2 in prop::collection::btree_map(
+            prop::collection::vec(any::<u8>(), 1..16),
+            prop::collection::vec(any::<u8>(), 1..16),
+            1..30,
+        ),
+    ) {
+        let store = MemoryChunkStore::new();
+        let root1 = build_prolly_tree(&kvs1, &store, 8).unwrap();
+        let root2 = build_prolly_tree(&kvs2, &store, 8).unwrap();
+
+        // GC retaining both roots
+        gc(&store, &[root1.clone(), root2.clone()]).unwrap();
+
+        // Both must still resolve
+        let resolved1 = read_prolly_tree(&root1, &store).unwrap();
+        let resolved2 = read_prolly_tree(&root2, &store).unwrap();
+        prop_assert_eq!(resolved1, kvs1, "INV-FERR-050d: root1 must survive GC");
+        prop_assert_eq!(resolved2, kvs2, "INV-FERR-050d: root2 must survive GC");
+
+        // GC retaining only root2
+        gc(&store, &[root2.clone()]).unwrap();
+
+        // root2 must still resolve
+        let resolved2_after = read_prolly_tree(&root2, &store).unwrap();
+        prop_assert_eq!(resolved2_after, kvs2,
+            "INV-FERR-050d: root2 must survive GC when root1 is released");
+    }
+}
+```
+
+**Lean theorem**:
+
+```lean
+/-- GC safety: no chunk reachable from a retained root is collected. -/
+theorem gc_safety (retained : Finset Hash) (store : ChunkStore)
+    (h_root : ∀ r ∈ retained, resolvable store r) :
+    ∀ r ∈ retained, resolvable (gc store retained) r := sorry -- bd-26q
+```
+
+---
+
+### INV-FERR-050e: Prolly Tree Recovery Roundtrip
+
+**Traces to**: INV-FERR-049 (Snapshot = Root Hash), INV-FERR-050b (Manifest CAS),
+INV-FERR-050c (Journal Replayability), INV-FERR-013 (Checkpoint Equivalence —
+Phase 4a analogue)
+**Verification**: `V:PROP`
+**Stage**: 1
+
+#### Level 0 (Algebraic Law)
+
+```
+Let checkpoint : Store → (ManifestHash, ChunkStore)
+  Build prolly trees for all five indexes, store chunks, write manifest.
+
+Let recover : (ManifestHash, ChunkStore) → Store
+  Load manifest → resolve RootSet → walk trees → deserialize leaf chunks
+  → rebuild im::OrdMap primary + 4 secondary indexes.
+
+T1 (Lossless roundtrip):
+  ∀ stores S: recover(checkpoint(S)).datoms = S.datoms
+
+T2 (Index preservation):
+  ∀ stores S, ∀ index I ∈ {EAVT, AEVT, VAET, AVET}:
+    recover(checkpoint(S)).index(I) = S.index(I)
+
+T3 (Journal extension):
+  ∀ stores S, ∀ journal entries J after checkpoint:
+    recover(checkpoint(S), J).datoms = replay(J, S).datoms
+  (Journal entries written after the checkpoint are replayed during recovery.)
+
+T4 (Idempotency):
+  recover(checkpoint(recover(checkpoint(S)))) = recover(checkpoint(S))
+  (Recovery of a recovered-and-recheckpointed store is idempotent.)
+
+Proof:
+  T1: checkpoint serializes each datom's canonical key into a leaf chunk
+  (INV-FERR-045a). recover deserializes each leaf chunk back to datoms
+  (INV-FERR-045a round-trip). Content-addressing ensures no chunk is lost
+  or duplicated. The primary datom set is reconstructed by union of all
+  leaf chunk contents.
+  T2: follows from T1 + INV-FERR-005 (index bijection): the secondary
+  indexes are deterministic functions of the primary datom set.
+  T3: journal replay (INV-FERR-050c) applies ChunkWrite + RootUpdate records
+  sequentially, producing a store state that includes both checkpoint data
+  and journal-recorded transactions.
+  T4: follows from T1 + T2 being identity functions (roundtrip is lossless).
+```
+
+#### Level 1 (State Invariant)
+
+For all stores S: checkpointing to a prolly tree and recovering from the
+checkpoint produces an identical store. This is INV-FERR-013 (Checkpoint
+Equivalence) lifted from the Phase 4a flat-file format to the Phase 4b prolly
+tree format. The roundtrip path is:
+
+1. **Checkpoint**: for each index, build a prolly tree (INV-FERR-046), serialize
+   leaf chunks (INV-FERR-045a), store chunks in ChunkStore (INV-FERR-050), write
+   manifest with RootSet (INV-FERR-049).
+2. **Recovery**: read manifest (INV-FERR-050b), resolve RootSet (INV-FERR-049),
+   walk each tree from root to leaves, deserialize leaf chunks, rebuild
+   im::OrdMap for primary + 4 secondary indexes.
+3. **Journal replay**: if journal entries exist after the checkpoint epoch,
+   replay them (INV-FERR-050c) to bring the store to the latest state.
+
+Edge cases:
+- **Missing chunk**: recovery fails with `FerraError::ChunkNotFound`. No silent
+  data loss — a missing chunk is a fatal corruption, not a graceful degradation.
+- **Stale manifest**: manifest points to a root no longer in the chunk store.
+  Fails with `ChunkNotFound`. This can only happen after GC (INV-FERR-050d) if
+  the manifest root was not retained.
+- **Interrupted recovery**: recovery is idempotent (T4). Restarting from the
+  same manifest produces the same result.
+
+#### Level 2 (Implementation Contract)
+
+```rust
+/// Recover a Store from a prolly tree checkpoint.
+/// INV-FERR-050e: recover(checkpoint(S)).datoms = S.datoms.
+pub fn recover_from_prolly(
+    manifest_path: &Path,
+    chunk_store: &dyn ChunkStore,
+    journal: &[JournalRecord],
+) -> Result<Store, FerraError> {
+    // Step 1: Read manifest
+    let manifest_hash = read_manifest(manifest_path)?
+        .ok_or(FerraError::NoManifest)?;
+
+    // Step 2: Resolve RootSet (INV-FERR-049)
+    let snapshot = Snapshot::from_manifest(manifest_hash, TxId::default());
+    let root_set = snapshot.resolve_root_set(chunk_store)?;
+
+    // Step 3: Walk each tree, collect datoms
+    let primary_kvs = read_prolly_tree(&root_set.primary, chunk_store)?;
+
+    // Step 4: Decode datoms from primary tree keys (S23.9.0.3)
+    let datoms: Vec<Datom> = primary_kvs.keys()
+        .map(|key| Datom::from_canonical_bytes(key))
+        .collect::<Result<_, _>>()?;
+
+    // Step 5: Build Store from datoms
+    let mut store = Store::empty();
+    for datom in datoms {
+        store = store.assert_datom(datom)?;
+    }
+
+    // Step 6: Replay journal entries after checkpoint
+    for record in journal {
+        match record {
+            JournalRecord::ChunkWrite { chunk } => {
+                chunk_store.put_chunk(chunk)?;
+            }
+            JournalRecord::RootUpdate { .. } => {
+                // Journal root updates are informational during recovery;
+                // the store state is built from datom assertion above.
+            }
+        }
+    }
+
+    Ok(store)
+}
+```
+
+**Falsification**: A store S where `recover(checkpoint(S)).datoms ≠ S.datoms` —
+i.e., some datom is lost, duplicated, or corrupted by the checkpoint/recovery
+roundtrip.
+
+**proptest strategy**:
+
+```rust
+proptest! {
+    #[test]
+    fn prolly_recovery_roundtrip(
+        datoms in prop::collection::vec(arb_datom(), 1..100),
+    ) {
+        let store = Store::from_datoms(&datoms).unwrap();
+        let chunk_store = MemoryChunkStore::new();
+        let dir = tempdir().unwrap();
+        let manifest = dir.path().join("manifest");
+
+        // Checkpoint
+        let root = checkpoint_to_prolly(&store, &chunk_store, &manifest, 8).unwrap();
+
+        // Recover
+        let recovered = recover_from_prolly(&manifest, &chunk_store, &[]).unwrap();
+
+        // Verify lossless roundtrip
+        prop_assert_eq!(
+            recovered.datoms().collect::<BTreeSet<_>>(),
+            store.datoms().collect::<BTreeSet<_>>(),
+            "INV-FERR-050e T1: recovery must produce identical datom set"
+        );
+    }
+}
+```
+
+**Lean theorem**:
+
+```lean
+/-- Prolly tree recovery roundtrip: recover(checkpoint(S)) = S. -/
+theorem prolly_recovery_roundtrip (S : DatomStore) :
+    recover (checkpoint S) = S := sorry -- bd-39r
+```
+
+---
+
 ### S23.9.1: Prolly Tree Architecture
 
 The prolly tree (probabilistic B-tree) is a content-addressed, history-independent

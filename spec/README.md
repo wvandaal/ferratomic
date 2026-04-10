@@ -3,7 +3,7 @@
 > **These files are the CANONICAL specification.**
 
 Formal specification using DDIS methodology (INV/ADR/NEG).
-89 invariants (incl. 025b, 045a, 045c, 046a, 086), 32 ADRs, 7 negative cases, 2 coupling invariants.
+93 invariants (incl. 025b, 045a, 045c, 046a, 050b, 050c, 050d, 050e, 086), 32 ADRs, 7 negative cases, 2 coupling invariants.
 
 **Implementation note**: Spec Level 2 contracts use `BTreeSet`/`BTreeMap` as conceptual
 illustrations. The actual implementation uses `im::OrdSet`/`im::OrdMap` per ADR-FERR-001.
