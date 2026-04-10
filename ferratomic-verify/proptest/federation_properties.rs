@@ -289,6 +289,63 @@ proptest! {
 // Requires: selective_merge (bd-sup6)
 // Tests: 4 receipt datoms present, transferred count accurate
 
-// INV-FERR-086: Canonical Datom Format Determinism
-// Requires: Datom::canonical_bytes (not yet implemented)
-// Tests: determinism (same datom → same bytes), injectivity (d1 != d2 → bytes differ)
+// INV-FERR-086: Canonical Datom Format Determinism — NOW IMPLEMENTED
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(10_000))]
+
+    /// INV-FERR-086: Round-trip — `from_canonical_bytes(canonical_bytes(d)) == Ok(d)`.
+    #[test]
+    fn inv_ferr_086_canonical_bytes_round_trip(d in arb_datom()) {
+        let bytes = d.canonical_bytes();
+        let recovered = Datom::from_canonical_bytes(&bytes);
+        prop_assert!(
+            recovered.is_ok(),
+            "INV-FERR-086: canonical_bytes must round-trip"
+        );
+        prop_assert_eq!(
+            recovered.as_ref(), Ok(&d),
+            "INV-FERR-086: round-trip must preserve the datom"
+        );
+    }
+
+    /// INV-FERR-086: Determinism — same datom produces same bytes.
+    #[test]
+    fn inv_ferr_086_canonical_bytes_deterministic(d in arb_datom()) {
+        let b1 = d.canonical_bytes();
+        let b2 = d.canonical_bytes();
+        prop_assert_eq!(
+            b1, b2,
+            "INV-FERR-086: canonical_bytes must be deterministic"
+        );
+    }
+
+    /// INV-FERR-086: Injectivity — different datoms produce different bytes.
+    #[test]
+    fn inv_ferr_086_canonical_bytes_injective(
+        d1 in arb_datom(),
+        d2 in arb_datom(),
+    ) {
+        if d1 != d2 {
+            prop_assert_ne!(
+                d1.canonical_bytes(), d2.canonical_bytes(),
+                "INV-FERR-086: distinct datoms must produce distinct bytes"
+            );
+        }
+    }
+
+    /// INV-FERR-086 + INV-FERR-012: content_hash is deterministic and
+    /// consistent with datom equality — equal datoms produce equal hashes,
+    /// and canonical_bytes round-trip preserves the hash.
+    #[test]
+    fn inv_ferr_086_content_hash_consistent_with_canonical_bytes(d in arb_datom()) {
+        // Round-trip through canonical_bytes must preserve content_hash
+        let original_hash = d.content_hash();
+        let recovered = Datom::from_canonical_bytes(&d.canonical_bytes())
+            .expect("INV-FERR-086: round-trip");
+        let recovered_hash = recovered.content_hash();
+        prop_assert_eq!(
+            original_hash, recovered_hash,
+            "INV-FERR-086: content_hash must be preserved through canonical_bytes round-trip"
+        );
+    }
+}

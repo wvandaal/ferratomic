@@ -1033,17 +1033,14 @@ impl StoreFingerprint {
     ///
     /// Returns `FerraError` if datom serialization fails (should not happen
     /// for well-formed datoms, but NEG-FERR-001 forbids unwrap).
-    pub fn insert(&mut self, datom: &Datom) -> Result<(), FerraError> {
-        let serialized = bincode::serialize(datom)
-            .map_err(|e| FerraError::InvariantViolation {
-                invariant: "INV-FERR-074".to_string(),
-                details: format!("datom serialization failed: {e}"),
-            })?;
-        let hash = blake3::hash(&serialized);
-        for (a, b) in self.0.iter_mut().zip(hash.as_bytes()) {
+    pub fn insert(&mut self, datom: &Datom) {
+        // INV-FERR-086: use canonical_bytes (not bincode) for cross-implementation
+        // reproducibility. content_hash() streams the canonical format into BLAKE3
+        // without intermediate allocation.
+        let hash = datom.content_hash();
+        for (a, b) in self.0.iter_mut().zip(hash.iter()) {
             *a ^= b;
         }
-        Ok(())
     }
 
     /// Combine two fingerprints (for merge verification).
@@ -2117,9 +2114,9 @@ impl ChunkFingerprints {
 
         for (pos, datom) in canonical.iter().enumerate() {
             let chunk_idx = pos / chunk_size;
-            let hash = blake3::hash(&bincode::serialize(datom)
-                .expect("datom serialization is infallible"));
-            for (a, b) in chunks[chunk_idx].iter_mut().zip(hash.as_bytes()) {
+            // INV-FERR-086: use content_hash (= BLAKE3(canonical_bytes))
+            let hash = datom.content_hash();
+            for (a, b) in chunks[chunk_idx].iter_mut().zip(hash.iter()) {
                 *a ^= b;
             }
         }
@@ -2138,9 +2135,9 @@ impl ChunkFingerprints {
             self.chunks.resize(chunk_idx + 1, [0u8; 32]);
             self.dirty.resize(chunk_idx + 1, false);
         }
-        let hash = blake3::hash(&bincode::serialize(datom)
-            .expect("datom serialization is infallible"));
-        for (a, b) in self.chunks[chunk_idx].iter_mut().zip(hash.as_bytes()) {
+        // INV-FERR-086: use content_hash (= BLAKE3(canonical_bytes))
+        let hash = datom.content_hash();
+        for (a, b) in self.chunks[chunk_idx].iter_mut().zip(hash.iter()) {
             *a ^= b;
         }
         self.dirty.set(chunk_idx, true);

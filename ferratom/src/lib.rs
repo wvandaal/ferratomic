@@ -41,7 +41,10 @@ pub mod wire;
 
 pub use bundle::SignedTransactionBundle;
 pub use clock::{ClockSource, Frontier, HybridClock, NodeId, SystemClock, TxId};
-pub use datom::{Attribute, AttributeId, AttributeIntern, Datom, EntityId, NonNanFloat, Op, Value};
+pub use datom::{
+    tx_id_canonical_bytes, Attribute, AttributeId, AttributeIntern, Datom, EntityId, NonNanFloat,
+    Op, Value,
+};
 pub use error::FerraError;
 pub use filter::DatomFilter;
 pub use provenance::ProvenanceType;

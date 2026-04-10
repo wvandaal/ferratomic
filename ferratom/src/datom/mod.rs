@@ -128,62 +128,46 @@ impl Datom {
         self.op
     }
 
-    /// BLAKE3 hash of all five fields, providing content-addressed identity.
+    /// BLAKE3 hash of the INV-FERR-086 canonical byte layout.
     ///
-    /// INV-FERR-012: Two datoms with identical 5-tuples produce the same
-    /// content hash. This is the canonical identity function for
-    /// deduplication and content-addressed storage.
+    /// INV-FERR-012 + INV-FERR-086 unified: Two datoms with identical
+    /// 5-tuples produce the same content hash. This is THE canonical
+    /// identity function — fingerprint (INV-FERR-074), signing
+    /// (INV-FERR-051), chunk addressing (INV-FERR-045), and content
+    /// addressing (INV-FERR-012) all use this computation.
+    ///
+    /// Semantically equivalent to `blake3::hash(&self.canonical_bytes())`
+    /// but streams fields directly into the hasher — zero intermediate
+    /// `Vec` allocation. Uses the INV-FERR-086 byte layout: u16-le
+    /// attribute length, 0x01..0x0B value tags.
     #[must_use]
     pub fn content_hash(&self) -> [u8; 32] {
         let mut hasher = blake3::Hasher::new();
 
-        // Entity: 32 raw bytes
+        // Entity: 32 raw bytes (same as canonical_bytes)
         hasher.update(self.entity.as_bytes());
 
-        // Attribute: length-prefixed UTF-8
+        // Attribute: u16-le length + UTF-8 (INV-FERR-086 format)
         let attr_bytes = self.attribute.as_str().as_bytes();
-        hasher.update(&(attr_bytes.len() as u64).to_le_bytes());
+        let attr_len = u16::try_from(attr_bytes.len()).unwrap_or(u16::MAX);
+        hasher.update(&attr_len.to_le_bytes());
         hasher.update(attr_bytes);
 
-        // Value: discriminant tag + payload
-        self.hash_value(&mut hasher);
+        // Value: 0x01..0x0B tags (INV-FERR-086 format)
+        canonical_value_hash(&self.value, &mut hasher);
 
-        // Tx: physical, logical, node
+        // Tx: physical(u64-le) + logical(u32-le) + node([u8;16]) = 28 bytes
         hasher.update(&self.tx.physical().to_le_bytes());
         hasher.update(&self.tx.logical().to_le_bytes());
         hasher.update(self.tx.node().as_bytes());
 
-        // Op: single byte discriminant
-        match self.op {
-            Op::Assert => hasher.update(&[0]),
-            Op::Retract => hasher.update(&[1]),
-        };
+        // Op: 0x00 Assert, 0x01 Retract (INV-FERR-086 format)
+        hasher.update(&[match self.op {
+            Op::Assert => 0x00,
+            Op::Retract => 0x01,
+        }]);
 
         *hasher.finalize().as_bytes()
-    }
-
-    /// Hash a `Value` into the hasher with a discriminant tag prefix
-    /// to prevent collisions between variants.
-    fn hash_value(&self, hasher: &mut blake3::Hasher) {
-        match &self.value {
-            Value::Keyword(s) => hash_tagged_bytes(hasher, 0, s.as_bytes()),
-            Value::String(s) => hash_tagged_bytes(hasher, 1, s.as_bytes()),
-            Value::Long(n) => hash_tagged_fixed(hasher, 2, &n.to_le_bytes()),
-            Value::Double(f) => {
-                // INV-FERR-012: canonicalize -0.0 to +0.0 so Eq-equal floats
-                // produce identical content hashes. OrderedFloat(-0.0) == OrderedFloat(0.0)
-                // but (-0.0f64).to_le_bytes() != (0.0f64).to_le_bytes().
-                let canonical = f.into_inner() + 0.0;
-                hash_tagged_fixed(hasher, 3, &canonical.to_le_bytes());
-            }
-            Value::Bool(b) => hash_tagged_fixed(hasher, 4, &[u8::from(*b)]),
-            Value::Instant(ms) => hash_tagged_fixed(hasher, 5, &ms.to_le_bytes()),
-            Value::Uuid(bytes) => hash_tagged_fixed(hasher, 6, bytes),
-            Value::Bytes(blob) => hash_tagged_bytes(hasher, 7, blob),
-            Value::Ref(eid) => hash_tagged_fixed(hasher, 8, eid.as_bytes()),
-            Value::BigInt(n) => hash_tagged_fixed(hasher, 9, &n.to_le_bytes()),
-            Value::BigDec(n) => hash_tagged_fixed(hasher, 10, &n.to_le_bytes()),
-        }
     }
 
     /// Canonical byte serialization per `INV-FERR-086`.
@@ -216,6 +200,15 @@ impl Datom {
     ///
     /// Inverse of [`Datom::canonical_bytes`]. Returns `FerraError` on
     /// truncated or malformed input.
+    ///
+    /// # Trust Boundary (ADR-FERR-010)
+    ///
+    /// This function uses `EntityId::from_trusted_bytes` — it trusts
+    /// that the entity bytes are a valid BLAKE3 hash. For data from
+    /// integrity-verified local storage (CRC/BLAKE3-guarded WAL or
+    /// checkpoint), this is correct. For **untrusted input**
+    /// (network-received chunks), verify chunk integrity (BLAKE3 or
+    /// CRC) BEFORE calling this function.
     ///
     /// # Errors
     ///
@@ -523,17 +516,77 @@ fn read_i128(rest: &[u8]) -> Result<i128, FerraError> {
     ))
 }
 
-/// Hash a discriminant tag followed by length-prefixed variable-length bytes.
-fn hash_tagged_bytes(hasher: &mut blake3::Hasher, tag: u8, data: &[u8]) {
-    hasher.update(&[tag]);
-    hasher.update(&(data.len() as u64).to_le_bytes());
-    hasher.update(data);
+/// Stream a `Value` into a BLAKE3 hasher using INV-FERR-086 tag format.
+///
+/// This is the streaming equivalent of `canonical_value_bytes` — same byte
+/// sequence, fed directly into the hasher without intermediate allocation.
+/// Tags 0x01..0x0B match the INV-FERR-086 value tag table exactly.
+fn canonical_value_hash(value: &Value, h: &mut blake3::Hasher) {
+    match value {
+        Value::Keyword(s) => hash_tag_u16_str(h, 0x01, s.as_bytes()),
+        Value::String(s) => hash_tag_u32_bytes(h, 0x02, s.as_bytes()),
+        Value::Long(n) => {
+            h.update(&[0x03]);
+            h.update(&n.to_le_bytes());
+        }
+        Value::Double(f) => {
+            h.update(&[0x04]);
+            h.update(&(f.into_inner() + 0.0).to_le_bytes());
+        }
+        Value::Bool(b) => {
+            h.update(&[0x05]);
+            h.update(&[u8::from(*b)]);
+        }
+        Value::Instant(ms) => {
+            h.update(&[0x06]);
+            h.update(&ms.to_le_bytes());
+        }
+        Value::Uuid(bytes) => {
+            h.update(&[0x07]);
+            h.update(bytes);
+        }
+        Value::Bytes(blob) => hash_tag_u32_bytes(h, 0x08, blob),
+        Value::Ref(eid) => {
+            h.update(&[0x09]);
+            h.update(eid.as_bytes());
+        }
+        Value::BigInt(n) => {
+            h.update(&[0x0A]);
+            h.update(&n.to_le_bytes());
+        }
+        Value::BigDec(n) => {
+            h.update(&[0x0B]);
+            h.update(&n.to_le_bytes());
+        }
+    }
 }
 
-/// Hash a discriminant tag followed by fixed-length bytes (no length prefix).
-fn hash_tagged_fixed(hasher: &mut blake3::Hasher, tag: u8, data: &[u8]) {
-    hasher.update(&[tag]);
-    hasher.update(data);
+/// Stream tag + u16-le length + data into hasher (Keyword path).
+fn hash_tag_u16_str(h: &mut blake3::Hasher, tag: u8, data: &[u8]) {
+    h.update(&[tag]);
+    h.update(&u16::try_from(data.len()).unwrap_or(u16::MAX).to_le_bytes());
+    h.update(data);
+}
+
+/// Stream tag + u32-le length + data into hasher (String/Bytes path).
+fn hash_tag_u32_bytes(h: &mut blake3::Hasher, tag: u8, data: &[u8]) {
+    h.update(&[tag]);
+    h.update(&u32::try_from(data.len()).unwrap_or(u32::MAX).to_le_bytes());
+    h.update(data);
+}
+
+/// Canonical byte representation of a `TxId` (ADR-FERR-035).
+///
+/// Fixed 28 bytes: `physical(u64-le) ++ logical(u32-le) ++ node([u8;16])`.
+/// Used by `emit_predecessors` (INV-FERR-061) to compute predecessor
+/// entity IDs: `EntityId::from_content(&tx_id_canonical_bytes(tx_id))`.
+#[must_use]
+pub fn tx_id_canonical_bytes(tx_id: TxId) -> [u8; 28] {
+    let mut buf = [0u8; 28];
+    buf[0..8].copy_from_slice(&tx_id.physical().to_le_bytes());
+    buf[8..12].copy_from_slice(&tx_id.logical().to_le_bytes());
+    buf[12..28].copy_from_slice(tx_id.node().as_bytes());
+    buf
 }
 
 // ---------------------------------------------------------------------------
