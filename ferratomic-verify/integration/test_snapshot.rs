@@ -637,12 +637,12 @@ fn inv_ferr_020_transaction_epoch_atomicity() {
         .collect();
 
     // bd-2021: The transaction asserts 3 user datoms, plus `transact`
-    // adds 2 metadata datoms (`:tx/time`, `:tx/origin`), all stamped at
-    // the same epoch. Total expected: exactly 5.
+    // adds 2 metadata datoms (`:tx/time`, `:tx/origin`) + 1 provenance
+    // (`:tx/provenance`), all stamped at the same epoch. Total: 6.
     assert_eq!(
         tx_datoms.len(),
-        5,
-        "INV-FERR-020: expected exactly 5 datoms (3 user + 2 metadata) at epoch {}, got {}",
+        6,
+        "INV-FERR-020: expected exactly 6 datoms (3 user + 3 metadata) at epoch {}, got {}",
         epoch,
         tx_datoms.len()
     );

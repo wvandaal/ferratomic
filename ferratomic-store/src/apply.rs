@@ -22,7 +22,10 @@
 
 use std::sync::Arc;
 
-use ferratom::{Attribute, Datom, FerraError, NodeId};
+use ferratom::{
+    tx_id_canonical_bytes, Attribute, Datom, EntityId, FerraError, Frontier, NodeId, Op,
+    ProvenanceType, TxId, TxSignature, TxSigner, Value,
+};
 use ferratomic_positional::{merge_sort_dedup, PositionalStore};
 use ferratomic_tx::{Committed, Transaction};
 
@@ -30,6 +33,52 @@ use crate::{
     repr::StoreRepr,
     store::{Store, TxReceipt},
 };
+
+// ---------------------------------------------------------------------------
+// TransactContext (D18)
+// ---------------------------------------------------------------------------
+
+/// Context for `Store::transact` (D18).
+///
+/// Carries all metadata produced by the Database layer. Groups related
+/// parameters into a struct to stay under the 5-argument limit.
+///
+/// INV-FERR-051: `signing` pairs signature+signer as `Option` to prevent
+/// the invalid state of having a signature without a signer.
+/// INV-FERR-063: `provenance` defaults to `Observed` — every transaction
+/// has a provenance.
+pub struct TransactContext<'a> {
+    /// HLC-derived transaction ID (assigned by `Database::transact`).
+    pub tx_id: TxId,
+    /// Causal frontier at commit time (INV-FERR-061).
+    /// `None` for test-only paths that don't track causality.
+    pub frontier: Option<&'a Frontier>,
+    /// Pre-computed Ed25519 signature + signer (INV-FERR-051).
+    /// `None` = unsigned transaction.
+    pub signing: Option<(TxSignature, TxSigner)>,
+    /// Epistemic confidence (INV-FERR-063). Every transaction has a
+    /// provenance. Default: `Observed`.
+    pub provenance: ProvenanceType,
+    /// Store fingerprint BEFORE this transaction (INV-FERR-074/D17).
+    /// Included in the signing message as a state commitment.
+    /// Zero for unsigned transactions or when fingerprint is unavailable.
+    pub store_fingerprint: [u8; 32],
+}
+
+impl TransactContext<'_> {
+    /// Minimal context for tests. No frontier, no signing, `Observed` provenance.
+    #[cfg(any(test, feature = "test-utils"))]
+    #[must_use]
+    pub fn minimal(tx_id: TxId) -> Self {
+        Self {
+            tx_id,
+            frontier: None,
+            signing: None,
+            provenance: ProvenanceType::Observed,
+            store_fingerprint: [0u8; 32],
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Mutating methods on Store
@@ -103,13 +152,24 @@ impl Store {
     /// the `HybridClock` under the write lock). This replaces the previous
     /// `TxId::with_node(epoch, 0, node)` which used epoch-as-physical --
     /// breaking INV-FERR-015 (HLC monotonicity) and INV-FERR-016 (causality).
+    /// Apply a committed transaction to the store (D18: `TransactContext`).
+    ///
+    /// INV-FERR-004: strict growth -- the store gains at least one datom.
+    /// INV-FERR-005: all indexes are updated in lockstep.
+    /// INV-FERR-007: epoch is incremented strictly.
+    /// INV-FERR-009: schema evolution from schema-defining datoms.
+    /// INV-FERR-051: signing metadata emitted when `ctx.signing` is `Some`.
+    /// INV-FERR-061: predecessor metadata emitted from `ctx.frontier`.
+    /// INV-FERR-063: provenance metadata emitted from `ctx.provenance`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `FerraError::EmptyTransaction` if the transaction has no datoms.
     pub fn transact(
         &mut self,
         transaction: Transaction<Committed>,
-        tx_id: ferratom::TxId,
+        ctx: &TransactContext<'_>,
     ) -> Result<TxReceipt, FerraError> {
-        // INV-FERR-020: read node FIRST, then consume the transaction via
-        // into_datoms(). Ownership transfer enforces single-application.
         let node = transaction.node();
         let datoms = transaction.into_datoms();
         if datoms.is_empty() {
@@ -125,16 +185,26 @@ impl Store {
                 details: "epoch counter overflow".to_string(),
             })?;
 
-        // INV-FERR-015: stamp datoms with HLC-derived TxId + append tx metadata.
-        let mut all_datoms = stamp_datoms(datoms, tx_id);
-        all_datoms.extend(create_tx_metadata(self.epoch, node, tx_id));
+        // INV-FERR-015: stamp datoms with HLC-derived TxId.
+        let mut all_datoms = stamp_datoms(datoms, ctx.tx_id);
+
+        // D16: TxId-based transaction entity.
+        let tx_entity = tx_entity_from_txid(ctx.tx_id);
+        all_datoms.extend(create_tx_metadata(tx_entity, node, ctx.tx_id));
+
+        // INV-FERR-061/063/051: federation metadata (predecessors + provenance + signing).
+        all_datoms.extend(create_federation_metadata(
+            tx_entity,
+            ctx.tx_id,
+            ctx.frontier,
+            ctx.signing,
+            ctx.provenance,
+        ));
 
         // INV-FERR-009: evolve schema from schema-defining datoms.
         crate::schema_evolution::evolve_schema(&mut self.schema, &all_datoms)?;
 
         // bd-886d: dispatch based on representation.
-        // Positional → splice (O(N+K), no promote/demote cycle).
-        // OrdMap → fallback to direct insertion (rare: only during batch_replay).
         match &self.repr {
             StoreRepr::Positional(_) => self.splice_transact(&all_datoms),
             StoreRepr::OrdMap { .. } => {
@@ -215,7 +285,7 @@ impl Store {
                     details: "epoch overflow in transact_test".to_string(),
                 })?;
         let tx_id = ferratom::TxId::with_node(next_epoch, 0, node);
-        self.transact(transaction, tx_id)
+        self.transact(transaction, &TransactContext::minimal(tx_id))
     }
 
     /// Batch merge-sort splice: stamp all datoms, merge once into canonical.
@@ -259,12 +329,8 @@ impl Store {
                         details: "epoch counter overflow in batch".to_string(),
                     })?;
 
-            // INV-FERR-020: read node from TxId for metadata.
-            let node = tx_id.node();
-
-            // INV-FERR-015: stamp datoms with HLC-derived TxId.
-            let mut tx_datoms = stamp_datoms(datoms, tx_id);
-            tx_datoms.extend(create_tx_metadata(self.epoch, node, tx_id));
+            // INV-FERR-015: stamp + metadata (batch path: no frontier/signing).
+            let tx_datoms = stamp_and_append_metadata(datoms, tx_id);
 
             // INV-FERR-009: schema evolution per transaction boundary.
             crate::schema_evolution::evolve_schema(&mut self.schema, &tx_datoms)?;
@@ -352,6 +418,26 @@ impl Store {
 // Transaction helpers (private)
 // ---------------------------------------------------------------------------
 
+/// Stamp datoms and append all metadata (batch path convenience).
+///
+/// Combines `stamp_datoms`, `create_tx_metadata`, and
+/// `create_federation_metadata` with default provenance and no
+/// frontier/signing. Used by `batch_splice_transact`.
+fn stamp_and_append_metadata(datoms: Vec<Datom>, tx_id: TxId) -> Vec<Datom> {
+    let node = tx_id.node();
+    let mut stamped = stamp_datoms(datoms, tx_id);
+    let tx_entity = tx_entity_from_txid(tx_id);
+    stamped.extend(create_tx_metadata(tx_entity, node, tx_id));
+    stamped.extend(create_federation_metadata(
+        tx_entity,
+        tx_id,
+        None,
+        None,
+        ProvenanceType::Observed,
+    ));
+    stamped
+}
+
 /// INV-FERR-015: Re-stamp datoms with a real `TxId`, replacing the
 /// placeholder `TxId(0,0,0)` from the Transaction builder.
 fn stamp_datoms(datoms: Vec<Datom>, tx_id: ferratom::TxId) -> Vec<Datom> {
@@ -369,36 +455,95 @@ fn stamp_datoms(datoms: Vec<Datom>, tx_id: ferratom::TxId) -> Vec<Datom> {
         .collect()
 }
 
-/// INV-FERR-004: Create :tx/time and :tx/origin metadata datoms that
-/// guarantee strict growth (every transaction adds at least 2 datoms).
-fn create_tx_metadata(epoch: u64, node: NodeId, tx_id: ferratom::TxId) -> Vec<Datom> {
-    // P1-003: Use full node bytes for tx_entity derivation, not just
-    // first byte. Prevents collision when two nodes share the same
-    // first byte but differ in subsequent bytes.
-    let mut tx_content = format!("tx-{epoch}-").into_bytes();
-    tx_content.extend_from_slice(node.as_bytes());
-    let tx_entity = ferratom::EntityId::from_content(&tx_content);
-    // Derive tx wall-clock from HLC physical component (deterministic,
-    // no SystemTime dependency).  Overflow from u64->i64 is safe: the
-    // fallback i64::MAX is ~292 billion years after epoch.
-    let now_ms = i64::try_from(tx_id.physical()).unwrap_or(i64::MAX);
+/// D16: Compute transaction entity from `TxId` (content-addressed).
+///
+/// Replaces epoch-based `format!("tx-{epoch}-{node}")`. The entity ID is
+/// `BLAKE3(tx_id_canonical_bytes)`, which is deterministic and consistent
+/// across replicas (C2). Predecessor `Ref` values point to these entities.
+fn tx_entity_from_txid(tx_id: TxId) -> EntityId {
+    EntityId::from_content(&tx_id_canonical_bytes(tx_id))
+}
 
+/// INV-FERR-004: Create `:tx/time` and `:tx/origin` metadata datoms.
+///
+/// D16: `tx_entity` is computed from `TxId` via `tx_entity_from_txid`.
+fn create_tx_metadata(tx_entity: EntityId, node: NodeId, tx_id: TxId) -> Vec<Datom> {
+    let now_ms = i64::try_from(tx_id.physical()).unwrap_or(i64::MAX);
     vec![
         Datom::new(
             tx_entity,
             Attribute::from("tx/time"),
-            ferratom::Value::Instant(now_ms),
+            Value::Instant(now_ms),
             tx_id,
-            ferratom::Op::Assert,
+            Op::Assert,
         ),
         Datom::new(
             tx_entity,
             Attribute::from("tx/origin"),
-            ferratom::Value::Ref(ferratom::EntityId::from_content(node.as_bytes())),
+            Value::Ref(EntityId::from_content(node.as_bytes())),
             tx_id,
-            ferratom::Op::Assert,
+            Op::Assert,
         ),
     ]
+}
+
+/// Federation metadata datoms (INV-FERR-061/063/051).
+///
+/// INV-FERR-061: predecessor datoms from `Frontier` (one per node).
+/// D19: predecessors are `Value::Ref(tx_entity_from_txid(pred_tx_id))`.
+/// INV-FERR-063: provenance datom with `ProvenanceType` keyword.
+/// INV-FERR-051: signing datoms when signed.
+fn create_federation_metadata(
+    tx_entity: EntityId,
+    tx_id: TxId,
+    frontier: Option<&Frontier>,
+    signing: Option<(TxSignature, TxSigner)>,
+    provenance: ProvenanceType,
+) -> Vec<Datom> {
+    let mut metadata = Vec::new();
+
+    // INV-FERR-061: predecessor datoms (D19: Ref values are predecessor EntityIds)
+    if let Some(frontier) = frontier {
+        for (_node_id, pred_tx_id) in frontier.iter() {
+            let pred_entity = tx_entity_from_txid(*pred_tx_id);
+            metadata.push(Datom::new(
+                tx_entity,
+                Attribute::from("tx/predecessor"),
+                Value::Ref(pred_entity),
+                tx_id,
+                Op::Assert,
+            ));
+        }
+    }
+
+    // INV-FERR-063: provenance datom
+    metadata.push(Datom::new(
+        tx_entity,
+        Attribute::from("tx/provenance"),
+        Value::Keyword(Arc::from(provenance.as_keyword())),
+        tx_id,
+        Op::Assert,
+    ));
+
+    // INV-FERR-051: signing metadata (only when signed)
+    if let Some((sig, signer)) = signing {
+        metadata.push(Datom::new(
+            tx_entity,
+            Attribute::from("tx/signature"),
+            Value::from(sig),
+            tx_id,
+            Op::Assert,
+        ));
+        metadata.push(Datom::new(
+            tx_entity,
+            Attribute::from("tx/signer"),
+            Value::from(signer),
+            tx_id,
+            Op::Assert,
+        ));
+    }
+
+    metadata
 }
 
 // ---------------------------------------------------------------------------

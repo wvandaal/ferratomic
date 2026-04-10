@@ -561,8 +561,11 @@ fn test_inv_ferr_072_batch_splice_epochs_and_datoms() {
     assert_eq!(receipts[2].epoch(), 3, "INV-FERR-007: epoch 3");
     assert_eq!(store.epoch(), 3, "INV-FERR-007: final epoch 3");
 
-    // tx1: 1 user + 2 meta, tx2: 3 schema + 2 meta, tx3: 1 user + 2 meta = 11
-    assert_eq!(store.len(), 11, "INV-FERR-072: all datoms present");
+    // tx1: 1 user + 2 meta + 1 provenance = 4
+    // tx2: 3 schema + 2 meta + 1 provenance = 6
+    // tx3: 1 user + 2 meta + 1 provenance = 4
+    // Total: 14
+    assert_eq!(store.len(), 14, "INV-FERR-072: all datoms present");
 }
 
 /// INV-FERR-072 + INV-FERR-009: schema evolution works across batch.

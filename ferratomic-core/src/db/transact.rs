@@ -8,11 +8,11 @@
 
 use std::sync::{atomic::Ordering, Arc};
 
-use ferratom::{Datom, FerraError};
+use ferratom::{Datom, FerraError, ProvenanceType};
 
 use super::{Database, Ready};
 use crate::{
-    store::{Store, TxReceipt},
+    store::{Store, TransactContext, TxReceipt},
     writer::{Committed, Transaction},
 };
 
@@ -52,9 +52,18 @@ impl Database<Ready> {
         let (guard, tx_id) = self.acquire_write_lock_and_tick()?;
 
         // Step 1: Apply transaction to a cloned store with HLC-derived TxId.
+        // D18: Build TransactContext with store fingerprint for signing message.
         let current = self.current.load();
+        let fp = current.fingerprint().copied().unwrap_or([0u8; 32]);
         let mut new_store = Store::clone(&current);
-        let receipt = new_store.transact(transaction, tx_id)?;
+        let ctx = TransactContext {
+            tx_id,
+            frontier: None, // Phase 4a.5: frontier tracking added by Database::transact_signed
+            signing: None,
+            provenance: ProvenanceType::Observed,
+            store_fingerprint: fp,
+        };
+        let receipt = new_store.transact(transaction, &ctx)?;
 
         // Step 2: INV-FERR-008: WAL before publish (zero-clone: borrow from receipt).
         self.write_wal(receipt.epoch(), receipt.datoms())?;
