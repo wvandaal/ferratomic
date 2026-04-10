@@ -8,7 +8,7 @@
 
 Phases 0-3 COMPLETE. **Phase 4a CLOSED 2026-04-08 at composite 9.55-9.57 / A+.** Tag `v0.4.0-gate` at commit `732c3aa`.
 
-**Session 023.5 COMPLETE (2026-04-09)**: INV-FERR-045c "Leaf Chunk Codec Conformance" authored (802 lines, composite 9.50, all 6 verification layers) + INV-FERR-045a refactored as DatomPair reference codec + §23.9.0 trait-aware updates + §23.9.8 Codec Discriminator Registry authored + helper definitions + performance budgets. INV count 87→88. Three lifecycle/17 self-audits caught 5 MAJOR + 7 MINOR findings, all remediated. Six commits (`73b4b63`→`2921a32`). Lean concretization bead filed (`bd-he332`). **Next: session 023.5.5** (trait edge-case hardening).
+**Session 024 (2026-04-09/10)**: Completed the entire Phase A path (sessions 023.5→023.7) + Phase 4b codec implementation + Lean mechanization + verification audit + cleanroom review. spec/06 grew 3295→5500 lines (+2200 lines spec). codec.rs: 727 lines Rust (LeafChunkCodec trait, DatomPairCodec, 23 tests + 5 proptests at 10K cases). 7 new .lean files (807 lines, 14 complete proofs). Datom::canonical_bytes + from_canonical_bytes (INV-FERR-086). 2 fuzz targets. 4 audit rounds (22 spec findings + 20 verification drift findings + 7 cleanroom defects, all fixed). Spec composite 10.0, implementation composite 9.83 (single remaining gap: bd-b7pfg Attribute u16 length guard). INV count 88.
 
 | Phase | Status |
 |-------|--------|
