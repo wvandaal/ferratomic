@@ -90,7 +90,7 @@ transact, merge, checkpoint, and recover operations — the Lean model and the R
 implementation agree on the datom set, epoch, and schema.
 
 The coupling invariant is **established** by genesis (both Lean and Rust produce the
-empty datom set with 19 meta-schema attributes) and **preserved** by every operation.
+empty datom set with 25 meta-schema attributes) and **preserved** by every operation.
 
 Preservation obligations (one per operation):
 
