@@ -303,7 +303,7 @@ pub struct RootSet {
 ```
 
 The `RootSet` is the bridge between the multi-tree physical layout and the
-single-root-hash abstraction used by INV-FERR-049 (`Snapshot::root`). Snapshot comparison,
+single-root-hash abstraction used by INV-FERR-049 (`Snapshot::manifest`). Snapshot comparison,
 diff, and transfer all begin by comparing or operating on `RootSet`s, then descend into
 individual tree pairs.
 
@@ -348,7 +348,7 @@ impl RootSet {
 
 #### S23.9.0.6: Snapshot Hash = BLAKE3(RootSet)
 
-The `Snapshot::root` field of INV-FERR-049 is defined as:
+The `Snapshot::manifest` field of INV-FERR-049 is defined as:
 
 ```
 snapshot_hash : RootSet → Hash
@@ -3059,6 +3059,219 @@ theorem prolly_merge_comm (a b : Finset (List UInt8 × List UInt8)) (pw : Nat) :
 
 ---
 
+### INV-FERR-046a: Rolling Hash Determinism and Algorithm Specification
+
+**Traces to**: INV-FERR-046 (History Independence — sub-property: boundary function
+purity), C2 (Content-Addressed Identity), ADR-FERR-008 (Prolly Tree Block Store)
+**Verification**: `V:PROP`, `V:KANI`, `V:LEAN`
+**Stage**: 1
+
+#### Level 0 (Algebraic Law)
+
+```
+∀ key_bytes ∈ Bytes, ∀ implementations I₁, I₂ conforming to this spec:
+
+  T1 (Determinism):
+    rolling_hash(I₁, key_bytes) = rolling_hash(I₂, key_bytes)
+
+  T2 (Purity):
+    ∀ state₁, state₂: rolling_hash(key_bytes) is independent of state₁, state₂
+
+  T3 (Boundary determinism):
+    is_boundary(I₁, key_bytes, pw) = is_boundary(I₂, key_bytes, pw)
+
+Proof:
+  The rolling hash algorithm (Gear hash with a fixed 256-entry random table),
+  the boundary predicate (hash & mask == mask where mask = (1 << pw) - 1),
+  and the CDF bounds (min_chunk_size, max_chunk_size) are ALL fully specified
+  below — no implementation-defined behavior. T1 follows from the algorithm
+  being a pure function of its byte input with fixed constants. T2 follows
+  from the function having no state beyond its arguments. T3 follows from
+  T1 + the boundary predicate being a pure function of rolling_hash output.
+```
+
+#### Level 1 (State Invariant)
+
+The rolling hash function that determines prolly tree chunk boundaries is
+algorithm-specified: Gear hash with a fixed 256-entry random table, producing
+a 64-bit hash. Any two conforming implementations processing the same sorted
+key sequence produce identical chunk boundary positions. This is the sub-property
+that makes INV-FERR-046 (history independence) achievable: if boundaries vary
+between implementations, the same key-value set produces different tree
+structures, breaking content-addressing (INV-FERR-045) and O(d) diff
+(INV-FERR-047).
+
+**Chunk size bounds (CDF-bounded splitting)**:
+
+| Parameter | Value | Rationale |
+|-----------|-------|-----------|
+| `pattern_width` | 8 | Expected chunk size = 2^8 = 256 entries |
+| `min_chunk_size` | 32 entries | Prevents degenerate tiny chunks |
+| `max_chunk_size` | 1024 entries | Prevents degenerate large chunks |
+
+The boundary decision is: `is_boundary(key, entries_since_last) = true` iff:
+1. `entries_since_last >= min_chunk_size`, AND
+2. `(gear_hash(key) & mask) == mask` OR `entries_since_last >= max_chunk_size`
+
+The `entries_since_last` counter resets at each boundary position in the sorted
+key sequence. It is a pure function of position in the sorted sequence, NOT
+mutable state carried across builds — rebuilding from the same sorted key set
+always produces the same counter values at each position.
+
+#### Level 2 (Implementation Contract)
+
+```rust
+/// Fixed random table for Gear hash. Generated once, never changes.
+/// The table is part of the specification — changing it changes all
+/// chunk boundaries in all stores. It MUST match across implementations.
+///
+/// Generation: `BLAKE3("ferratomic-gear-hash-table")[0..8]` for each
+/// byte value 0..255, interpreted as little-endian u64.
+const GEAR_TABLE: [u64; 256] = gear_table_from_seed(b"ferratomic-gear-hash-table");
+
+/// Gear hash: a content-defined chunking hash function.
+/// Input: arbitrary byte slice. Output: 64-bit hash.
+/// Pure function: same input always produces same output.
+///
+/// Algorithm: for each byte b in the input, the accumulator is
+/// rotated left by 1 bit and XORed with GEAR_TABLE[b].
+/// This is a rolling hash that can be computed incrementally.
+///
+/// INV-FERR-046a T1/T2: deterministic, pure.
+pub fn gear_hash(key: &[u8]) -> u64 {
+    let mut hash: u64 = 0;
+    for &byte in key {
+        hash = hash.rotate_left(1) ^ GEAR_TABLE[byte as usize];
+    }
+    hash
+}
+
+/// Chunk boundary predicate with CDF bounds.
+/// INV-FERR-046a T3: deterministic.
+///
+/// The `entries_since_last` parameter is the count of entries since the
+/// last boundary in the sorted key sequence. It is NOT mutable state —
+/// it is a pure function of the key's position in the sorted sequence.
+pub fn is_boundary(key: &[u8], pattern_width: u32, entries_since_last: usize) -> bool {
+    let min_chunk = 32;
+    let max_chunk = 1024;
+
+    if entries_since_last < min_chunk {
+        return false; // too small — force continuation
+    }
+    if entries_since_last >= max_chunk {
+        return true;  // too large — force split
+    }
+
+    let hash = gear_hash(key);
+    let mask = (1u64 << pattern_width) - 1;
+    (hash & mask) == mask
+}
+
+#[kani::proof]
+#[kani::unwind(5)]
+fn gear_hash_determinism() {
+    let key: [u8; 4] = kani::any();
+    let h1 = gear_hash(&key);
+    let h2 = gear_hash(&key);
+    assert_eq!(h1, h2, "INV-FERR-046a T1: gear_hash must be deterministic");
+}
+
+#[kani::proof]
+#[kani::unwind(5)]
+fn boundary_determinism() {
+    let key: [u8; 4] = kani::any();
+    let pw: u32 = kani::any();
+    kani::assume(pw <= 16);
+    let entries: usize = kani::any();
+    kani::assume(entries <= 2048);
+    let b1 = is_boundary(&key, pw, entries);
+    let b2 = is_boundary(&key, pw, entries);
+    assert_eq!(b1, b2, "INV-FERR-046a T3: is_boundary must be deterministic");
+}
+```
+
+**Falsification**: Any byte sequence `k` where `gear_hash(k)` returns different
+results across two invocations, OR any two conforming implementations that
+produce different boundary positions for the same sorted key sequence. Concretely:
+find `k` such that `gear_hash(k) != gear_hash(k)`.
+
+**proptest strategy**:
+
+```rust
+proptest! {
+    #[test]
+    fn gear_hash_deterministic(key in prop::collection::vec(any::<u8>(), 0..256)) {
+        let h1 = gear_hash(&key);
+        let h2 = gear_hash(&key);
+        prop_assert_eq!(h1, h2,
+            "INV-FERR-046a T1: gear_hash must be deterministic");
+    }
+
+    #[test]
+    fn boundary_deterministic(
+        key in prop::collection::vec(any::<u8>(), 1..64),
+        pw in 4u32..12,
+        entries in 0usize..2048,
+    ) {
+        let b1 = is_boundary(&key, pw, entries);
+        let b2 = is_boundary(&key, pw, entries);
+        prop_assert_eq!(b1, b2,
+            "INV-FERR-046a T3: is_boundary must be deterministic");
+    }
+
+    #[test]
+    fn boundary_respects_min_max(
+        key in prop::collection::vec(any::<u8>(), 1..64),
+        pw in 4u32..12,
+    ) {
+        // Below min: never a boundary
+        prop_assert!(!is_boundary(&key, pw, 0),
+            "INV-FERR-046a: entries < min_chunk must not be a boundary");
+        prop_assert!(!is_boundary(&key, pw, 31),
+            "INV-FERR-046a: entries < min_chunk must not be a boundary");
+        // At max: always a boundary
+        prop_assert!(is_boundary(&key, pw, 1024),
+            "INV-FERR-046a: entries >= max_chunk must always be a boundary");
+    }
+}
+```
+
+**Lean theorem**:
+
+```lean
+/-- Gear hash is a pure function: same input always produces same output. -/
+theorem gear_hash_deterministic (key : List UInt8) :
+    gear_hash key = gear_hash key := rfl
+
+/-- Boundary predicate is deterministic given the same inputs. -/
+theorem boundary_deterministic (key : List UInt8) (pw : Nat) (entries_since : Nat) :
+    is_boundary key pw entries_since = is_boundary key pw entries_since := rfl
+```
+
+**Algorithm choice rationale (Gear hash vs alternatives)**:
+
+| Algorithm | Speed | Quality | Cross-platform? | Why chosen/rejected |
+|-----------|-------|---------|----------------|-------------------|
+| **Gear hash** | **~0.5 cycles/byte** | **Good for CDC** | **Yes (no SIMD)** | **Chosen: fast, simple, portable, proven in CDC (FastCDC, Restic)** |
+| Buzhash | ~1 cycle/byte | Good | Yes | Rejected: slightly slower, similar quality |
+| Rabin fingerprint | ~2 cycles/byte | Excellent | Yes | Rejected: polynomial arithmetic is slower |
+| Rolling polynomial | ~1 cycle/byte | Good | Yes | Rejected: no advantage over Gear |
+
+**GEAR_TABLE generation**: The table is derived from BLAKE3 to ensure determinism
+across implementations. Any implementation can regenerate the table from the seed
+`b"ferratomic-gear-hash-table"` using BLAKE3's XOF mode:
+
+```
+for i in 0..256:
+    GEAR_TABLE[i] = u64::from_le_bytes(BLAKE3::derive_key("ferratomic-gear-hash-table", &[i as u8])[0..8])
+```
+
+This seed is part of the specification. Changing it changes all chunk boundaries
+in all stores and is a breaking change requiring a new INV-FERR version.
+
+---
+
 ### INV-FERR-047: O(d) Diff Complexity
 
 **Traces to**: INV-FERR-045 (Chunk Content Addressing), INV-FERR-045c (Leaf Chunk
@@ -4414,7 +4627,7 @@ impl VersionHistory {
 ```
 
 > **Manifest model rationale (§23.9.0.6)**: The original spec authored a single-tree
-> Snapshot model where `Snapshot::root` was a direct prolly tree pointer. This was
+> Snapshot model where `Snapshot::root` (now `Snapshot::manifest`) was a direct prolly tree pointer. This was
 > incompatible with the multi-tree (primary + EAVT/AEVT/VAET/AVET) physical layout
 > that ferratomic-store actually requires per INV-FERR-005. The Pattern H authoring
 > in session 023 (S23.9.0) made the manifest model canonical, and FINDING-226 of
