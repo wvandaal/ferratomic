@@ -225,6 +225,10 @@ pub mod anti_entropy;
 pub mod backpressure;
 pub mod checkpoint;
 pub mod db;
+/// Prolly tree: content-addressed Merkle B-tree with rolling-hash chunk boundaries.
+/// INV-FERR-045 (content addressing), INV-FERR-046 (history independence),
+/// INV-FERR-046a (Gear hash determinism), INV-FERR-050 (substrate independence).
+pub mod prolly;
 pub use ferratomic_index as indexes;
 pub use ferratomic_store::merge;
 pub(crate) mod mmap;

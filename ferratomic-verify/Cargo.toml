@@ -12,6 +12,7 @@ ferratomic-db = { path = "../ferratomic-core", features = ["test-utils"] }
 ferratomic-positional = { path = "../ferratomic-positional", features = ["test-utils"] }
 proptest = { workspace = true }
 stateright = { workspace = true }
+ed25519-dalek = { workspace = true }
 ordered-float = { workspace = true }
 im = { workspace = true }
 
@@ -132,6 +133,10 @@ path = "integration/test_schema.rs"
 [[test]]
 name = "integration_thresholds"
 path = "integration/test_thresholds.rs"
+
+[[test]]
+name = "integration_federation"
+path = "integration/test_federation.rs"
 
 # --- Kani bounded model checking harnesses (kani/) ---
 
