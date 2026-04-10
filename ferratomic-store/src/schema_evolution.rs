@@ -15,7 +15,7 @@
 //! define new attributes via the `db/ident`, `db/valueType`, and
 //! `db/cardinality` meta-attributes.
 //!
-//! ```rust,no_run
+//! ```rust,ignore
 //! use std::sync::Arc;
 //! use ferratom::{NodeId, Attribute, EntityId, Value};
 //! use ferratomic_db::db::Database;

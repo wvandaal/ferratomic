@@ -149,7 +149,7 @@ impl Datom {
 
         // Attribute: u16-le length + UTF-8 (INV-FERR-086 format)
         let attr_bytes = self.attribute.as_str().as_bytes();
-        let attr_len = u16::try_from(attr_bytes.len()).unwrap_or(u16::MAX);
+        let attr_len = attr_byte_len_u16(attr_bytes.len());
         hasher.update(&attr_len.to_le_bytes());
         hasher.update(attr_bytes);
 
@@ -317,9 +317,23 @@ fn parse_op(bytes: &[u8], offset: &mut usize) -> Result<Op, FerraError> {
 /// Serialize an attribute to canonical bytes: u16-le length + UTF-8.
 fn canonical_attr_bytes(attr: &Attribute, buf: &mut Vec<u8>) {
     let b = attr.as_str().as_bytes();
-    let len = u16::try_from(b.len()).unwrap_or(u16::MAX);
+    let len = attr_byte_len_u16(b.len());
     buf.extend_from_slice(&len.to_le_bytes());
     buf.extend_from_slice(b);
+}
+
+/// Convert an attribute byte length to u16 for the INV-FERR-086 canonical format.
+///
+/// `Attribute::new()` validates `len <= u16::MAX` at construction.
+/// `From<&str>` checks via `debug_assert!`. The saturating fallback is
+/// defense-in-depth for any path that bypasses validated construction.
+fn attr_byte_len_u16(len: usize) -> u16 {
+    debug_assert!(
+        u16::try_from(len).is_ok(),
+        "INV-FERR-086: attribute length {len} exceeds u16::MAX; \
+         use Attribute::new() for validated construction",
+    );
+    u16::try_from(len).unwrap_or(u16::MAX)
 }
 
 /// Serialize a `TxId` to canonical bytes: u64-le + u32-le + [u8; 16].

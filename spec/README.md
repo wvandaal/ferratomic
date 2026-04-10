@@ -30,7 +30,7 @@ Every invariant follows the Level 0/1/2 format:
 | [06-prolly-tree.md](06-prolly-tree.md) | §23.9 | 045-050, 045a, 045c | Canonical datom key encoding (S23.9.0), chunk addressing, leaf chunk codec conformance trait (045c — load-bearing accretive lever for trait-based DI), deterministic chunk serialization (045a — DatomPair reference codec), history independence, O(d) diff, block store, substrate independence, RootSet manifest model |
 | [07-refinement.md](07-refinement.md) | §23.11 | CI-FERR-001..002 | Lean-Rust coupling invariant, refinement tower |
 | [08-verification-infrastructure.md](08-verification-infrastructure.md) | §23.12 | 056-059 | Fault injection, soak testing, metamorphic testing, optimization preservation, self-monitoring convergence (B17 → M(S) ≅ S) |
-| [09-performance-architecture.md](09-performance-architecture.md) | §23.13 | 070-085 | Zero-copy cold start, sorted-array backend, positional content addressing, permutation index fusion, homomorphic fingerprint, LIVE-first checkpoint, interpolation search, SoA columnar (078), chunk fingerprints (079), incremental LIVE (080), TxId temporal permutation (081), entity RLE (082), graph adjacency (083), WAL dedup Bloom (084), attribute interning (085), NEG-FERR-007 (FM-Index NO-GO), ADR-FERR-030..033 |
+| [09-performance-architecture.md](09-performance-architecture.md) | §23.13 | 070-085 | Zero-copy cold start, sorted-array backend, positional content addressing, permutation index fusion, homomorphic fingerprint, LIVE-first checkpoint, interpolation search, SoA columnar (078), chunk fingerprints (079), incremental LIVE (080), TxId temporal permutation (081), entity RLE (082), graph adjacency (083), WAL dedup Bloom (084), attribute interning (085), NEG-FERR-007 (FM-Index NO-GO), ADR-FERR-030..033, **§Wavelet** (rank/select contract, symbol encoding, construction/query algorithms, performance budgets — Phase 4b primary backend per bd-4vwk) |
 
 ## Reading Order for Implementing Agents
 
@@ -39,7 +39,7 @@ Every invariant follows the Level 0/1/2 format:
 - **Phase 3 (types)**: 01-core-invariants (type contracts)
 - **Phase 4a (MVP)**: 01 + 02 + 03
 - **Phase 4a.5 (federation foundations)**: 05-federation §23.8.5 (INV-FERR-060..063, 025b, ADR-FERR-021..029)
-- **Phase 4b (prolly tree + hardening)**: 06-prolly-tree + 08-verification-infrastructure (INV-FERR-056, ADR-FERR-011..014, NEG-FERR-006)
+- **Phase 4b (prolly tree + hardening)**: 06-prolly-tree + 08-verification-infrastructure (INV-FERR-056, ADR-FERR-011..014, NEG-FERR-006) + 09-performance-architecture §Wavelet (ADR-FERR-030, rank/select, wavelet algorithms)
 - **Phase 4c (federation)**: 05-federation + 06-prolly-tree + 08-verification-infrastructure (INV-FERR-057, INV-FERR-059)
 - **Phase 4d (datalog)**: 04-decisions-and-constraints (§23.6) + 08-verification-infrastructure (INV-FERR-058)
 

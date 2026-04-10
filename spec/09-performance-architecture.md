@@ -2420,18 +2420,21 @@ maximal.
 
 ---
 
-### ADR-FERR-030: Wavelet Matrix as Information-Theoretic Convergence Target
+### ADR-FERR-030: Wavelet Matrix as Phase 4b Primary Backend for Billion-Scale Operation
 
 **Traces to**: INV-FERR-071 (Sorted-Array Backend), INV-FERR-073 (Yoneda Index Fusion),
 INV-FERR-076 (Positional Content Addressing), NEG-FERR-007 (FM-Index Inapplicability)
-**Stage**: 2
+**Stage**: 1 (promoted from Stage 2 per bd-4vwk, 2026-04-08)
+**Empirical foundation**: bd-snnh (HOLD verdict 2026-04-08) — PositionalStore validated
+at 100M datoms (EAVT p50=2.2μs, p99=4.1μs, 137 bytes/datom)
 
-**Problem**: The PositionalStore (INV-FERR-076) uses ~130 bytes/datom. The
-information-theoretic minimum for a typical agentic workload is ~28 bytes/datom
-(computed from field-by-field entropy analysis). No existing invariant addresses
-this 4.6× gap. What is the convergence target for the ALIEN performance
-architecture — i.e., what data structure closes the gap between current storage
-density and the information-theoretic minimum?
+**Problem**: The PositionalStore (INV-FERR-076) uses ~137 bytes/datom (validated
+empirically by bd-snnh at 100M, 2026-04-08). At this density, 1B datoms requires
+137 GB RAM — beyond commodity hardware. The information-theoretic minimum for a
+typical agentic workload is ~28 bytes/datom (field-by-field entropy analysis).
+The wavelet matrix is the structural enabler for billion-scale in-memory operation
+on commodity RAM: the data structure that closes the gap between 137 bytes/datom
+(current) and ~6 bytes/datom (achievable with compressed bitvectors).
 
 **Options**:
 
@@ -2441,28 +2444,78 @@ density and the information-theoretic minimum?
 | B: Columnar + dictionary encoding | Per-field columnar storage with dictionary codes | Standard technique; good compression on low-cardinality fields | 5 random accesses per datom reconstruction; poor point-lookup performance |
 | C: Wavelet matrix | Per-column wavelet matrix over integer-encoded symbols | Unified storage + indexing; per-column compression approaching H₀; rank/select provides index queries in O(log σ); subsumes columnar benefits without point-lookup penalty | Requires integer symbol encoding (value pool, O(1) rank computation); complex implementation; Phase 4b prerequisites |
 
-**Decision**: **Option C: Wavelet matrix** as the Phase 4c+ convergence target.
+**Decision**: **Option C: Wavelet matrix** as the Phase 4b primary backend for
+billion-scale operation (reclassified from Phase 4c+ per bd-4vwk, 2026-04-08).
+PositionalStore remains the validated 100M default and fallback. Both substrates
+coexist via `IndexBackend` (INV-FERR-025); wavelet becomes the default once
+gvil.10 (bd-ena7) confirms projected density at 100M empirical scale.
 
-The wavelet matrix stores a sequence of symbols from alphabet σ in
-`n × ⌈log₂(σ)⌉` bits while supporting Access(i), Rank(c, i), and Select(c, j)
-in O(log σ) time. These operations are the building blocks for range queries,
-prefix lookups, and filter operations — meaning the wavelet matrix provides both
-compression and indexing from a single structure.
+The wavelet matrix stores a sequence of symbols from alphabet Σ = [0, σ) in
+n × ⌈log₂(σ)⌉ bits while supporting Access(i), Rank(c, i), and Select(c, j)
+in O(log σ) time. These three operations are the building blocks for range queries,
+prefix lookups, and filter operations — the wavelet matrix provides both
+compression and indexing from a single structure. Categorically, it is a
+**functor** from Seq(Σ) → BitVec^h that preserves positional access while
+factoring rank/select into binary operations (see §Wavelet below).
 
-Per-column analysis at 200K datoms:
+#### Per-Column Scale Analysis
 
-| Column | Alphabet size (σ) | Bits/datom | Rank/select provides |
-|--------|-------------------|-----------|---------------------|
-| Entity (symbol ID) | 10K-1M | 14-20 | Entity range scan (subsumes EAVT index) |
-| Attribute (dict code) | 50-100 | 6-7 | Attribute filter (subsumes AEVT index) |
-| Value (pool ID) | 50K-50M | 16-26 | Value retrieval |
-| TxId (delta-encoded) | small | 3-4 | Temporal query |
-| Op | 2 | 1 | LIVE count (IS the LIVE bitvector) |
+Alphabet sizes grow with store cardinality. The projected density depends on
+scale — the 200K estimate does NOT extrapolate linearly to 1B.
 
-**Projected density**: ~5.1 bytes/datom + value pool overhead. At 200K datoms:
-~1 MB vs current ~26 MB (PositionalStore). At 100M datoms: ~510 MB vs ~13 GB.
-This is 1.5-2× above the ~2.8 byte/datom theoretical minimum — close enough
-that further compression would require domain-specific codebooks.
+**Uncompressed wavelet matrix** (n × ⌈log₂(σ)⌉ bits per column):
+
+| Column | σ @200K | h | bits | σ @100M | h | bits | σ @1B | h | bits | Rank/select provides |
+|--------|---------|---|------|---------|---|------|-------|---|------|---------------------|
+| Entity | 10K | 14 | 14 | 1M | 20 | 20 | 10M | 24 | 24 | Entity range scan (subsumes EAVT) |
+| Attribute | 100 | 7 | 7 | 200 | 8 | 8 | 500 | 9 | 9 | Attribute filter (subsumes AEVT) |
+| Value (pool) | 50K | 16 | 16 | 10M | 24 | 24 | 100M | 27 | 27 | Value retrieval |
+| TxId (delta) | 16† | 4 | 4 | 500K | 19 | 19 | 5M | 23 | 23 | Temporal query |
+| Op | 2 | 1 | 1 | 2 | 1 | 1 | 2 | 1 | 1 | LIVE count (IS the LIVE bitvector) |
+| **Total** | | | **42** | | | **72** | | | **84** | |
+| **Bytes/datom** | | | **5.3** | | | **9.0** | | | **10.5** | |
+
+† TxId at 200K uses per-chunk delta encoding, reducing effective σ from ~1K to ~16.
+  At larger scales, delta encoding still helps but σ grows with transaction count.
+
+**With compressed bitvectors** (RRR/Rank9 zero-order compression):
+
+Each wavelet level's bitvector has zero-order entropy H₀(B_l) ≤ 1. Using
+RRR-compressed bitvectors, each level stores n × H₀(B_l) bits instead of n bits.
+Entropy depends on workload distribution — estimates below assume a typical
+agentic workload (power-law entity cardinality, Zipf-like attribute skew,
+90/10 assert/retract ratio):
+
+| Column | H₀ estimate @100M | Compressed bits/datom | Compression source |
+|--------|-------------------|----------------------|-------------------|
+| Entity | ~0.8 | ~16 | Entities with many datoms create skewed bitvectors |
+| Attribute | ~0.4 | ~3 | A few attributes (db/ident, db/type) dominate frequency |
+| Value | ~0.9 | ~22 | High cardinality, limited compression |
+| TxId (delta) | ~0.3 | ~6 | Sequential structure; upper bits mostly 0 |
+| Op | ~0.47 | ~0.5 | Binary entropy of ~90% assert rate |
+| **Total** | | **~47.5** | |
+| **Bytes/datom** | | **~5.9** | |
+
+**CRITICAL**: Compressed bitvector support (RRR or Rank9-class) is REQUIRED to
+achieve the ≤6 bytes/datom target at 100M+. Without compression, the wavelet
+matrix stores 9-10.5 bytes/datom — still a 14-15× improvement over PositionalStore's
+137 bytes/datom, but not the projected 5-6 bytes/datom target.
+
+**Memory projection** (bitvectors + rank/select overhead, excluding value pool):
+
+| Scale | PositionalStore | Wavelet (uncompressed) | Wavelet (compressed) | Commodity RAM? |
+|-------|----------------|----------------------|---------------------|----------------|
+| 200K | 26 MB | 1.3 MB | ~0.8 MB | All: trivially |
+| 100M | 13.7 GB | 900 MB | ~590 MB | All: yes |
+| 1B | 137 GB | 10.5 GB | ~5.9 GB | Positional: **NO**; Wavelet: yes |
+| 10B | 1.37 TB | 105 GB | ~59 GB | Wavelet compressed: workstation |
+
+Value pool overhead (additive): ~10M unique values × ~40 bytes average = ~400 MB at
+100M, scaling sublinearly (dedup rate increases with scale). At 1B: ~1-2 GB estimated.
+
+**Projected density**: ~5.9 bytes/datom (compressed) at 100M. This is ~2.1× above
+the ~2.8 byte/datom theoretical minimum — close enough that further compression
+would require domain-specific codebooks or higher-order entropy coding.
 
 **Prerequisites** (all Phase 4a/4b, designed to be accretive toward this target):
 - Value-pooled deduplicated storage (bd-kt98, Phase 4b) — integer value IDs
@@ -2493,15 +2546,320 @@ because the Op column's rank operation directly provides LIVE datom counts.
   TARGET, it lacks the unified storage+indexing property. Columnar requires
   separate index structures; wavelet matrix provides indexing intrinsically.
 
+**Library assessment** (preliminary — formal selection matrix deferred to bd-jolx):
+
+| Library | WaveletMatrix? | Rank/Select | Compressed BV | License | Status |
+|---------|---------------|-------------|---------------|---------|--------|
+| `sucds` 0.8+ | Yes | Rank9Sel, DArray | Partial | MIT/Apache-2.0 | Active |
+| `succinct` 0.5 | No | JacobsonRank | No | MIT | Dormant (2019) |
+| `fid` 0.1 | No | FID bitvector | No | MIT | Minimal |
+| `vers-vecs` 1.1 | No | RsVec | RRR, Elias-Fano | MIT/Apache-2.0 | Active |
+| Custom | — | — | — | — | Full control |
+
+Recommendation: `sucds` as primary candidate (only crate with built-in WaveletMatrix +
+Rank9Sel). `vers-vecs` for compressed bitvectors if `sucds` lacks RRR. Custom
+implementation (bd-bmu2 contingency) if no library meets Kani-bounded correctness
+validation. Formal evaluation in bd-jolx.
+
+**Risk register**:
+
+| # | Failure mode | Prob. | Impact | Detection | Rollback |
+|---|-------------|-------|--------|-----------|----------|
+| R1 | Construction too slow at 100M | Low | High | bd-ena7 benchmark | Ship PositionalStore-only Phase 4b |
+| R2 | Queries exceed p99 budget | Medium | Medium | Tier 2 benchmarks | Hybrid: Positional hot / Wavelet cold |
+| R3 | Library correctness bugs | Low | Critical | Kani bounded proofs (gvil.3) | Custom impl (bd-bmu2) |
+| R4 | Value pool overhead > density gains | Low | Medium | bd-kt98 empirical | Direct symbol encoding (no dedup) |
+| R5 | Empirical density >> 6 bytes/datom | Medium | High | bd-ena7 at 100M | PositionalStore default; wavelet R&D deferred |
+| R6 | Compressed BV quality/perf tradeoff | Medium | Medium | bd-jolx benchmark | Uncompressed (9 b/d still 15× improvement) |
+
 **Consequence**: All Phase 4a/4b performance work is designed with the wavelet
-matrix as the information-theoretic horizon. The PositionalStore (INV-FERR-076),
-Yoneda fusion (INV-FERR-073), and value pooling (bd-kt98) are incremental steps
-toward this target. Implementation is Phase 4c+ (bd-gvil, P3 priority).
+matrix as the Phase 4b primary backend for billion-scale operation. The
+PositionalStore (INV-FERR-076) remains the validated 100M default and fallback.
+Both substrates coexist via `IndexBackend` (INV-FERR-025). The PositionalStore,
+Yoneda fusion (INV-FERR-073), and value pooling (bd-kt98) are accretive steps
+toward the wavelet target — each delivers independent value AND feeds the wavelet
+matrix prerequisites.
+
+**Three-layer scale strategy** (architectural picture):
+
+| Layer | Mechanism | Phase 4b role | Scale target |
+|-------|-----------|---------------|-------------|
+| 1: In-memory | Wavelet matrix (~6 bytes/datom) | Primary at billion-scale | 1B-10B datoms |
+| 2: Diff/transfer | Prolly tree (O(d) not O(n)) | Primary for cross-store sync | Federation |
+| 3: Horizontal | Entity-hash sharding × N | Multiplier on layer 1 | Beyond 10B |
 
 **Source**: Session 009 first-principles analysis (ALIEN Architecture). Information-
-theoretic gap analysis: ~130 bytes/datom actual vs ~28 bytes/datom entropy minimum.
-Cross-pollination from succinct data structure literature (Navarro, "Compact Data
-Structures," 2016).
+theoretic gap analysis: ~137 bytes/datom actual (bd-snnh validated) vs ~28 bytes/datom
+entropy minimum. bd-snnh empirical validation (2026-04-08) confirmed the substrate
+foundation. bd-4vwk reclassification (2026-04-08) committed Phase 4b primary status.
+Literature: Navarro, "Compact Data Structures," 2016; Claude and Navarro, "The
+Wavelet Matrix," 2012.
+
+---
+
+### §Wavelet: Wavelet Matrix Architecture
+
+This section specifies the wavelet matrix architecture committed in ADR-FERR-030.
+It defines the rank/select primitive contract, symbol encoding scheme, construction
+and query algorithms, and performance budgets. Formal INV-FERR invariants for
+each subsystem are authored in downstream beads (gvil.2 through gvil.11);
+this section provides the architectural foundation they refine.
+
+#### Rank/Select Primitive Contract
+
+The wavelet matrix's fundamental operation is rank/select over a bitvector
+B[0..n). All wavelet matrix operations decompose into these primitives.
+
+**Formal definition**:
+
+For bitvector B ∈ {0,1}^n and bit value b ∈ {0,1}:
+
+```
+rank_b(B, i) = |{j : j < i ∧ B[j] = b}|     — count of b-bits in B[0..i)
+select_b(B, j) = min{i : rank_b(B, i+1) = j+1}  — position of j-th b-bit (0-indexed)
+access(B, i) = B[i]                            — bit at position i
+```
+
+**Algebraic laws** (formal invariant deferred to bd-vhgn, gvil.3):
+
+```
+∀ B ∈ {0,1}^n, ∀ i ∈ [0,n]:
+  L1: rank_0(B, i) + rank_1(B, i) = i           (partition)
+  L2: rank_b(B, 0) = 0                           (base case)
+  L3: rank_b(B, n) = popcount_b(B)               (terminal)
+  L4: i ≤ j → rank_b(B, i) ≤ rank_b(B, j)       (monotonicity)
+
+∀ B ∈ {0,1}^n, ∀ j ∈ [0, popcount_b(B)):
+  L5: rank_b(B, select_b(B, j) + 1) = j + 1     (right inverse)
+
+∀ B ∈ {0,1}^n, ∀ i ∈ [0,n), B[i] = b:
+  L6: select_b(B, rank_b(B, i+1) - 1) = i       (left inverse when B[i]=b)
+```
+
+L5 and L6 together establish rank and select as mutual pseudo-inverses — rank is
+the counting function of the set {j : B[j] = b}, and select is its enumeration.
+
+**Complexity contract**:
+
+| Operation | Time | Space overhead | Implementation |
+|-----------|------|---------------|---------------|
+| rank_b(B, i) | O(1) | ~3.5% of |B| | Rank9 (popcount + sampling) |
+| select_b(B, j) | O(1) | ~3.5% of |B| | Select9 or DArray |
+| access(B, i) | O(1) | 0 | Direct bit read |
+| Construction | O(n) | — | Linear scan |
+
+The O(1) rank bound requires hardware popcount support (x86 `POPCNT`, ARM `CNT`).
+All modern CPUs provide this at ~1 cycle per 64-bit word. The 3.5% space overhead
+comes from the Rank9 sampling structure (one 64-bit counter per 512-bit block).
+
+**Lean theorem** (statement — proof in bd-vhgn):
+
+```lean
+/-- Rank and select are mutual pseudo-inverses on bitvectors. -/
+theorem rank_select_inverse (B : BitVec n) (b : Bool) (j : Fin (popcount b B)) :
+    rank b B (select b B j + 1) = j.val + 1 := sorry -- bd-vhgn
+
+/-- Rank partitions positions into 0-bits and 1-bits. -/
+theorem rank_partition (B : BitVec n) (i : Fin (n + 1)) :
+    rank false B i + rank true B i = i.val := sorry -- bd-vhgn
+```
+
+#### Symbol Encoding Scheme
+
+The wavelet matrix operates on integer-encoded symbols, not raw datom fields. Each
+column requires a bijective mapping from its domain to [0, σ). The encoding must
+be **order-preserving** for entity and attribute columns (to support range queries)
+and **deterministic** for all columns (INV-FERR-086 alignment).
+
+Formal symbol encoding invariant deferred to bd-8uck (gvil.4).
+
+| Column | Source type | Symbol type | Encoding | σ | Order? | Prerequisites |
+|--------|-----------|-------------|----------|---|--------|---------------|
+| Entity | EntityId (32 bytes) | u32 | CHD MPH → sorted rank | ≤n | Yes (sorted position) | INV-FERR-027 (CHD), bd-wa5p |
+| Attribute | Attribute (Arc\<str\>) | u16 | Schema dictionary code | ≤65535 | Yes (dictionary order) | INV-FERR-085 |
+| Value | Value (enum) | u32 | Value pool content-addr ID | ≤n | No (pool-assigned) | bd-kt98 |
+| TxId | TxId (HLC) | u32 | Per-chunk delta from min | ≤n_chunk | Yes (temporal order) | Per-chunk encoding |
+| Op | Op (Assert\|Retract) | u1 | 0=Assert, 1=Retract | 2 | N/A | Direct |
+
+**Entity symbol mapping**: The entity column requires a monotone rank function
+rank_e: EntityId → [0, σ_e) where rank_e(k₁) < rank_e(k₂) whenever k₁ < k₂ in
+BLAKE3 byte order. Phase 4a provides this via CHD perfect hash + sorted verification
+table: the hash function is non-monotone but `lookup_key_index` recovers the
+correct sorted position in O(1). This IS the monotone rank. PtrHash (Pibiri 2025,
+2.0 bits/key) is the Phase 4b optimization target for the MPH itself.
+
+**TxId delta encoding**: Within a prolly tree chunk, TxIds are typically sequential
+or near-sequential. Storing delta-from-minimum reduces σ_txid from O(total_txns) to
+O(chunk_txn_range), saving 10-15 bits/datom at 100M scale. The chunk boundary
+provides the base; deltas are non-negative integers.
+
+**Round-trip property**: For each column c with encoding enc_c and decoding dec_c:
+
+```
+∀ x ∈ domain(c): dec_c(enc_c(x)) = x     (injectivity)
+∀ s ∈ [0, σ_c): enc_c(dec_c(s)) = s       (surjectivity within range)
+```
+
+**Order-preserving property** (required for Entity, Attribute, TxId columns):
+
+```
+∀ x₁, x₂ ∈ domain(c): x₁ <_c x₂ → enc_c(x₁) < enc_c(x₂)
+```
+
+where <_c is the column's canonical ordering (BLAKE3 byte order for Entity,
+dictionary order for Attribute, temporal order for TxId). This property is
+load-bearing: range queries on the wavelet matrix (e.g., "all entities in
+[E₁, E₂]") rely on the symbol encoding preserving the domain ordering. A
+non-order-preserving encoding would make range queries impossible without
+post-filtering, destroying the O(log σ) query bound.
+
+The Value column does NOT require order-preservation — pool-assigned IDs are
+arbitrary. Value range queries (if needed) would require a separate index.
+
+#### Wavelet Matrix Construction Algorithm
+
+Given a sequence S[0..n) over alphabet Σ = [0, σ), with h = ⌈log₂(σ)⌉ bit levels:
+
+```
+CONSTRUCT(S[0..n), σ):
+  h ← ⌈log₂(σ)⌉
+  z[0..h) ← []                     -- zero counts per level
+  B[0..h) ← [BitVec(n); h]         -- h bitvectors, each of length n
+
+  for level in (h-1) downto 0:
+    for i in 0..n:
+      bit ← (S[i] >> level) & 1    -- bit `level` of symbol S[i]
+      B[level][i] ← bit
+    z[level] ← rank_0(B[level], n)  -- precompute zero count
+
+    -- Stable partition: 0-bits left, 1-bits right (preserving order within)
+    S ← stable_partition(S, |s| (s >> level) & 1 == 0)
+
+  return (B[0..h), z[0..h))
+```
+
+Time: O(n × h). Space: n × h bits + O(h) metadata.
+
+The stable partition at each level is the key operation — it reorders symbols so
+that those with a 0-bit at the current level precede those with a 1-bit, preserving
+relative order within each group. After h levels of partitioning, equal symbols
+occupy contiguous ranges — this is the property that makes rank queries work.
+
+Formal construction invariant deferred to bd-q630 (gvil.5).
+
+#### Wavelet Matrix Query Operations
+
+All queries compose from binary rank/select on the h level bitvectors.
+Formal query invariants deferred to bd-hfzx (gvil.6).
+
+**Access(i)** — return symbol at position i:
+
+```
+ACCESS(B, z, i):
+  symbol ← 0
+  for level in (h-1) downto 0:
+    bit ← B[level][i]
+    if bit == 0:
+      i ← rank_0(B[level], i)
+    else:
+      i ← z[level] + rank_1(B[level], i)
+      symbol ← symbol | (1 << level)
+  return symbol
+```
+
+Time: O(h) = O(log σ). Each level performs one rank operation (O(1) with Rank9).
+
+**Rank_c(i)** — count of symbol c in positions [0, i):
+
+```
+RANK_c(B, z, c, i):
+  lo ← 0
+  hi ← i
+  for level in (h-1) downto 0:
+    bit ← (c >> level) & 1
+    if bit == 0:
+      lo ← rank_0(B[level], lo)
+      hi ← rank_0(B[level], hi)
+    else:
+      lo ← z[level] + rank_1(B[level], lo)
+      hi ← z[level] + rank_1(B[level], hi)
+  return hi - lo
+```
+
+Time: O(h) = O(log σ). Narrows the [lo, hi) interval by routing through each
+bit level. The final interval length is the count of symbol c in positions [0, i).
+
+**Select_c(j)** — position of j-th occurrence of symbol c:
+
+```
+SELECT_c(B, z, c, j):
+  -- Phase 1: compute the range [lo, hi) of symbol c at the leaf level
+  lo ← 0, hi ← n
+  for level in (h-1) downto 0:
+    bit ← (c >> level) & 1
+    if bit == 0:
+      lo ← rank_0(B[level], lo)
+      hi ← rank_0(B[level], hi)
+    else:
+      lo ← z[level] + rank_1(B[level], lo)
+      hi ← z[level] + rank_1(B[level], hi)
+
+  -- Phase 2: navigate back up using select on each level
+  pos ← lo + j
+  for level in 0 to (h-1):
+    bit ← (c >> level) & 1
+    if bit == 0:
+      pos ← select_0(B[level], pos)
+    else:
+      pos ← select_1(B[level], pos - z[level])
+  return pos
+```
+
+Time: O(h) with O(1) select support. Without select support: O(h × log n)
+using binary search over rank to simulate select.
+
+**Query composition for Ferratomic**:
+
+| Ferratomic query | Wavelet composition | Time |
+|-----------------|---------------------|------|
+| Entity lookup (EAVT point) | rank_e on entity column → position range | O(log σ_e) |
+| Attribute filter | rank_a on attribute column → position set | O(log σ_a) |
+| Entity+Attribute | rank_e ∩ rank_a via position intersection | O(log σ_e + log σ_a) |
+| LIVE datom count | rank_1(Op column, n) | O(1) — single rank |
+| Temporal range [t₁, t₂] | rank_t(t₂) - rank_t(t₁) on TxId column | O(log σ_t) |
+| Full datom at position i | access_e(i), access_a(i), ..., access_o(i) | O(Σ log σ_c) |
+
+Cross-column queries compose via **position-set intersection**: find positions
+matching entity E via entity column rank, find positions matching attribute A via
+attribute column rank, intersect the position sets. The wavelet matrix's positional
+correspondence (all columns share the same index space, per INV-FERR-078 columnar
+isomorphism) makes this composition well-defined.
+
+#### Performance Budgets
+
+Wavelet matrix performance targets for Phase 4b (all empirical validation in
+bd-ena7, gvil.10):
+
+| Metric | Target @100M | Target @1B | Backend | Comparison to PositionalStore |
+|--------|-------------|-----------|---------|------------------------------|
+| Storage density | ≤6 bytes/datom (compressed) | ≤8 bytes/datom | WaveletStore | 23× / 17× improvement |
+| Entity point lookup | <200 ns (h=20, 20 rank ops) | <300 ns (h=24) | Rank9 popcount | ~3× slower than interpolation search (acceptable: data fits cache) |
+| Attribute filter | <100 ns (h=8) | <120 ns (h=9) | Rank9 popcount | Faster (fewer levels, high skew) |
+| LIVE datom count | O(1), <10 ns | O(1), <10 ns | Single rank_1 | Same as current popcount |
+| Range scan throughput | >10M datoms/s | >5M datoms/s | Sequential access | Comparable (cache-friendly columns) |
+| Construction time @100M | <30s (h_avg=14, single-threaded) | — | Linear scan | Acceptable for checkpoint recovery |
+| Cold start @100M | <5s (mmap V4 checkpoint) | <5s (mmap) | Memory-mapped | INV-FERR-028 maintained |
+
+**Point-lookup latency tradeoff**: The wavelet matrix's entity lookup (~200ns at
+100M) is ~3× slower than PositionalStore's interpolation search (~65ns). This is
+the fundamental tradeoff: 23× better storage density costs ~3× in point-lookup
+latency. The tradeoff is favorable because: (a) the entire 1B-datom store fits in
+RAM (~6 GB vs 137 GB), eliminating disk I/O that dominates real-world latency;
+(b) the smaller footprint means better cache utilization for scan-heavy workloads;
+(c) point lookups are still well under the 10ms p99 budget (INV-FERR-027).
+
+**Formal invariants for performance budgets** will be authored as part of
+gvil.10 (bd-ena7) after empirical validation confirms the projections.
 
 ---
 
@@ -2834,9 +3192,9 @@ Phase 4b+ implementation, building on the Phase 4a foundations established above
 
 ### ADR-FERR-031: Wavelet Matrix Phase 4a Prerequisites — Rank/Select and Attribute Interning
 
-**Traces to**: ADR-FERR-030 (wavelet matrix convergence target), INV-FERR-029
+**Traces to**: ADR-FERR-030 (wavelet matrix Phase 4b primary backend), INV-FERR-029
 (LIVE bitvector), INV-FERR-073 (Yoneda fusion)
-**Stage**: 2 (prerequisite work pulled to Phase 4a, wavelet matrix itself Phase 4c+)
+**Stage**: 1 (prerequisite work pulled to Phase 4a, wavelet matrix Phase 4b per bd-4vwk)
 
 **Problem**: ADR-FERR-030 identifies the wavelet matrix as the information-theoretic
 convergence target but lists several prerequisites. Two of these prerequisites are
@@ -2855,11 +3213,12 @@ deferred, because they compound with other Phase 4a optimizations:
 
 **Consequence**: These are pulled forward to Phase 4a not as wavelet matrix
 implementation but as independent performance wins that HAPPEN to be wavelet
-matrix prerequisites. When Phase 4c implements the wavelet matrix, the rank/select
-implementation and the attribute integer encoding are already verified and benchmarked.
+matrix prerequisites. When Phase 4b implements the wavelet matrix (per bd-4vwk
+reclassification), the rank/select implementation and the attribute integer
+encoding are already verified and benchmarked.
 
-The accretive design principle is preserved: Phase 4a work feeds Phase 4c without
-being designed for Phase 4c. The justification for each prerequisite stands on its
+The accretive design principle is preserved: Phase 4a work feeds Phase 4b without
+being designed for Phase 4b. The justification for each prerequisite stands on its
 own Phase 4a merits.
 
 ---
@@ -3421,12 +3780,16 @@ At 200K datoms: OrdMap uses ~70MB, Positional uses ~26MB.
 
 | INV-FERR | Metric | Phase 4b Target | Backend | Dependency |
 |----------|--------|-----------------|---------|------------|
-| 025 | Index backend swap | RocksDB/LSM backend | SortedVec → RocksDB | bd-keyt |
-| 027 | Read P99.99 at 100M | < 10ms | RocksDB | bd-keyt |
-| 028 | Cold start at 100M | < 5s | mmap checkpoint | bd-keyt |
+| 025 | Index backend swap | Wavelet matrix backend | WaveletStore (ADR-FERR-030) | bd-gvil |
+| 027 | Read P99 at 100M | < 10ms (entity ~200ns) | Wavelet rank/select | bd-ena7 |
+| 027 | Read P99 at 1B | < 10ms (entity ~300ns) | Wavelet rank/select | bd-ena7 |
+| 028 | Cold start at 100M | < 5s | mmap V4 checkpoint | bd-pg85 |
+| 028 | Cold start at 1B | < 5s | mmap V4 checkpoint | bd-pg85 |
 | 047 | Prolly tree diff | O(d log n) | Prolly tree | bd-132 |
 | 071 | Sorted-array backend | Default for all reads | SortedVecBackend | Implemented (Phase 4a) |
 | 072 | Lazy promotion | Batch splice | PositionalStore | Implemented (Phase 4a) |
+| NEW | Storage density at 100M | ≤6 bytes/datom | WaveletStore (compressed BV) | bd-ena7 |
+| NEW | Storage density at 1B | ≤8 bytes/datom | WaveletStore (compressed BV) | bd-ena7 |
 
 ### Complexity Audit
 

@@ -8,15 +8,21 @@ use ferratom::FerraError;
 
 /// INV-FERR-019: every FerraError variant produces a non-empty Display string.
 ///
-/// Constructs all 11 FerraError variants with minimal content and verifies
+/// Constructs all 21 FerraError variants with minimal content and verifies
 /// that `fmt::Display` produces a non-empty string for each. This ensures
 /// no variant is accidentally forgotten in the `Display` implementation.
+///
+/// VERIFY-DRIFT-012: Updated from 12 to 21 variants to cover
+/// SignatureInvalid, TransportError (Phase 4a.5), TruncatedChunk,
+/// TrailingBytes, NonCanonicalChunk, EmptyChunk, UnknownCodecTag,
+/// NotImplemented (Phase 4b codec), and AttributeTooLong (INV-FERR-086).
 #[cfg_attr(kani, kani::proof)]
 #[cfg_attr(kani, kani::unwind(4))]
 #[cfg_attr(not(kani), test)]
 #[cfg_attr(not(kani), ignore = "requires Kani verifier")]
 fn error_display_non_empty() {
-    let variants: [FerraError; 11] = [
+    let variants: [FerraError; 21] = [
+        // Original 12
         FerraError::WalWrite("w".to_string()),
         FerraError::WalRead("r".to_string()),
         FerraError::CheckpointCorrupted {
@@ -36,6 +42,7 @@ fn error_display_non_empty() {
             expected: "e".to_string(),
             got: "g".to_string(),
         },
+        FerraError::AttributeTooLong { len: 70000 },
         FerraError::EmptyTransaction,
         FerraError::SchemaIncompatible {
             attribute: "a".to_string(),
@@ -47,6 +54,22 @@ fn error_display_non_empty() {
             addr: "h".to_string(),
             reason: "r".to_string(),
         },
+        FerraError::InvariantViolation {
+            invariant: "INV-FERR-999".to_string(),
+            details: "test".to_string(),
+        },
+        // Phase 4a.5 (federation)
+        FerraError::SignatureInvalid {
+            tx_description: "test sig".to_string(),
+        },
+        FerraError::TransportError("test transport".to_string()),
+        // Phase 4b (codec)
+        FerraError::TruncatedChunk,
+        FerraError::TrailingBytes,
+        FerraError::NonCanonicalChunk,
+        FerraError::EmptyChunk,
+        FerraError::UnknownCodecTag(0x42),
+        FerraError::NotImplemented("test feature"),
     ];
 
     for err in &variants {
@@ -56,17 +79,6 @@ fn error_display_non_empty() {
             "INV-FERR-019: FerraError::Display must produce non-empty string"
         );
     }
-
-    // Also verify InvariantViolation (the 12th variant, separated for clarity)
-    let inv_err = FerraError::InvariantViolation {
-        invariant: "INV-FERR-999".to_string(),
-        details: "test".to_string(),
-    };
-    let inv_msg = format!("{inv_err}");
-    assert!(
-        !inv_msg.is_empty(),
-        "INV-FERR-019: InvariantViolation Display must produce non-empty string"
-    );
 }
 
 /// INV-FERR-019: FerraError implements std::error::Error.
@@ -109,16 +121,17 @@ fn error_send_sync() {
 
 /// INV-FERR-023: FerraError variant count is exhaustive.
 ///
-/// Verifies that all 12 known variants compile and satisfy the
-/// std::error::Error bound. If a variant is added but not covered
-/// here, the compile-time exhaustiveness of the array literal will
-/// need updating (a manual but intentional gate).
+/// Verifies that all 21 known variants compile and satisfy the
+/// `std::error::Error` bound. If a variant is added but not covered
+/// here, the array size must be updated (intentional manual gate).
+///
+/// VERIFY-DRIFT-012: Updated from 12 to 21 variants.
 #[cfg_attr(kani, kani::proof)]
 #[cfg_attr(kani, kani::unwind(4))]
 #[cfg_attr(not(kani), test)]
 #[cfg_attr(not(kani), ignore = "requires Kani verifier")]
 fn error_all_variants_are_error() {
-    let variants: [FerraError; 12] = [
+    let variants: [FerraError; 21] = [
         FerraError::WalWrite("w".to_string()),
         FerraError::WalRead("r".to_string()),
         FerraError::CheckpointCorrupted {
@@ -138,6 +151,7 @@ fn error_all_variants_are_error() {
             expected: "e".to_string(),
             got: "g".to_string(),
         },
+        FerraError::AttributeTooLong { len: 70000 },
         FerraError::EmptyTransaction,
         FerraError::SchemaIncompatible {
             attribute: "a".to_string(),
@@ -153,9 +167,18 @@ fn error_all_variants_are_error() {
             invariant: "INV-FERR-023".to_string(),
             details: "test".to_string(),
         },
+        FerraError::SignatureInvalid {
+            tx_description: "test".to_string(),
+        },
+        FerraError::TransportError("test".to_string()),
+        FerraError::TruncatedChunk,
+        FerraError::TrailingBytes,
+        FerraError::NonCanonicalChunk,
+        FerraError::EmptyChunk,
+        FerraError::UnknownCodecTag(0x42),
+        FerraError::NotImplemented("test"),
     ];
 
-    // Every variant must implement std::error::Error (Display + Debug).
     for err in &variants {
         let display = format!("{err}");
         let debug = format!("{err:?}");

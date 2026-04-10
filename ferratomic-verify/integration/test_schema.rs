@@ -318,6 +318,7 @@ fn build_all_ferra_error_variants() -> Vec<FerraError> {
         FerraError::EmptyChunk,
         FerraError::UnknownCodecTag(0x42),
         FerraError::NotImplemented("test feature"),
+        FerraError::AttributeTooLong { len: 70000 },
     ]
 }
 
@@ -371,6 +372,12 @@ fn assert_ferra_error_fields_valid(error: &FerraError) {
         | FerraError::TrailingBytes
         | FerraError::NonCanonicalChunk
         | FerraError::EmptyChunk => {}
+        FerraError::AttributeTooLong { len } => {
+            assert!(
+                *len > usize::from(u16::MAX),
+                "AttributeTooLong len must exceed u16::MAX"
+            );
+        }
         FerraError::SchemaIncompatible {
             attribute,
             left,
@@ -434,8 +441,8 @@ fn test_inv_ferr_019_error_exhaustiveness() {
 
     assert_eq!(
         variants.len(),
-        20,
-        "INV-FERR-019: expected 20 FerraError variants -- update this test if variants are added"
+        21,
+        "INV-FERR-019: expected 21 FerraError variants -- update this test if variants are added"
     );
 }
 
@@ -476,6 +483,10 @@ fn build_simple_ferra_error_variants() -> Vec<(&'static str, FerraError)> {
         ("EmptyChunk", FerraError::EmptyChunk),
         ("UnknownCodecTag", FerraError::UnknownCodecTag(0x42)),
         ("NotImplemented", FerraError::NotImplemented("test feature")),
+        (
+            "AttributeTooLong",
+            FerraError::AttributeTooLong { len: 70000 },
+        ),
     ]
 }
 

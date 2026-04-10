@@ -240,7 +240,7 @@ fn inv_ferr_007_epoch_ordering() {
         let tx = Transaction::new(node)
             .assert_datom(
                 EntityId::from_content(format!("e{}", i).as_bytes()),
-                Attribute::from("tx/provenance"),
+                Attribute::from("db/doc"),
                 Value::String(format!("test-{i}").into()),
             )
             .commit(store.schema())
@@ -275,7 +275,7 @@ fn inv_ferr_011_observer_epoch_monotonic() {
         let tx = Transaction::new(node)
             .assert_datom(
                 EntityId::from_content(format!("e{}", i).as_bytes()),
-                Attribute::from("tx/provenance"),
+                Attribute::from("db/doc"),
                 Value::String(format!("test-{i}").into()),
             )
             .commit(store.schema())

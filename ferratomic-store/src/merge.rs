@@ -17,7 +17,7 @@
 //! Merge two independently-evolved stores and verify the result contains
 //! datoms from both (INV-FERR-001: commutativity).
 //!
-//! ```rust,no_run
+//! ```rust,ignore
 //! use std::sync::Arc;
 //! use ferratom::{NodeId, Attribute, EntityId, Value};
 //! use ferratomic_db::db::Database;

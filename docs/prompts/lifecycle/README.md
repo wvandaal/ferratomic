@@ -23,6 +23,8 @@ Optimized prompts for driving every phase of ferratomic development with AI agen
 | 15 | [Prompt Forge](15-prompt-forge.md) | Any | Varies | Design new lifecycle prompts from first principles |
 | 16 | [Spec Authoring](16-spec-authoring.md) | 0 | High→Low | Writing new INV-FERR, ADR-FERR, NEG-FERR, spec sections |
 | 17 | [Spec Audit](17-spec-audit.md) | Any | High→Low | Audit and harden spec sections to lab-grade |
+| 18 | [Verification Audit](18-verification-audit.md) | Any | High→Low | Audit Lean proofs, Kani harnesses, Stateright models for drift |
+| 19 | [Test Suite Audit](19-test-suite-audit.md) | Any | High→Low | Audit tests for false confidence, weak assertions, coverage gaps |
 
 ## Usage Pattern
 
@@ -38,6 +40,10 @@ Review → 06-cleanroom-review.md
 Issues found? → 07-bug-triage.md + 08-task-creation.md
   ↓
 Post-swarm? → 13-progress-review.md (assess) → 14-bead-audit.md (harden)
+  ↓
+Verification drift? → 18-verification-audit.md (Lean/Kani/Stateright)
+  ↓
+Test confidence? → 19-test-suite-audit.md (assertions/coverage/fuzz/catalog)
   ↓
 New prompt needed? → 15-prompt-forge.md
   ↓

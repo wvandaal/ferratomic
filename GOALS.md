@@ -134,9 +134,11 @@ Tradeoff only against Tier 1, with explicit evidence that Tier 1 is at stake.
   unfixable until the system had to be rebuilt from scratch. Architecture is not
   aesthetics — it is the early warning system for every other quality dimension.
 
-- **Spec-implementation alignment.** Code without spec grounding is code that
-  cannot be verified. Every module traces to a named invariant. Every invariant
-  traces to an algebraic law. Zero drift tolerance.
+- **Spec-implementation alignment (functoriality).** The refinement tower is
+  a chain of structure-preserving functors (§5, computational trinitarianism).
+  Code without spec grounding breaks the functor chain and cannot be verified.
+  Every module traces to a named invariant. Every invariant traces to an
+  algebraic law. Zero drift tolerance.
 
 ### Tier 3 — Production Priorities
 
@@ -255,10 +257,39 @@ bounded model checking, and protocol model checking are the mechanisms by which
 algebraic correctness (Tier 1) is enforced. Without them, "correct" is an
 opinion. With them, "correct" is a theorem.
 
-**Types are propositions.** The Curry-Howard correspondence means compilation IS
-verification. Every type encodes an invariant. Every function signature is a
-contract. Invalid states must be unrepresentable. The compiler is the first and
-most reliable verifier — engage it fully.
+**Computational trinitarianism (Curry-Howard-Lambek).** Logic, type theory,
+and category theory are three views of the same mathematical structure:
+
+| Logic (Lean) | Type Theory (Rust) | Category Theory (Algebra) |
+|---|---|---|
+| Propositions | Types | Objects |
+| Proofs | Programs | Morphisms |
+| Conjunction (∧) | Product types | Products |
+| Disjunction (∨) | Sum types (`enum`) | Coproducts |
+| Implication (→) | Function types | Exponentials |
+
+This project operates at the intersection of all three legs. Lean verifies
+propositions, Rust verifies types, the algebraic specification verifies
+categorical structure. Operational consequences:
+
+- **Compilation IS verification.** Every type encodes an invariant. Every
+  function signature is a contract. Invalid states must be unrepresentable.
+  The compiler is the first and most reliable verifier — engage it fully.
+
+- **The refinement tower is a functor chain.** Each level (Goals → Spec →
+  Lean → Rust Types → Code) is a structure-preserving map. Spec-implementation
+  alignment (Tier 2) IS functoriality. A gap between levels is a broken
+  functor — a structural defect, not "drift."
+
+- **CRDT merge is a categorical coproduct.** `(P(D), ∪)` is a
+  join-semilattice category. Commutativity, associativity, idempotency are
+  consequences of the categorical structure. If merge violates these, the
+  structure is broken — the fix is structural, not a patch.
+
+- **Indexes are functors.** EAVT, AVET, VAET are structure-preserving maps
+  from store to ordered sets. Consistency across views is a natural
+  transformation. An index that loses or reorders datoms has broken
+  functoriality.
 
 ---
 

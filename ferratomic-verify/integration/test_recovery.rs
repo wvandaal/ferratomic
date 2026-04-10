@@ -300,7 +300,7 @@ fn inv_ferr_008_wal_entry_precedes_snapshot() {
     let db = Database::genesis_with_wal(&wal_path).expect("failed to create store with WAL");
     let node = NodeId::from_bytes([1u8; 16]);
 
-    transact_validated_datoms(&db, node, "e", "tx/provenance", 5);
+    transact_validated_datoms(&db, node, "e", "db/doc", 5);
     let pre_crash = capture_db_state(&db);
 
     // Recover from WAL alone (simulating crash + restart)

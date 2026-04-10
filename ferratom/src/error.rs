@@ -126,6 +126,22 @@ pub enum FerraError {
         got: String,
     },
 
+    /// Attribute name exceeds the canonical format length limit.
+    ///
+    /// **Cause**: An attribute name was provided with more than 65,535 bytes
+    /// (`u16::MAX`). The INV-FERR-086 canonical byte format uses u16-le for
+    /// attribute length and cannot represent longer names.
+    /// **Fault**: Caller bug. Attribute names are short namespace/name patterns
+    /// (e.g., "db/ident", "provenance/observed").
+    /// **Recovery**: Use shorter attribute names. Production attributes are
+    /// typically 10-40 bytes.
+    /// INV-FERR-086: Canonical Datom Format Determinism — the u16 length
+    /// prefix is part of the frozen canonical format.
+    AttributeTooLong {
+        /// The byte length of the oversized attribute name.
+        len: usize,
+    },
+
     /// Empty transaction submitted.
     ///
     /// **Cause**: The caller submitted a transaction containing zero datoms.
@@ -279,18 +295,14 @@ impl fmt::Display for FerraError {
                 attribute,
                 expected,
                 got,
-            } => {
-                write!(
-                    f,
-                    "Schema violation on {attribute}: expected {expected}, got {got}"
-                )
-            }
+            } => write!(f, "Schema violation: {attribute}: {expected} vs {got}"),
             Self::SchemaIncompatible {
                 attribute,
                 left,
                 right,
-            } => {
-                write!(f, "Schema incompatible on {attribute}: {left} vs {right}")
+            } => write!(f, "Schema incompatible on {attribute}: {left} vs {right}"),
+            Self::AttributeTooLong { len } => {
+                write!(f, "INV-FERR-086: attribute exceeds u16 max: {len} bytes")
             }
             Self::EmptyTransaction => write!(f, "Empty transaction"),
             Self::Backpressure => write!(f, "Write queue full (backpressure)"),
@@ -380,6 +392,7 @@ mod tests {
                 },
                 "I/O",
             ),
+            (FerraError::AttributeTooLong { len: 70000 }, "INV-FERR-086"),
             (FerraError::EmptyTransaction, "Empty transaction"),
             (FerraError::Backpressure, "backpressure"),
             (
@@ -486,6 +499,7 @@ mod tests {
                 expected: "A".into(),
                 got: "B".into(),
             },
+            FerraError::AttributeTooLong { len: 70000 },
             FerraError::EmptyTransaction,
             FerraError::SchemaIncompatible {
                 attribute: "x".into(),

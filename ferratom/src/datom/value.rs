@@ -14,6 +14,7 @@ use serde::{
 };
 
 use super::EntityId;
+use crate::error::FerraError;
 
 // ---------------------------------------------------------------------------
 // Attribute
@@ -23,10 +24,46 @@ use super::EntityId;
 ///
 /// Cloning is a reference-count increment. Equality comparison is O(n) in the
 /// string length (derived `PartialEq` compares by content, not pointer).
-#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug, Serialize)]
 pub struct Attribute(Arc<str>);
 
+/// CR-025-001: Custom `Deserialize` that rejects overlength attribute names.
+///
+/// INV-FERR-086: The canonical byte format uses u16-le for attribute length.
+/// Derived `Deserialize` would accept any string, bypassing the `new()`
+/// constructor gate. This impl deserializes the string, then validates
+/// length — same pattern as `NonNanFloat` CR-003 rejecting NaN.
+impl<'de> Deserialize<'de> for Attribute {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let s = Arc::<str>::deserialize(deserializer)?;
+        if u16::try_from(s.len()).is_err() {
+            return Err(serde::de::Error::invalid_length(
+                s.len(),
+                &"an attribute name of at most 65535 bytes (INV-FERR-086)",
+            ));
+        }
+        Ok(Self(s))
+    }
+}
+
 impl Attribute {
+    /// Create an `Attribute` with INV-FERR-086 length validation.
+    ///
+    /// The canonical byte format uses u16-le for attribute length.
+    /// Attributes exceeding 65,535 bytes cannot be canonically serialized.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FerraError::AttributeTooLong`] if the string exceeds
+    /// `u16::MAX` bytes.
+    pub fn new(s: &str) -> Result<Self, FerraError> {
+        let len = s.len();
+        if u16::try_from(len).is_err() {
+            return Err(FerraError::AttributeTooLong { len });
+        }
+        Ok(Self(Arc::from(s)))
+    }
+
     /// Borrow the attribute name as a string slice.
     #[must_use]
     pub fn as_str(&self) -> &str {
@@ -35,7 +72,18 @@ impl Attribute {
 }
 
 impl From<&str> for Attribute {
+    /// Convert a string slice to an `Attribute`.
+    ///
+    /// All production attribute names are short namespace/name patterns
+    /// (e.g., `"db/ident"`, `"provenance/observed"`). Use [`Attribute::new`]
+    /// for runtime inputs that require validated construction.
     fn from(s: &str) -> Self {
+        debug_assert!(
+            u16::try_from(s.len()).is_ok(),
+            "INV-FERR-086: attribute name exceeds u16 max length: {} bytes; \
+             use Attribute::new() for validated construction",
+            s.len(),
+        );
         Self(Arc::from(s))
     }
 }
@@ -520,6 +568,89 @@ mod tests {
                 let id = table.id_of(attr).expect("must be interned");
                 let resolved = table.resolve(id).expect("must resolve");
                 prop_assert_eq!(resolved, attr.as_str());
+            }
+        }
+    }
+
+    // -- INV-FERR-086: Attribute u16 length validation -------------------
+
+    #[test]
+    fn test_inv_ferr_086_attribute_new_accepts_max_length() {
+        // Exactly u16::MAX bytes must succeed.
+        let s: String = "a".repeat(usize::from(u16::MAX));
+        let result = Attribute::new(&s);
+        assert!(
+            result.is_ok(),
+            "INV-FERR-086: attribute with exactly u16::MAX bytes must succeed"
+        );
+        assert_eq!(result.expect("just checked").as_str(), &s);
+    }
+
+    #[test]
+    fn test_inv_ferr_086_attribute_new_rejects_overlength() {
+        // u16::MAX + 1 bytes must fail.
+        let s: String = "a".repeat(usize::from(u16::MAX) + 1);
+        let result = Attribute::new(&s);
+        assert!(
+            result.is_err(),
+            "INV-FERR-086: attribute exceeding u16::MAX bytes must fail"
+        );
+        match result {
+            Err(FerraError::AttributeTooLong { len }) => {
+                assert_eq!(len, usize::from(u16::MAX) + 1);
+            }
+            other => panic!("expected AttributeTooLong, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_inv_ferr_086_attribute_new_normal() {
+        // Normal short attribute names must succeed.
+        let attr = Attribute::new("db/ident").expect("short attribute must succeed");
+        assert_eq!(attr.as_str(), "db/ident");
+    }
+
+    #[test]
+    fn test_inv_ferr_086_attribute_new_empty() {
+        // Empty string is valid (0 bytes < u16::MAX).
+        let attr = Attribute::new("").expect("empty attribute must succeed");
+        assert_eq!(attr.as_str(), "");
+    }
+
+    /// CR-025-001: Deserializing an overlength attribute must fail.
+    #[test]
+    fn test_inv_ferr_086_attribute_deserialize_rejects_overlength() {
+        let long_name: String = "x".repeat(usize::from(u16::MAX) + 1);
+        let bytes = bincode::serialize(&long_name).expect("serialize string");
+        let result: Result<Attribute, _> = bincode::deserialize(&bytes);
+        assert!(
+            result.is_err(),
+            "INV-FERR-086: deserializing >u16::MAX byte attribute must fail"
+        );
+    }
+
+    /// CR-025-001: Deserializing a valid-length attribute must succeed.
+    #[test]
+    fn test_inv_ferr_086_attribute_deserialize_accepts_valid() {
+        let bytes = bincode::serialize(&"db/ident").expect("serialize");
+        let attr: Attribute = bincode::deserialize(&bytes).expect("deserialize");
+        assert_eq!(attr.as_str(), "db/ident");
+    }
+
+    proptest! {
+        /// INV-FERR-086: Attribute::new boundary — any string ≤ u16::MAX
+        /// bytes succeeds, any string > u16::MAX bytes fails.
+        #[test]
+        fn test_inv_ferr_086_attribute_new_proptest(
+            len in 0usize..70000,
+        ) {
+            let s: String = "a".repeat(len);
+            let result = Attribute::new(&s);
+            if u16::try_from(len).is_ok() {
+                let attr = result.expect("checked");
+                prop_assert_eq!(attr.as_str(), &s);
+            } else {
+                prop_assert!(result.is_err(), "len={len} should fail");
             }
         }
     }
