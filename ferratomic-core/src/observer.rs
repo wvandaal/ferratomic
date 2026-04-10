@@ -186,9 +186,6 @@ impl ObserverBroadcast {
 /// Apply an optional `DatomFilter` to a datom slice.
 ///
 /// `None` = unfiltered (returns all datoms). `Some(f)` = filtered.
-/// Apply an optional `DatomFilter` to a datom slice.
-///
-/// `None` = unfiltered (returns all datoms). `Some(f)` = filtered.
 fn apply_filter(filter: Option<&DatomFilter>, datoms: &[Datom]) -> Vec<Datom> {
     match filter {
         None => datoms.to_vec(),

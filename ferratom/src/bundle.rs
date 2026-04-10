@@ -9,7 +9,7 @@
 //! can verify the signature because the exact datoms that were signed are
 //! grouped together, not scattered across the store's datom set.
 
-use crate::{Attribute, Datom, ProvenanceType, TxId, TxSignature, TxSigner, Value};
+use crate::{Attribute, Datom, EntityId, ProvenanceType, TxId, TxSignature, TxSigner, Value};
 
 // ---------------------------------------------------------------------------
 // SignedTransactionBundle
@@ -42,8 +42,8 @@ pub struct SignedTransactionBundle {
     /// Ed25519 signature + signer, paired to prevent invalid states.
     /// `None` for unsigned transactions.
     signing: Option<(TxSignature, TxSigner)>,
-    /// Causal predecessor `TxId`s from the Frontier at commit time.
-    predecessors: Vec<TxId>,
+    /// Causal predecessor entity IDs (D19: `EntityId`, not `TxId`).
+    predecessors: Vec<EntityId>,
     /// Epistemic confidence level (INV-FERR-063).
     /// `None` defaults to `Observed` (the common case).
     provenance: Option<ProvenanceType>,
@@ -56,7 +56,7 @@ impl SignedTransactionBundle {
         tx_id: TxId,
         datoms: Vec<Datom>,
         signing: Option<(TxSignature, TxSigner)>,
-        predecessors: Vec<TxId>,
+        predecessors: Vec<EntityId>,
         provenance: Option<ProvenanceType>,
     ) -> Self {
         Self {
@@ -79,10 +79,17 @@ impl SignedTransactionBundle {
         let mut signature = None;
         let mut signer = None;
         let mut provenance = None;
+        let mut predecessors = Vec::new();
 
         for d in datoms {
             if is_tx_metadata(d.attribute()) {
-                extract_metadata(d, &mut signature, &mut signer, &mut provenance);
+                extract_metadata(
+                    d,
+                    &mut signature,
+                    &mut signer,
+                    &mut provenance,
+                    &mut predecessors,
+                );
             } else {
                 user_datoms.push(d.clone());
             }
@@ -94,7 +101,7 @@ impl SignedTransactionBundle {
             tx_id,
             datoms: user_datoms,
             signing,
-            predecessors: Vec::new(),
+            predecessors,
             provenance,
         }
     }
@@ -125,7 +132,7 @@ impl SignedTransactionBundle {
 
     /// Causal predecessor `TxId`s.
     #[must_use]
-    pub fn predecessors(&self) -> &[TxId] {
+    pub fn predecessors(&self) -> &[EntityId] {
         &self.predecessors
     }
 
@@ -148,6 +155,7 @@ fn extract_metadata(
     signature: &mut Option<TxSignature>,
     signer: &mut Option<TxSigner>,
     provenance: &mut Option<ProvenanceType>,
+    predecessors: &mut Vec<EntityId>,
 ) {
     match d.attribute().as_str() {
         "tx/signature" => {
@@ -169,7 +177,13 @@ fn extract_metadata(
                 *provenance = ProvenanceType::from_keyword(kw);
             }
         }
-        _ => {} // tx/time, tx/origin, tx/predecessor, etc.
+        "tx/predecessor" => {
+            // D19: predecessor Ref values are EntityIds (BLAKE3 of TxId bytes).
+            if let Value::Ref(eid) = d.value() {
+                predecessors.push(*eid);
+            }
+        }
+        _ => {} // tx/time, tx/origin, etc.
     }
 }
 

@@ -135,33 +135,36 @@ impl Transport for LocalTransport {
 /// ADR-FERR-025: Transaction is the natural unit of federation.
 /// Datoms are grouped by their `TxId`, then each group is converted
 /// to a bundle via `SignedTransactionBundle::from_store_datoms`.
+/// Group snapshot datoms into `SignedTransactionBundle` per `TxId`.
+///
+/// DEFECT-004 fix: first pass collects only USER datoms (non-tx/*) that
+/// match the filter. Second pass collects ALL tx/* metadata for accepted
+/// transaction IDs. This ensures `tx/*` metadata is always included for
+/// context but never causes a transaction to be accepted just because
+/// its metadata matched.
 fn group_into_bundles(
     snap: &crate::store::Snapshot,
     filter: &DatomFilter,
 ) -> Vec<SignedTransactionBundle> {
-    // Group datoms by TxId. Include ALL datoms for a TxId if ANY
-    // user datom in that TxId matches the filter.
+    let mut accepted_txids: std::collections::BTreeSet<ferratom::TxId> =
+        std::collections::BTreeSet::new();
     let mut groups: BTreeMap<ferratom::TxId, Vec<Datom>> = BTreeMap::new();
 
-    // First pass: identify TxIds with matching user datoms.
+    // First pass: user datoms only (skip tx/* metadata).
     for datom in snap.datoms() {
-        if filter.matches(datom) {
+        if !datom.attribute().as_str().starts_with("tx/") && filter.matches(datom) {
+            accepted_txids.insert(datom.tx());
             groups.entry(datom.tx()).or_default().push(datom.clone());
         }
     }
 
-    // Second pass: collect tx/* metadata for accepted TxIds.
+    // Second pass: collect ALL datoms (including tx/* metadata) for accepted TxIds.
     for datom in snap.datoms() {
-        if datom.attribute().as_str().starts_with("tx/") {
-            if let Some(group) = groups.get_mut(&datom.tx()) {
-                if !group.contains(datom) {
-                    group.push(datom.clone());
-                }
-            }
+        if accepted_txids.contains(&datom.tx()) && datom.attribute().as_str().starts_with("tx/") {
+            groups.entry(datom.tx()).or_default().push(datom.clone());
         }
     }
 
-    // Build bundles.
     groups
         .into_iter()
         .map(|(tx_id, datoms)| SignedTransactionBundle::from_store_datoms(&datoms, tx_id))

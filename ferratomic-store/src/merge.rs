@@ -176,17 +176,17 @@ pub fn selective_merge(
 ) -> Result<(Store, MergeReceipt), FerraError> {
     let start = std::time::Instant::now();
 
-    // Filter remote datoms.
+    // Filter remote datoms. BTreeSet for O(log n) containment checks.
     let mut transferred = 0usize;
     let mut filtered_out = 0usize;
     let mut already_present = 0usize;
 
-    let local_datoms: Vec<&Datom> = local.datoms().collect();
+    let local_set: std::collections::BTreeSet<&Datom> = local.datoms().collect();
     let accepted_remote: Vec<Datom> = remote
         .datoms()
         .filter(|d| {
             if filter.matches(d) {
-                if local_datoms.contains(d) {
+                if local_set.contains(d) {
                     already_present += 1;
                 } else {
                     transferred += 1;
@@ -212,7 +212,10 @@ pub fn selective_merge(
     let schema_merge = merge_schemas(&local.schema, &remote.schema);
     let epoch = local.epoch.max(remote.epoch);
     let genesis_node = std::cmp::min(local.genesis_node, remote.genesis_node);
-    let live_causal = merge_causal(&local.live_causal, &remote.live_causal);
+    // DEFECT-001: rebuild live_causal from actual merged datoms, NOT from
+    // unfiltered remote. merge_causal(&local, &remote) would include entries
+    // for datoms that were filtered out, violating INV-FERR-029.
+    let live_causal = crate::query::build_live_causal(positional.datoms().iter());
     let live_set = crate::query::derive_live_set(&live_causal);
 
     let merged_store = Store {
