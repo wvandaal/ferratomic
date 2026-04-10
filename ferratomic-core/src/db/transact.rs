@@ -8,10 +8,12 @@
 
 use std::sync::{atomic::Ordering, Arc};
 
+use ed25519_dalek::SigningKey;
 use ferratom::{Datom, FerraError, ProvenanceType};
 
 use super::{Database, Ready};
 use crate::{
+    signing::{sign_transaction, SigningComponents},
     store::{Store, TransactContext, TxReceipt},
     writer::{Committed, Transaction},
 };
@@ -83,6 +85,69 @@ impl Database<Ready> {
         // Step 4: HI-004: Observer delivery is advisory-only.
         let _ = self.notify_observers(receipt.epoch(), receipt.datoms());
 
+        Ok(receipt)
+    }
+
+    /// Apply a committed transaction with Ed25519 signing (D15).
+    ///
+    /// INV-FERR-051: Signs the transaction under the write lock after HLC
+    /// tick assigns `tx_id`. The signing message includes the pre-transaction
+    /// store fingerprint (D17) and `Observed` provenance (INV-FERR-063).
+    ///
+    /// ADR-FERR-031: Signing at the Database layer (not Transaction layer)
+    /// because the signing message requires `tx_id` which is only known
+    /// after the HLC tick.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`Database::transact`], plus `FerraError::SignatureInvalid`
+    /// if the signing key is invalid (should not happen with a well-formed key).
+    pub fn transact_signed(
+        &self,
+        transaction: Transaction<Committed>,
+        signing_key: &SigningKey,
+    ) -> Result<TxReceipt, FerraError> {
+        let write_slot = self
+            .write_limiter
+            .try_acquire()
+            .ok_or(FerraError::Backpressure)?;
+
+        let (guard, tx_id) = self.acquire_write_lock_and_tick()?;
+
+        let current = self.current.load();
+        let fp = current.fingerprint().copied().unwrap_or([0u8; 32]);
+        let mut new_store = Store::clone(&current);
+
+        // INV-FERR-051: sign with pre-transaction fingerprint.
+        // Predecessors: empty for now (frontier tracking deferred).
+        let preds: Vec<ferratom::EntityId> = Vec::new();
+        let components = SigningComponents {
+            datoms: transaction.datoms(),
+            tx_id,
+            predecessor_entity_ids: &preds,
+            store_fingerprint: &fp,
+        };
+        let (sig, signer) = sign_transaction(&components, signing_key);
+
+        let ctx = TransactContext {
+            tx_id,
+            frontier: None,
+            signing: Some((sig, signer)),
+            provenance: ProvenanceType::Observed,
+            store_fingerprint: fp,
+        };
+        let receipt = new_store.transact(transaction, &ctx)?;
+
+        self.write_wal(receipt.epoch(), receipt.datoms())?;
+        self.publish_and_check(new_store);
+
+        #[cfg(feature = "release_bijection_check")]
+        self.verify_bijection_canary()?;
+
+        drop(guard);
+        drop(write_slot);
+
+        let _ = self.notify_observers(receipt.epoch(), receipt.datoms());
         Ok(receipt)
     }
 

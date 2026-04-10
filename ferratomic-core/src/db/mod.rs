@@ -42,12 +42,77 @@ use std::{
 };
 
 use arc_swap::ArcSwap;
-use ferratom::{HybridClock, Schema};
+use ferratom::{FerraError, HybridClock, Schema};
 
 use crate::{
     observer::{ObserverBroadcast, DEFAULT_OBSERVER_BUFFER},
     store::{Snapshot, Store},
 };
+
+// ---------------------------------------------------------------------------
+// Identity transaction helper (INV-FERR-060)
+// ---------------------------------------------------------------------------
+
+/// Build the self-signed identity transaction for `genesis_with_identity`.
+///
+/// Defines `store/public-key` (Bytes) and `store/created` (Instant)
+/// attributes via schema-as-data, then asserts the store's public key
+/// and creation timestamp.
+fn build_identity_tx(
+    node: ferratom::NodeId,
+    pubkey: &ed25519_dalek::VerifyingKey,
+    schema: &Schema,
+) -> Result<crate::writer::Transaction<crate::writer::Committed>, FerraError> {
+    let store_eid = ferratom::EntityId::from_content(pubkey.as_bytes());
+    let now_ms = i64::try_from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis(),
+    )
+    .unwrap_or(i64::MAX);
+
+    let tx = crate::writer::Transaction::new(node);
+    let tx = define_schema_attr(tx, "store/public-key", "db.type/bytes");
+    let tx = define_schema_attr(tx, "store/created", "db.type/instant");
+
+    tx.assert_datom(
+        store_eid,
+        ferratom::Attribute::from("store/public-key"),
+        ferratom::Value::Bytes(pubkey.as_bytes().as_slice().into()),
+    )
+    .assert_datom(
+        store_eid,
+        ferratom::Attribute::from("store/created"),
+        ferratom::Value::Instant(now_ms),
+    )
+    .commit(schema)
+    .map_err(FerraError::from)
+}
+
+/// Add schema-defining datoms for a new attribute (db/ident + db/valueType + db/cardinality).
+fn define_schema_attr(
+    tx: crate::writer::Transaction<crate::writer::Building>,
+    ident: &str,
+    value_type: &str,
+) -> crate::writer::Transaction<crate::writer::Building> {
+    let entity = ferratom::EntityId::from_content(ident.as_bytes());
+    tx.assert_datom(
+        entity,
+        ferratom::Attribute::from("db/ident"),
+        ferratom::Value::Keyword(ident.into()),
+    )
+    .assert_datom(
+        entity,
+        ferratom::Attribute::from("db/valueType"),
+        ferratom::Value::Keyword(value_type.into()),
+    )
+    .assert_datom(
+        entity,
+        ferratom::Attribute::from("db/cardinality"),
+        ferratom::Value::Keyword("db.cardinality/one".into()),
+    )
+}
 
 // ---------------------------------------------------------------------------
 // Typestate markers
@@ -213,6 +278,35 @@ impl Database<Ready> {
     #[must_use]
     pub fn genesis() -> Self {
         Self::build(Store::genesis(), None)
+    }
+
+    /// Create a database with a cryptographic identity (INV-FERR-060).
+    ///
+    /// The first transaction is self-signed: it declares `store/public-key`
+    /// and `store/created` attributes via schema-as-data evolution, then
+    /// asserts the store's public key and creation time.
+    ///
+    /// ADR-FERR-027: Store identity = self-signed first transaction.
+    /// D15: Signing at the Database layer via `transact_signed`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `FerraError` if the identity transaction fails.
+    pub fn genesis_with_identity(
+        signing_key: &ed25519_dalek::SigningKey,
+    ) -> Result<Self, FerraError> {
+        let db = Self::genesis();
+        let pubkey = signing_key.verifying_key();
+
+        // D8: NodeId = BLAKE3(pubkey)[..16] for uniform distribution.
+        let node_hash = blake3::hash(pubkey.as_bytes());
+        let mut node_bytes = [0u8; 16];
+        node_bytes.copy_from_slice(&node_hash.as_bytes()[..16]);
+        let node = ferratom::NodeId::from_bytes(node_bytes);
+
+        let tx = build_identity_tx(node, &pubkey, &db.schema())?;
+        db.transact_signed(tx, signing_key)?;
+        Ok(db)
     }
 
     /// Create a database from an existing store (no WAL).
