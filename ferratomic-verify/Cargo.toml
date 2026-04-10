@@ -142,6 +142,10 @@ path = "integration/test_federation.rs"
 name = "integration_bootstrap"
 path = "integration/test_bootstrap.rs"
 
+[[test]]
+name = "integration_federation_e2e"
+path = "integration/test_federation_e2e.rs"
+
 # --- Kani bounded model checking harnesses (kani/) ---
 
 [[test]]
