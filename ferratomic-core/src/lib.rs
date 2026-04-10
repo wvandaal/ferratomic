@@ -235,7 +235,7 @@ pub(crate) mod snapshot;
 pub mod storage;
 pub use ferratomic_store as store;
 pub mod topology;
-pub(crate) mod transport;
+pub mod transport;
 pub use ferratomic_tx as writer;
 pub use ferratomic_wal as wal;
 

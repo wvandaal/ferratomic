@@ -5,7 +5,7 @@
 //!
 //! See spec/05-federation.md and `FERRATOMIC_ARCHITECTURE.md`.
 
-use ferratom::Datom;
+use ferratom::{Datom, DatomFilter};
 
 /// Filter predicate that controls which datoms a read replica stores.
 ///
@@ -66,6 +66,15 @@ impl ReplicaFilter for AcceptAll {
     }
 }
 
+/// INV-FERR-030: `DatomFilter` implements `ReplicaFilter` by delegating
+/// to [`DatomFilter::matches`]. This bridges the `ferratom` type
+/// (`DatomFilter`) to the `ferratomic-core` trait (`ReplicaFilter`).
+impl ReplicaFilter for DatomFilter {
+    fn accepts(&self, datom: &Datom) -> bool {
+        self.matches(datom)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -101,5 +110,55 @@ mod tests {
     fn test_accept_all_is_send_sync() {
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<AcceptAll>();
+    }
+
+    // -- INV-FERR-030: DatomFilter as ReplicaFilter -----------------------
+
+    #[test]
+    fn test_inv_ferr_030_datomfilter_all_matches_acceptall() {
+        let accept_all = AcceptAll;
+        let filter_all = DatomFilter::All;
+
+        let d1 = sample_datom("alpha");
+        let d2 = sample_datom("beta");
+
+        assert_eq!(
+            accept_all.accepts(&d1),
+            filter_all.accepts(&d1),
+            "INV-FERR-030: DatomFilter::All must behave like AcceptAll"
+        );
+        assert_eq!(
+            accept_all.accepts(&d2),
+            filter_all.accepts(&d2),
+            "INV-FERR-030: DatomFilter::All must behave like AcceptAll"
+        );
+    }
+
+    #[test]
+    fn test_inv_ferr_030_datomfilter_namespace_as_replica_filter() {
+        let filter = DatomFilter::AttributeNamespace(vec!["test/".to_string()]);
+        let matching = sample_datom("x"); // attribute is "test/topology"
+        let non_matching = Datom::new(
+            EntityId::from_content(b"y"),
+            Attribute::from("other/attr"),
+            Value::Long(1),
+            TxId::new(1, 0, 0),
+            Op::Assert,
+        );
+
+        assert!(
+            filter.accepts(&matching),
+            "INV-FERR-030: DatomFilter namespace must accept matching datoms via ReplicaFilter"
+        );
+        assert!(
+            !filter.accepts(&non_matching),
+            "INV-FERR-030: DatomFilter namespace must reject non-matching datoms"
+        );
+    }
+
+    #[test]
+    fn test_inv_ferr_030_datomfilter_is_send_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<DatomFilter>();
     }
 }
