@@ -167,10 +167,11 @@ mod tests {
 
     #[test]
     fn test_inv_ferr_046a_boundary_expected_rate() {
+        // Statistical test: 100K trials for tighter confidence bounds
         let pw = 8u32;
-        let expected_rate = 1.0 / f64::from(1u32 << pw);
+        let expected_rate = 1.0 / f64::from(1u32 << pw); // ~0.0039
         let mut boundaries = 0u32;
-        let trials = 10_000u32;
+        let trials = 100_000u32;
         for i in 0..trials {
             let key = i.to_le_bytes();
             if is_boundary(&key, pw, MIN_CHUNK_SIZE) {
@@ -178,9 +179,11 @@ mod tests {
             }
         }
         let actual_rate = f64::from(boundaries) / f64::from(trials);
+        // With 100K trials and expected rate ~0.39%, we expect ~390 boundaries.
+        // Tolerance: 0.5x to 2.0x (tighter than before, justified by 10x more trials)
         assert!(
-            actual_rate > expected_rate * 0.3 && actual_rate < expected_rate * 3.0,
-            "boundary rate {actual_rate:.4} should be roughly {expected_rate:.4} (1/2^{pw})",
+            actual_rate > expected_rate * 0.5 && actual_rate < expected_rate * 2.0,
+            "boundary rate {actual_rate:.6} should be within 0.5x-2.0x of {expected_rate:.6} (1/2^{pw})",
         );
     }
 }

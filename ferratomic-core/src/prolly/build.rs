@@ -367,6 +367,46 @@ mod tests {
         let root2 = build_prolly_tree(&kvs, &store, DEFAULT_PATTERN_WIDTH)
             .expect("empty tree build must succeed");
         assert_eq!(root, root2, "empty tree must have deterministic root");
+
+        // Verify the empty tree produces a resolvable leaf chunk
+        let chunk = store
+            .get_chunk(&root)
+            .expect("get")
+            .expect("empty tree chunk must exist");
+        let entries = deserialize_leaf_chunk(chunk.data()).expect("deserialize");
+        assert!(
+            entries.is_empty(),
+            "INV-FERR-046: empty tree leaf must have zero entries"
+        );
+    }
+
+    #[test]
+    fn test_inv_ferr_046_single_entry_tree() {
+        let store = MemoryChunkStore::new();
+        let mut kvs = BTreeMap::new();
+        kvs.insert(vec![42u8], vec![99u8]);
+
+        let root =
+            build_prolly_tree(&kvs, &store, DEFAULT_PATTERN_WIDTH).expect("build single entry");
+
+        // Single entry must produce a deterministic tree
+        let store2 = MemoryChunkStore::new();
+        let root2 =
+            build_prolly_tree(&kvs, &store2, DEFAULT_PATTERN_WIDTH).expect("build single entry 2");
+        assert_eq!(
+            root, root2,
+            "INV-FERR-046: single-entry tree must be deterministic"
+        );
+
+        // Verify the leaf contains exactly one entry
+        let chunk = store
+            .get_chunk(&root)
+            .expect("get")
+            .expect("root must exist");
+        let entries = deserialize_leaf_chunk(chunk.data()).expect("deserialize");
+        assert_eq!(entries.len(), 1, "single-entry tree must have one entry");
+        assert_eq!(entries[0].0, vec![42u8], "key must match");
+        assert_eq!(entries[0].1, vec![99u8], "value must match");
     }
 
     #[test]
