@@ -2476,7 +2476,11 @@ scale — the 200K estimate does NOT extrapolate linearly to 1B.
 | **Bytes/datom** | | | **5.3** | | | **9.0** | | | **10.5** | |
 
 † TxId at 200K uses per-chunk delta encoding, reducing effective σ from ~1K to ~16.
-  At larger scales, delta encoding still helps but σ grows with transaction count.
+  At 100M+, EAVT-sorted chunks group datoms by entity — a single entity's datoms may
+  span many transactions (wide TxId range), so per-chunk deltas are less effective.
+  The compressed bitvector estimate (H₀=0.3) accounts for this: even with large σ,
+  the sequential structure of TxIds makes the upper bits of the wavelet bitvectors
+  highly compressible.
 
 **With compressed bitvectors** (RRR/Rank9 zero-order compression):
 
@@ -2524,9 +2528,13 @@ would require domain-specific codebooks or higher-order entropy coding.
   `∀ k₁ < k₂: rank(k₁) < rank(k₂)` (order-preserving). Phase 4a provides
   this via CHD perfect hash + sorted verification table (bd-wa5p) —
   the hash function is non-monotone but `lookup_key_index` recovers the
-  correct sorted rank in O(1). Phase 4c+ optimization target: swap CHD for
-  PtrHash (Pibiri 2025, 2.0 bits/key, 8ns, `ptr_hash` crate) which
-  eliminates the 32n-byte verification table. A true order-preserving MMPH
+  correct sorted rank in O(1). **Phase 4b prerequisite** (reclassified from
+  Phase 4c+): swap CHD for PtrHash (Pibiri 2025, 2.0 bits/key, 8ns,
+  `ptr_hash` crate). The CHD verification table costs 32n bytes — at 100M
+  entities, this is 3.2 GB, overwhelming the wavelet matrix's compression
+  gains. PtrHash eliminates the table: 25 MB total at 100M (128× reduction).
+  Without PtrHash, the entity column's auxiliary overhead exceeds the entire
+  wavelet matrix storage budget. A true order-preserving MMPH
   (where `h(k)` = rank directly) is NOT required — any perfect hash with
   sorted verification provides monotone rank. The `MphBackend` trait in
   `ferratomic-core/src/mph.rs` abstracts the swap point.
@@ -2535,8 +2543,10 @@ would require domain-specific codebooks or higher-order entropy coding.
 
 **Subsumption**: The wavelet matrix subsumes columnar decomposition
 (INV-FERR-078, Stage 2 — see below) because it achieves columnar compression benefits without the
-5-random-access penalty. It also subsumes the LIVE bitvector (INV-FERR-076)
-because the Op column's rank operation directly provides LIVE datom counts.
+5-random-access penalty. It also subsumes the LIVE bitvector (INV-FERR-029, currently stored as a component
+of INV-FERR-076's PositionalStore) because the Op column's rank_1 operation
+directly provides LIVE datom counts — the count of assert operations equals the
+count of live datoms.
 
 **Rejected**:
 - Option A (FM-Index): Rejected per NEG-FERR-007. BLAKE3 maximum entropy makes
@@ -2548,18 +2558,24 @@ because the Op column's rank operation directly provides LIVE datom counts.
 
 **Library assessment** (preliminary — formal selection matrix deferred to bd-jolx):
 
-| Library | WaveletMatrix? | Rank/Select | Compressed BV | License | Status |
-|---------|---------------|-------------|---------------|---------|--------|
-| `sucds` 0.8+ | Yes | Rank9Sel, DArray | Partial | MIT/Apache-2.0 | Active |
-| `succinct` 0.5 | No | JacobsonRank | No | MIT | Dormant (2019) |
-| `fid` 0.1 | No | FID bitvector | No | MIT | Minimal |
-| `vers-vecs` 1.1 | No | RsVec | RRR, Elias-Fano | MIT/Apache-2.0 | Active |
-| Custom | — | — | — | — | Full control |
+| Library | Wavelet? | Variant | Rank/Select | Compressed BV | License | Status |
+|---------|---------|---------|-------------|---------------|---------|--------|
+| **`qwt`** | **Yes** | **HQwt256/512 + Pfs** | **Rank9, PASTA** | **Huffman-shaped** | **MIT/Apache-2.0** | **Active (2024+)** |
+| `sucds` 0.8+ | Yes | Standard binary | Rank9Sel, DArray | Partial | MIT/Apache-2.0 | Active |
+| `vers-vecs` 1.1 | Yes | Standard binary | RsVec | RRR, Elias-Fano | MIT/Apache-2.0 | Active |
+| `succinct` 0.5 | No | — | JacobsonRank | No | MIT | Dormant (2019) |
+| `fid` 0.1 | No | — | FID bitvector | No | MIT | Minimal |
+| Custom | — | — | — | — | — | Full control |
 
-Recommendation: `sucds` as primary candidate (only crate with built-in WaveletMatrix +
-Rank9Sel). `vers-vecs` for compressed bitvectors if `sucds` lacks RRR. Custom
-implementation (bd-bmu2 contingency) if no library meets Kani-bounded correctness
-validation. Formal evaluation in bd-jolx.
+**Recommendation**: **`qwt`** as primary candidate. It provides Huffman-shaped Quad
+Wavelet Trees (HQwt256Pfs, HQwt512Pfs) with predictive prefetching — the current
+state of the art (Kurpicz, Savino, Venturini, S:P&E 2025). The quad-ary structure
+halves tree height, Huffman shaping exploits frequency skew, and prefetching
+addresses cache-miss bottlenecks. Authored by the paper's own researchers.
+`vers-vecs` for compressed bitvector backends (RRR, Elias-Fano) if per-level
+hybrid encoding is needed. `sucds` as fallback if `qwt` API doesn't fit.
+Custom implementation (bd-bmu2 contingency) if no library meets Kani-bounded
+correctness validation. Formal evaluation in bd-jolx.
 
 **Risk register**:
 
@@ -2593,16 +2609,31 @@ theoretic gap analysis: ~137 bytes/datom actual (bd-snnh validated) vs ~28 bytes
 entropy minimum. bd-snnh empirical validation (2026-04-08) confirmed the substrate
 foundation. bd-4vwk reclassification (2026-04-08) committed Phase 4b primary status.
 Literature: Navarro, "Compact Data Structures," 2016; Claude and Navarro, "The
-Wavelet Matrix," 2012.
+Wavelet Matrix," 2012; Kurpicz, Savino, Venturini, "Faster Wavelet Tree Queries,"
+Software: Practice and Experience, 2025 (HQwt quad wavelet tree with prefetching).
 
 ---
 
 ### §Wavelet: Wavelet Matrix Architecture
 
-This section specifies the wavelet matrix architecture committed in ADR-FERR-030.
-It defines the rank/select primitive contract, symbol encoding scheme, construction
-and query algorithms, and performance budgets. Formal INV-FERR invariants for
-each subsystem are authored in downstream beads (gvil.2 through gvil.11);
+This section specifies the wavelet matrix as the **primary codec in a per-chunk
+adaptive system**. The wavelet matrix (WaveletMatrixCodec, CODEC_TAG = 0x02) is
+one codec dispatched through the LeafChunkCodec trait (INV-FERR-045c). Each prolly
+tree leaf chunk independently selects its codec based on data characteristics:
+
+- **DatomPairCodec** (0x01): Reference codec, direct access. For hot chunks.
+- **WaveletMatrixCodec** (0x02): Per-chunk wavelet matrix. For the general case.
+- **Future codecs**: TensorNetworkCodec, NeuralCodec, etc. via the same trait.
+
+The `framework_fingerprint` XOR operation works across mixed-codec chunks because
+it operates on `content_hash` values, not codec internals. The density-speed
+tradeoff is therefore **per-chunk tunable**, not a global constraint — the system
+achieves optimal performance at every point in the tradeoff space simultaneously.
+
+This section defines the rank/select primitive contract, symbol encoding scheme,
+construction and query algorithms, per-chunk composition model, operational
+integration (merge, WAL), and performance budgets. Formal INV-FERR invariants
+for each subsystem are authored in downstream beads (gvil.2 through gvil.11);
 this section provides the architectural foundation they refine.
 
 #### Rank/Select Primitive Contract
@@ -2651,6 +2682,20 @@ the counting function of the set {j : B[j] = b}, and select is its enumeration.
 The O(1) rank bound requires hardware popcount support (x86 `POPCNT`, ARM `CNT`).
 All modern CPUs provide this at ~1 cycle per 64-bit word. The 3.5% space overhead
 comes from the Rank9 sampling structure (one 64-bit counter per 512-bit block).
+
+**Hybrid bitvector backends** (per-level encoding at construction time):
+
+| Level density | Encoding | Space | Why |
+|--------------|----------|-------|-----|
+| Dense (>40%) | Uncompressed + Rank9 (3.5%) | n bits + 3.5% | Compression saves little; rank is fastest |
+| Medium (10-40%) | RRR with large blocks | n × H₀ bits | Good space/time tradeoff |
+| Sparse (<10%) | Elias-Fano | m × ⌈log(n/m)⌉ + 2m bits | Optimal for sparse bitvectors |
+
+The wavelet matrix's h bitvectors have variable density across levels — upper
+levels (MSB) tend toward 50% density, lower levels tend toward the symbol
+frequency distribution's entropy. Choosing the encoding per level at construction
+time saves ~3-5 bits/datom on entity and TxId columns compared to uniform RRR.
+The `vers-vecs` crate provides RRR and Elias-Fano bitvectors with rank/select.
 
 **Lean theorem** (statement — proof in bd-vhgn):
 
@@ -2747,6 +2792,75 @@ occupy contiguous ranges — this is the property that makes rank queries work.
 
 Formal construction invariant deferred to bd-q630 (gvil.5).
 
+**Recommended implementation**: Huffman-shaped Quad Wavelet Tree (HQwt) per
+Kurpicz, Savino, Venturini (DCC 2024 / S:P&E 2025). The quad-ary structure
+(arity 4) halves tree height from ⌈log₂(σ)⌉ to ⌈log₄(σ)⌉, halving cache misses.
+Huffman shaping means frequent symbols traverse fewer levels — for skewed
+distributions (attribute, TxId), average depth drops to H₀ × h instead of h.
+Predictive prefetching (`Pfs` variants) issues CPU prefetch for the next level
+while computing the current rank, adding ~1.6× speedup. The `qwt` Rust crate
+provides `HQwt256Pfs` and `HQwt512Pfs` — the current state of the art.
+
+Note: HQwt's benefit scales with h. For per-chunk wavelet matrices (h_chunk ≈
+4-5), the absolute query improvement is ~10-15ns (halving 4 levels to 2). The
+primary per-chunk benefit is Huffman shaping for skewed attribute distributions
+and prefetching for larger chunks or worst-case multi-entity chunks. For the
+global analysis (h = 20), the benefit is larger (~50ns savings).
+
+#### Per-Chunk Alphabet Analysis
+
+The wavelet matrix operates **per prolly tree chunk** (~256 datoms per chunk in
+EAVT order), NOT as a single global structure over the full store. Chunk-local
+alphabet sizes are dramatically smaller than global alphabet sizes because EAVT
+sorting creates local coherence:
+
+| Column | Global σ @100M | Per-chunk σ (~256 datoms) | Per-chunk h | Why |
+|--------|---------------|--------------------------|-------------|-----|
+| Entity | 1M | 1-5 | 0-3 | EAVT groups datoms by entity; a chunk typically contains one entity's datoms |
+| Attribute | 200 | 10-20 | 4-5 | Each entity has ~10-20 attributes |
+| Value | 10M | 10-20 | 4-5 | Each entity's attributes have distinct values |
+| TxId (delta) | 500K | 2-5 | 1-3 | Per-chunk delta encoding; chunks span ~2-5 transactions |
+| Op | 2 | 2 | 1 | Binary everywhere |
+| **Total rank ops** | **72** | **~10-17** | | |
+
+**Effective-alphabet (chunk-local) encoding**: The per-chunk h values above
+require chunk-local symbol remapping — each chunk maps its σ_chunk unique symbols
+to [0, σ_chunk) rather than storing global symbol IDs. Without remapping, the
+value column would use h = ⌈log₂(10M)⌉ = 24 per chunk (global σ), destroying
+the per-chunk latency advantage. Each chunk carries a **per-chunk dictionary**
+that maps chunk-local IDs back to global IDs:
+
+```
+Per-chunk dictionary overhead per column:
+  σ_chunk entries × ⌈log₂(σ_global)⌉ bits
+
+Example (value column, 256-datom chunk, 15 unique values):
+  15 × ⌈log₂(10M)⌉ = 15 × 24 = 360 bits = 45 bytes
+
+Total dictionary overhead at 100M (5 columns, 100K chunks):
+  ~5 × 45 × 100K = 22.5 MB = ~0.22 bytes/datom
+```
+
+The dictionary is stored as a sorted array of global IDs per column within each
+chunk. Encoding: global_id → binary_search(dictionary) → chunk-local index.
+Decoding: chunk-local index → dictionary[index] → global_id. The sorted order
+preserves the order-preserving property for entity, attribute, and TxId columns.
+
+**Per-chunk query latency**: At ~5ns per rank operation with Rank9, a per-chunk
+wavelet query requires 10-17 rank operations = **~50-85ns**. This is competitive
+with PositionalStore's interpolation search (~65ns), NOT the ~200ns estimated for
+a hypothetical global wavelet matrix. The per-chunk design eliminates the
+density-speed tradeoff that a global wavelet would impose.
+
+With HQwt (quad-ary + Huffman + prefetching), per-chunk query latency drops
+further to **~25-50ns** — potentially FASTER than interpolation search because
+the entire chunk wavelet fits in L1 cache (256 datoms × ~5 bytes = ~1.3 KB).
+
+This is the load-bearing architectural insight: **per-chunk wavelet matrices
+achieve both maximum density AND competitive query latency** because chunk-local
+alphabets are small enough that the wavelet matrix height h is comparable to
+the number of binary search probes in interpolation search.
+
 #### Wavelet Matrix Query Operations
 
 All queries compose from binary rank/select on the h level bitvectors.
@@ -2835,28 +2949,130 @@ attribute column rank, intersect the position sets. The wavelet matrix's positio
 correspondence (all columns share the same index space, per INV-FERR-078 columnar
 isomorphism) makes this composition well-defined.
 
+#### Per-Chunk Composition Model
+
+Each prolly tree leaf chunk contains an independent wavelet matrix. Cross-chunk
+queries require composing results from multiple per-chunk wavelet matrices.
+
+**Query routing**: The prolly tree manifest + EntityRLE index routes queries to the
+correct chunk(s). For entity point lookups, the EntityRLE provides O(1) routing
+to the chunk containing that entity. For range queries, the prolly tree's sorted
+key structure identifies the range of chunks to scan.
+
+**Attribute prefix-sum table**: For low-cardinality columns (attribute: σ ≤ 200),
+a prefix-sum table enables O(1) global rank from per-chunk local ranks:
+
+```
+global_rank_a(attr, pos) = prefix_rank_a[chunk_index] + local_rank_a(attr, pos_within_chunk)
+```
+
+Space: σ_attr × num_chunks × ⌈log₂(n)⌉ bits. At σ=200, 100K chunks, 27 bits:
+200 × 100K × 27 bits = 54 MB. Manageable.
+
+**High-cardinality columns** (entity, value): No prefix-sum table needed. Entity
+queries use EntityRLE for chunk routing. Value queries use the value pool's
+content-addressed index. Neither requires global rank across chunks.
+
+**Per-chunk Rank9 overhead**: Each chunk's wavelet matrix carries its own Rank9
+sampling structure. At 256 datoms/chunk and h_chunk ≈ 10: Rank9 overhead =
+3.5% × 256 × 10 bits ≈ 90 bytes/chunk. Over 100K chunks at 100M datoms:
+~9 MB total = **~0.09 bytes/datom**. Negligible.
+
+#### Operational Integration
+
+**Merge path** (C4: CRDT merge = set union):
+
+Two wavelet-backed stores merge via prolly tree content-addressed diff
+(INV-FERR-047), NOT via full wavelet rebuild:
+
+1. Prolly tree diff identifies changed chunks: O(d × log n) where d = number
+   of differing chunks
+2. For each changed chunk: decode, merge datom sets, re-encode with the
+   chunk's codec: O(chunk_size × h_chunk) per chunk
+3. Unchanged chunks are shared by reference (content-addressed, no copy)
+
+Total merge cost for k changed datoms across d chunks:
+O(d × log n + d × chunk_size × h_chunk). For 1K-datom delta against 100M store:
+~4 changed chunks × log(100K) + 4 × 256 × 10 ≈ ~10K operations. Well under 100ms.
+
+**WAL tail visibility** (two-tier read):
+
+The wavelet matrix is immutable — it represents the latest checkpoint. Recent
+writes live in the WAL and are promoted to a mutable in-memory tier (the existing
+`Store` with `im::OrdMap`). A query checks both tiers:
+
+1. **Mutable tier** (WAL tail): Small, O(log k) via im::OrdMap where k = datoms
+   since last checkpoint. Typically k < 10K.
+2. **Immutable tier** (wavelet checkpoint): Large, O(h_chunk) via per-chunk
+   wavelet rank/select.
+3. **Result merge**: The query result is the set union of datoms from both
+   tiers, with LIVE resolution (INV-FERR-029) computed over the combined
+   datom set. The tiers are disjoint subsets — a datom is in exactly one
+   tier (mutable if not yet checkpointed, immutable otherwise).
+
+This is the standard LSM-tree read path. Checkpoint promotion moves datoms
+from the mutable tier into the wavelet tier, rebuilding affected chunks.
+Checkpoint frequency bounds the mutable tier size.
+
+**Concurrent read/write** (multi-agent writes, doc 008 agentic OS vision):
+
+Multiple agents may transact simultaneously (System 2 LLM-driven writes)
+while System 1 mechanical queries run continuously. Three properties ensure
+correctness:
+
+1. **Atomic tier swap**: Checkpoint promotion replaces the immutable tier via
+   `ArcSwap` (INV-FERR-006). Readers see either the old or new immutable tier,
+   never a partial rebuild. The swap is O(1) — a single pointer exchange.
+
+2. **Wavelet rebuild commutes with concurrent writes**: Because CRDT merge is
+   commutative and associative (C4), the order in which WAL entries are
+   checkpointed into wavelet chunks does not affect the resulting wavelet matrix.
+   Two agents writing datoms d₁ and d₂ concurrently produce the same wavelet
+   regardless of checkpoint order: wavelet(S ∪ {d₁} ∪ {d₂}) = wavelet(S ∪ {d₂} ∪ {d₁}).
+   This follows directly from the CRDT algebra — no coordination required.
+
+3. **Mutable tier backpressure**: Federation merges or burst writes can cause
+   the mutable tier to grow beyond typical bounds (k >> 10K), degrading
+   mutable-tier query latency. The checkpoint policy must bound the mutable
+   tier size: trigger checkpoint when k exceeds a threshold (e.g., 50K datoms
+   or 10 MB) or when time since last checkpoint exceeds a bound (e.g., 30s).
+   The backpressure mechanism is INV-FERR-024 (transaction backpressure),
+   extended to checkpoint promotion.
+
 #### Performance Budgets
 
 Wavelet matrix performance targets for Phase 4b (all empirical validation in
 bd-ena7, gvil.10):
 
-| Metric | Target @100M | Target @1B | Backend | Comparison to PositionalStore |
-|--------|-------------|-----------|---------|------------------------------|
-| Storage density | ≤6 bytes/datom (compressed) | ≤8 bytes/datom | WaveletStore | 23× / 17× improvement |
-| Entity point lookup | <200 ns (h=20, 20 rank ops) | <300 ns (h=24) | Rank9 popcount | ~3× slower than interpolation search (acceptable: data fits cache) |
-| Attribute filter | <100 ns (h=8) | <120 ns (h=9) | Rank9 popcount | Faster (fewer levels, high skew) |
+| Metric | Target @100M | Target @1B | Backend | Notes |
+|--------|-------------|-----------|---------|-------|
+| Storage density | ≤6 bytes/datom (compressed) | ≤8 bytes/datom | WaveletStore | 23× / 17× over PositionalStore |
+| Entity point lookup (per-chunk) | <85 ns (h_chunk≈3, routing+rank) | <100 ns | HQwt + Rank9 | Competitive with PositionalStore's ~65ns |
+| Entity point lookup (global†) | <200 ns (h=20, 20 rank ops) | <300 ns | Rank9 | Hypothetical global wavelet; NOT the actual path |
+| Attribute filter (per-chunk) | <50 ns (h_chunk≈5) | <50 ns | HQwt + Rank9 | Faster than PositionalStore (smaller h) |
 | LIVE datom count | O(1), <10 ns | O(1), <10 ns | Single rank_1 | Same as current popcount |
-| Range scan throughput | >10M datoms/s | >5M datoms/s | Sequential access | Comparable (cache-friendly columns) |
-| Construction time @100M | <30s (h_avg=14, single-threaded) | — | Linear scan | Acceptable for checkpoint recovery |
+| Range scan throughput | >10M datoms/s | >5M datoms/s | Sequential access | Cache-friendly per-chunk columns |
+| Construction time @100M | <30s (per-chunk, h_avg≈10) | — | Linear scan per chunk | Parallelizable across chunks |
 | Cold start @100M | <5s (mmap V4 checkpoint) | <5s (mmap) | Memory-mapped | INV-FERR-028 maintained |
+| Merge (1K delta vs 100M) | <100 ms | <200 ms | Prolly diff + chunk rebuild | O(d × chunk_size × h_chunk) |
 
-**Point-lookup latency tradeoff**: The wavelet matrix's entity lookup (~200ns at
-100M) is ~3× slower than PositionalStore's interpolation search (~65ns). This is
-the fundamental tradeoff: 23× better storage density costs ~3× in point-lookup
-latency. The tradeoff is favorable because: (a) the entire 1B-datom store fits in
-RAM (~6 GB vs 137 GB), eliminating disk I/O that dominates real-world latency;
-(b) the smaller footprint means better cache utilization for scan-heavy workloads;
-(c) point lookups are still well under the 10ms p99 budget (INV-FERR-027).
+† The "global" row shows what a hypothetical single wavelet matrix over the entire
+  store would cost. Ferratomic does NOT use this path — queries go through per-chunk
+  wavelet matrices where h_chunk ≈ 3-17, giving ~50-85ns latency. The global
+  estimate is included for comparison and for worst-case analysis (chunks spanning
+  many entities, giving h_chunk approaching h_global).
+
+**Per-chunk eliminates the density-speed tradeoff**: A global wavelet matrix at
+100M imposes ~200ns entity lookups (3× slower than PositionalStore). Per-chunk
+wavelet matrices achieve ~50-85ns (competitive with PositionalStore's ~65ns)
+because chunk-local alphabets are dramatically smaller (§Per-Chunk Alphabet
+Analysis above). With HQwt (quad-ary + Huffman + prefetching), per-chunk lookups
+drop to ~25-50ns — potentially FASTER than interpolation search because the entire
+chunk wavelet (~1.3 KB at 256 datoms) fits in L1 cache.
+
+At 1B: the wavelet-backed store fits in ~6 GB of RAM. PositionalStore at 137 GB
+does not fit in commodity RAM. The wavelet matrix delivers both superior density
+AND competitive query latency — no tradeoff required.
 
 **Formal invariants for performance budgets** will be authored as part of
 gvil.10 (bd-ena7) after empirical validation confirms the projections.
