@@ -8,7 +8,7 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use ferratom::{Datom, NodeId};
+use ferratom::{Datom, DatomFilter, NodeId};
 
 use crate::store::{Snapshot, Store};
 
@@ -82,6 +82,8 @@ pub(crate) struct BroadcastEntry {
 struct RegisteredObserver {
     observer: Box<dyn DatomObserver>,
     last_seen_epoch: u64,
+    /// INV-FERR-044: `None` = unfiltered (backward compat); `Some` = filtered delivery.
+    filter: Option<DatomFilter>,
 }
 
 /// Bounded observer broadcast state.
@@ -105,17 +107,42 @@ impl ObserverBroadcast {
         }
     }
 
-    /// Register an observer and immediately catch it up to the current store state.
+    /// Register an unfiltered observer (backward compat, receives all datoms).
     pub(crate) fn register(&mut self, observer: Box<dyn DatomObserver>, store: &Store) {
+        self.register_impl(observer, None, store);
+    }
+
+    /// Register an observer with a `DatomFilter` (INV-FERR-044).
+    ///
+    /// Catchup and live delivery both apply the filter — the observer
+    /// only sees datoms matching its filter.
+    pub(crate) fn register_filtered(
+        &mut self,
+        observer: Box<dyn DatomObserver>,
+        filter: DatomFilter,
+        store: &Store,
+    ) {
+        self.register_impl(observer, Some(filter), store);
+    }
+
+    /// Shared registration logic for filtered and unfiltered observers.
+    fn register_impl(
+        &mut self,
+        observer: Box<dyn DatomObserver>,
+        filter: Option<DatomFilter>,
+        store: &Store,
+    ) {
         let current_epoch = store.epoch();
         if current_epoch > 0 {
             let datoms: Vec<Datom> = store.datoms().cloned().collect();
-            observer.on_catchup(0, &datoms);
+            let filtered = apply_filter(filter.as_ref(), &datoms);
+            observer.on_catchup(0, &filtered);
         }
 
         self.observers.push(RegisteredObserver {
             observer,
             last_seen_epoch: current_epoch,
+            filter,
         });
     }
 
@@ -142,15 +169,30 @@ impl ObserverBroadcast {
             if registered.last_seen_epoch + 1 < epoch {
                 let catchup = buffered_delta_since(&self.recent, registered.last_seen_epoch)
                     .unwrap_or_else(|| full_store_catchup(store));
+                let filtered = apply_filter(registered.filter.as_ref(), &catchup);
                 registered
                     .observer
-                    .on_catchup(registered.last_seen_epoch, &catchup);
+                    .on_catchup(registered.last_seen_epoch, &filtered);
             } else {
-                registered.observer.on_commit(epoch, datoms);
+                let filtered = apply_filter(registered.filter.as_ref(), datoms);
+                registered.observer.on_commit(epoch, &filtered);
             }
 
             registered.last_seen_epoch = epoch;
         }
+    }
+}
+
+/// Apply an optional `DatomFilter` to a datom slice.
+///
+/// `None` = unfiltered (returns all datoms). `Some(f)` = filtered.
+/// Apply an optional `DatomFilter` to a datom slice.
+///
+/// `None` = unfiltered (returns all datoms). `Some(f)` = filtered.
+fn apply_filter(filter: Option<&DatomFilter>, datoms: &[Datom]) -> Vec<Datom> {
+    match filter {
+        None => datoms.to_vec(),
+        Some(f) => datoms.iter().filter(|d| f.matches(d)).cloned().collect(),
     }
 }
 
