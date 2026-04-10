@@ -626,4 +626,41 @@ mod tests {
         let result: Result<Vec<_>, _> = diff(&root, &bogus, &store).collect();
         assert!(result.is_err(), "diff with missing chunk must return error");
     }
+
+    // DEFECT-003: multi-level tree diff exercising merge_join_children
+    #[test]
+    fn test_inv_ferr_047_multi_level_diff() {
+        let store = MemoryChunkStore::new();
+        // 500 entries with pw=8 (expected chunk ~256) forces multiple chunks
+        // and at least one internal node, exercising merge_join_children.
+        let mut kvs1 = BTreeMap::new();
+        for i in 0u32..500 {
+            kvs1.insert(i.to_be_bytes().to_vec(), vec![0u8; 16]);
+        }
+        let root1 = build(&kvs1, &store);
+
+        // Modify 3 keys scattered across the key range
+        let mut kvs2 = kvs1.clone();
+        kvs2.insert(50u32.to_be_bytes().to_vec(), vec![0xAAu8; 16]);
+        kvs2.insert(250u32.to_be_bytes().to_vec(), vec![0xBBu8; 16]);
+        kvs2.insert(450u32.to_be_bytes().to_vec(), vec![0xCCu8; 16]);
+        let root2 = build(&kvs2, &store);
+
+        let entries = collect_diff(&root1, &root2, &store);
+        assert_eq!(
+            entries.len(),
+            3,
+            "INV-FERR-047: 3 modified keys in multi-level tree = 3 diff entries"
+        );
+        for entry in &entries {
+            assert!(
+                matches!(entry, DiffEntry::Modified { .. }),
+                "all changes are value modifications, got: {entry:?}"
+            );
+        }
+
+        // Verify symmetry on multi-level trees
+        let backward = collect_diff(&root2, &root1, &store);
+        assert_eq!(backward.len(), 3, "reverse diff must also have 3 entries");
+    }
 }

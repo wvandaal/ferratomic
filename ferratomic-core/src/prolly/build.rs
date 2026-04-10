@@ -229,6 +229,17 @@ pub fn deserialize_leaf_chunk(data: &[u8]) -> Result<Vec<KvEntry>, FerraError> {
         return Err(FerraError::TrailingBytes);
     }
 
+    // Defense-in-depth: verify keys are in strictly ascending order.
+    // A corrupted or adversarial chunk with out-of-order keys would
+    // break diff_sorted_entries (INV-FERR-047) and read_prolly_tree
+    // (INV-FERR-049). The NonCanonicalChunk error variant exists for
+    // exactly this case.
+    for window in entries.windows(2) {
+        if window[0].0 >= window[1].0 {
+            return Err(FerraError::NonCanonicalChunk);
+        }
+    }
+
     Ok(entries)
 }
 
@@ -270,6 +281,52 @@ pub fn decode_child_addrs(chunk: &Chunk) -> Result<Vec<Hash>, FerraError> {
             }
 
             Ok(addrs)
+        }
+        tag => Err(FerraError::UnknownCodecTag(tag)),
+    }
+}
+
+/// Decode internal chunk children with their separator keys.
+///
+/// `INV-FERR-047`: Used by `DiffIterator` for `merge_join_children` which
+/// needs separator keys to align children across two internal nodes.
+/// Returns empty vec for leaf chunks (leaves have no children).
+///
+/// # Errors
+///
+/// Returns `FerraError::TruncatedChunk` if the chunk data is truncated,
+/// `FerraError::UnknownCodecTag` if the tag is unrecognized.
+pub fn decode_internal_children(chunk: &Chunk) -> Result<Vec<(Vec<u8>, Hash)>, FerraError> {
+    let data = chunk.data();
+    if data.is_empty() {
+        return Err(FerraError::EmptyChunk);
+    }
+
+    match data[0] {
+        0x01 => Ok(Vec::new()),
+        0x02 => {
+            if data.len() < 6 {
+                return Err(FerraError::TruncatedChunk);
+            }
+            let count = u32::from_le_bytes(read4(data, 2)?) as usize;
+
+            let mut children = Vec::with_capacity(count);
+            let mut pos = 6;
+
+            for _ in 0..count {
+                let sep_len = u32::from_le_bytes(read4(data, pos)?) as usize;
+                pos += 4;
+                check_len(data, pos, sep_len)?;
+                let separator = data[pos..pos + sep_len].to_vec();
+                pos += sep_len;
+                check_len(data, pos, 32)?;
+                let mut hash = [0u8; 32];
+                hash.copy_from_slice(&data[pos..pos + 32]);
+                children.push((separator, hash));
+                pos += 32;
+            }
+
+            Ok(children)
         }
         tag => Err(FerraError::UnknownCodecTag(tag)),
     }
@@ -487,5 +544,93 @@ mod tests {
             deserialize_leaf_chunk(&[0x01, 0, 0, 0, 0, 0xFF]),
             Err(FerraError::TrailingBytes)
         ));
+    }
+
+    // DEFECT-001 regression: sort-order validation in deserialize_leaf_chunk
+    #[test]
+    fn test_deserialize_non_canonical_order() {
+        // Manually build a leaf chunk with out-of-order keys: [2] then [1]
+        let mut buf = Vec::new();
+        buf.push(0x01); // leaf tag
+        buf.extend_from_slice(&2u32.to_le_bytes()); // count = 2
+
+        // Entry 1: key=[2], value=[10]
+        buf.extend_from_slice(&1u32.to_le_bytes()); // key_len
+        buf.push(2u8); // key
+        buf.extend_from_slice(&1u32.to_le_bytes()); // value_len
+        buf.push(10u8); // value
+
+        // Entry 2: key=[1], value=[20] — WRONG ORDER
+        buf.extend_from_slice(&1u32.to_le_bytes());
+        buf.push(1u8);
+        buf.extend_from_slice(&1u32.to_le_bytes());
+        buf.push(20u8);
+
+        assert!(
+            matches!(
+                deserialize_leaf_chunk(&buf),
+                Err(FerraError::NonCanonicalChunk)
+            ),
+            "out-of-order keys must return NonCanonicalChunk"
+        );
+    }
+
+    #[test]
+    fn test_deserialize_duplicate_keys() {
+        // Manually build a leaf chunk with duplicate keys: [1] then [1]
+        let mut buf = Vec::new();
+        buf.push(0x01);
+        buf.extend_from_slice(&2u32.to_le_bytes());
+
+        // Entry 1: key=[1], value=[10]
+        buf.extend_from_slice(&1u32.to_le_bytes());
+        buf.push(1u8);
+        buf.extend_from_slice(&1u32.to_le_bytes());
+        buf.push(10u8);
+
+        // Entry 2: key=[1], value=[20] — DUPLICATE KEY
+        buf.extend_from_slice(&1u32.to_le_bytes());
+        buf.push(1u8);
+        buf.extend_from_slice(&1u32.to_le_bytes());
+        buf.push(20u8);
+
+        assert!(
+            matches!(
+                deserialize_leaf_chunk(&buf),
+                Err(FerraError::NonCanonicalChunk)
+            ),
+            "duplicate keys must return NonCanonicalChunk"
+        );
+    }
+
+    // DEFECT-002: tests for decode_internal_children
+    #[test]
+    fn test_decode_internal_children_roundtrip() {
+        let children = vec![
+            (vec![1u8, 2, 3], [0xAAu8; 32]),
+            (vec![4u8, 5, 6], [0xBBu8; 32]),
+        ];
+        let serialized = serialize_internal_chunk(1, &children).expect("serialize");
+        let chunk = Chunk::from_bytes(&serialized);
+        let decoded = decode_internal_children(&chunk).expect("decode");
+
+        assert_eq!(decoded.len(), 2);
+        assert_eq!(decoded[0].0, vec![1u8, 2, 3], "separator 0");
+        assert_eq!(decoded[0].1, [0xAA; 32], "hash 0");
+        assert_eq!(decoded[1].0, vec![4u8, 5, 6], "separator 1");
+        assert_eq!(decoded[1].1, [0xBB; 32], "hash 1");
+    }
+
+    #[test]
+    fn test_decode_internal_children_leaf_returns_empty() {
+        let k = vec![1u8];
+        let v = vec![2u8];
+        let leaf = serialize_leaf_chunk(&[(&k, &v)]).expect("serialize");
+        let chunk = Chunk::from_bytes(&leaf);
+        let children = decode_internal_children(&chunk).expect("decode leaf");
+        assert!(
+            children.is_empty(),
+            "leaf chunks must return empty children"
+        );
     }
 }
