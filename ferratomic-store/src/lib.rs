@@ -49,7 +49,7 @@ pub use self::{
     apply::TransactContext,
     checkpoint::{extract_checkpoint_data, store_from_checkpoint_data},
     iter::{DatomIter, DatomSetView, SnapshotDatoms},
-    merge::{merge, SchemaConflict},
+    merge::{merge, selective_merge, MergeReceipt, SchemaConflict},
     sketch::{StoreSketch, DEFAULT_CAPACITY},
     store::{Snapshot, Store, TxReceipt},
 };

@@ -70,12 +70,33 @@
 //! assert_eq!(merged.len(), merged_ba.len());
 //! ```
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
-use ferratom::{Attribute, AttributeDef, Datom, Schema};
+use ferratom::{Attribute, AttributeDef, Datom, DatomFilter, FerraError, Schema};
 use ferratomic_positional::{merge_positional, merge_sort_dedup, PositionalStore};
 
 use crate::{repr::StoreRepr, store::Store};
+
+/// Merge receipt: documents what was transferred (INV-FERR-062).
+///
+/// Returned by [`selective_merge`] alongside the merged `Store`.
+/// The caller (Database layer) can emit receipt datoms into the store
+/// via a subsequent transaction when an HLC-derived `TxId` is available.
+#[derive(Debug, Clone)]
+pub struct MergeReceipt {
+    /// Description of the source store.
+    pub source: String,
+    /// Human-readable description of the filter applied.
+    pub filter_description: String,
+    /// Number of datoms transferred from remote to local.
+    pub transferred: usize,
+    /// Number of datoms filtered out by the filter.
+    pub filtered_out: usize,
+    /// Number of remote datoms already present in local.
+    pub already_present: usize,
+    /// Duration of the merge operation.
+    pub duration: Duration,
+}
 
 /// INV-FERR-043: A deterministic schema conflict discovered during merge.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -128,6 +149,92 @@ struct SchemaMergeResult {
 /// `FerraError::SchemaIncompatible` under stricter conflict policies.
 pub fn merge(a: &Store, b: &Store) -> Result<Store, ferratom::FerraError> {
     Ok(Store::from_merge(a, b))
+}
+
+/// Selective merge: union local datoms with filtered remote datoms.
+///
+/// INV-FERR-039: `filter(remote) ⊆ full_merge`, `local ⊆ result`.
+/// INV-FERR-001: result is a valid CRDT merge (monotonic, commutative
+/// within the filtered subset).
+/// INV-FERR-062: returns a `MergeReceipt` documenting what was transferred.
+///
+/// # Arguments
+///
+/// * `local` — the local store (all datoms preserved in result)
+/// * `remote` — the remote store (filtered before union)
+/// * `filter` — which remote datoms to accept
+/// * `source` — human-readable description of the remote source
+///
+/// # Errors
+///
+/// Currently infallible; returns `Result` for forward compatibility.
+pub fn selective_merge(
+    local: &Store,
+    remote: &Store,
+    filter: &DatomFilter,
+    source: &str,
+) -> Result<(Store, MergeReceipt), FerraError> {
+    let start = std::time::Instant::now();
+
+    // Filter remote datoms.
+    let mut transferred = 0usize;
+    let mut filtered_out = 0usize;
+    let mut already_present = 0usize;
+
+    let local_datoms: Vec<&Datom> = local.datoms().collect();
+    let accepted_remote: Vec<Datom> = remote
+        .datoms()
+        .filter(|d| {
+            if filter.matches(d) {
+                if local_datoms.contains(d) {
+                    already_present += 1;
+                } else {
+                    transferred += 1;
+                }
+                true
+            } else {
+                filtered_out += 1;
+                false
+            }
+        })
+        .cloned()
+        .collect();
+
+    // Build merged datom set: all local + accepted remote.
+    let mut merged_datoms: Vec<Datom> = local.datoms().cloned().collect();
+    merged_datoms.extend(accepted_remote);
+    merged_datoms.sort_unstable();
+    merged_datoms.dedup();
+
+    let positional = PositionalStore::from_sorted_canonical(merged_datoms);
+
+    // Schema: union of both (same as full merge).
+    let schema_merge = merge_schemas(&local.schema, &remote.schema);
+    let epoch = local.epoch.max(remote.epoch);
+    let genesis_node = std::cmp::min(local.genesis_node, remote.genesis_node);
+    let live_causal = merge_causal(&local.live_causal, &remote.live_causal);
+    let live_set = crate::query::derive_live_set(&live_causal);
+
+    let merged_store = Store {
+        repr: StoreRepr::Positional(Arc::new(positional)),
+        schema: schema_merge.schema,
+        epoch,
+        genesis_node,
+        live_causal,
+        live_set,
+        schema_conflicts: schema_merge.conflicts,
+    };
+
+    let receipt = MergeReceipt {
+        source: source.to_string(),
+        filter_description: filter.serialize(),
+        transferred,
+        filtered_out,
+        already_present,
+        duration: start.elapsed(),
+    };
+
+    Ok((merged_store, receipt))
 }
 
 // ---------------------------------------------------------------------------
@@ -276,7 +383,11 @@ fn merge_schemas(a: &Schema, b: &Schema) -> SchemaMergeResult {
 
 #[cfg(test)]
 mod tests {
-    use ferratom::{Attribute, Cardinality, ResolutionMode, ValueType};
+    use std::collections::BTreeSet;
+
+    use ferratom::{
+        Attribute, Cardinality, DatomFilter, EntityId, Op, ResolutionMode, TxId, Value, ValueType,
+    };
 
     use super::*;
 
@@ -346,5 +457,141 @@ mod tests {
             ba.schema_conflicts(),
             "INV-FERR-043: conflict audit trail must be identical regardless of merge order"
         );
+    }
+
+    // -- INV-FERR-039: selective_merge ------------------------------------
+
+    fn make_datom(attr: &str, entity_seed: &[u8], node_seed: u16) -> Datom {
+        Datom::new(
+            EntityId::from_content(entity_seed),
+            Attribute::from(attr),
+            Value::Long(42),
+            TxId::new(1000, 0, node_seed),
+            Op::Assert,
+        )
+    }
+
+    fn two_store_fixture() -> (Store, Store) {
+        let d_local = make_datom("db/doc", b"local-1", 1);
+        let d_remote_user = make_datom("user/name", b"remote-1", 2);
+        let d_remote_sys = make_datom("system/config", b"remote-2", 2);
+        let d_shared = make_datom("db/doc", b"shared", 1);
+
+        let mut local_set = BTreeSet::new();
+        local_set.insert(d_local);
+        local_set.insert(d_shared.clone());
+
+        let mut remote_set = BTreeSet::new();
+        remote_set.insert(d_remote_user);
+        remote_set.insert(d_remote_sys);
+        remote_set.insert(d_shared);
+
+        (
+            Store::from_datoms(local_set),
+            Store::from_datoms(remote_set),
+        )
+    }
+
+    #[test]
+    fn test_inv_ferr_039_selective_merge_all_equals_full() {
+        let (local, remote) = two_store_fixture();
+        let full = merge(&local, &remote).expect("full merge");
+        let (selective, receipt) =
+            selective_merge(&local, &remote, &DatomFilter::All, "test").expect("selective merge");
+
+        let full_set: BTreeSet<&Datom> = full.datoms().collect();
+        let sel_set: BTreeSet<&Datom> = selective.datoms().collect();
+        assert_eq!(
+            full_set, sel_set,
+            "INV-FERR-039: filter=All must produce same datom set as full merge"
+        );
+        assert_eq!(receipt.filtered_out, 0);
+    }
+
+    #[test]
+    fn test_inv_ferr_039_selective_merge_preserves_local() {
+        let (local, remote) = two_store_fixture();
+        let local_set: BTreeSet<Datom> = local.datoms().cloned().collect();
+        let (merged, _receipt) = selective_merge(
+            &local,
+            &remote,
+            &DatomFilter::AttributeNamespace(vec!["user/".to_string()]),
+            "test",
+        )
+        .expect("selective merge");
+
+        for datom in &local_set {
+            assert!(
+                merged.datoms().any(|d| d == datom),
+                "INV-FERR-039: local datom must be preserved in selective merge result"
+            );
+        }
+    }
+
+    #[test]
+    fn test_inv_ferr_039_selective_merge_namespace_filter() {
+        let (local, remote) = two_store_fixture();
+        let (merged, receipt) = selective_merge(
+            &local,
+            &remote,
+            &DatomFilter::AttributeNamespace(vec!["user/".to_string()]),
+            "test",
+        )
+        .expect("selective merge");
+
+        // Only user/* datoms from remote should be transferred.
+        assert_eq!(
+            receipt.transferred, 1,
+            "INV-FERR-039: only 1 user/* datom should transfer"
+        );
+        assert!(
+            receipt.filtered_out > 0,
+            "INV-FERR-039: system/* datoms should be filtered out"
+        );
+
+        // system/config should NOT be in result.
+        assert!(
+            !merged
+                .datoms()
+                .any(|d| d.attribute().as_str() == "system/config"),
+            "INV-FERR-039: filtered datoms must not appear in result"
+        );
+    }
+
+    #[test]
+    fn test_inv_ferr_039_selective_merge_idempotent() {
+        let (local, remote) = two_store_fixture();
+        let filter = DatomFilter::All;
+        let (merged1, _) = selective_merge(&local, &remote, &filter, "test").expect("first merge");
+        let (merged2, receipt) =
+            selective_merge(&merged1, &remote, &filter, "test").expect("second merge");
+
+        let set1: BTreeSet<&Datom> = merged1.datoms().collect();
+        let set2: BTreeSet<&Datom> = merged2.datoms().collect();
+        assert_eq!(
+            set1, set2,
+            "INV-FERR-039: selective_merge(result, remote, filter) must equal result"
+        );
+        assert_eq!(
+            receipt.transferred, 0,
+            "INV-FERR-039: idempotent merge should transfer 0 new datoms"
+        );
+    }
+
+    #[test]
+    fn test_inv_ferr_062_merge_receipt_fields() {
+        let (local, remote) = two_store_fixture();
+        let (_merged, receipt) = selective_merge(
+            &local,
+            &remote,
+            &DatomFilter::AttributeNamespace(vec!["user/".to_string()]),
+            "peer-alpha",
+        )
+        .expect("selective merge");
+
+        assert_eq!(receipt.source, "peer-alpha");
+        assert!(receipt.filter_description.contains("AttributeNamespace"));
+        assert_eq!(receipt.transferred, 1);
+        assert!(receipt.filtered_out > 0);
     }
 }
