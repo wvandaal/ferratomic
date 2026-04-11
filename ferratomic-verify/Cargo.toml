@@ -166,6 +166,11 @@ path = "kani/mod.rs"
 # --- Criterion benchmark suites (benches/) ---
 
 [[bench]]
+name = "prolly_ops"
+path = "benches/prolly_ops.rs"
+harness = false
+
+[[bench]]
 name = "cold_start"
 path = "benches/cold_start.rs"
 harness = false
