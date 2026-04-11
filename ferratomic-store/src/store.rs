@@ -223,7 +223,7 @@ impl Store {
         genesis_node: NodeId,
         schema_attrs: Vec<(String, AttributeDef)>,
         sorted_datoms: Vec<Datom>,
-        live_bits: bitvec::prelude::BitVec<u64, bitvec::prelude::Lsb0>,
+        live_bits: &bitvec::prelude::BitVec<u64, bitvec::prelude::Lsb0>,
     ) -> Result<Self, ferratom::FerraError> {
         let mut schema = Schema::empty();
         for (name, def) in schema_attrs {

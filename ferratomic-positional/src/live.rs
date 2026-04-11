@@ -7,10 +7,11 @@
 
 use bitvec::prelude::{BitVec, Lsb0};
 use ferratom::{Datom, Op};
+use roaring::RoaringBitmap;
 
 use crate::chunk_fingerprints::ChunkFingerprints;
 
-/// Build LIVE bitvector from EAVT-sorted canonical array (INV-FERR-029).
+/// Build LIVE set from EAVT-sorted canonical array (INV-FERR-029).
 ///
 /// For each `(entity, attribute, value)` triple, the datom with the
 /// highest `TxId` determines liveness. Since canonical is EAVT-sorted,
@@ -18,21 +19,27 @@ use crate::chunk_fingerprints::ChunkFingerprints;
 ///
 /// A datom is marked live iff it is the last (highest `TxId`) in its
 /// `(e,a,v)` group AND its `Op` is `Assert`.
-pub(crate) fn build_live_bitvector(canonical: &[Datom]) -> BitVec<u64, Lsb0> {
-    let mut live = BitVec::repeat(false, canonical.len());
-    for position in live_positions_kernel(canonical) {
+///
+/// Returns a `RoaringBitmap` for 10-100x memory compression over dense
+/// `BitVec` at scale (bd-qgxjl). Set semantics are identical: `contains(p)`
+/// iff position p is LIVE.
+pub(crate) fn build_live_roaring(canonical: &[Datom]) -> RoaringBitmap {
+    let positions = live_positions_kernel(canonical);
+    positions.into_iter().collect()
+}
+
+/// Build a LIVE bitvector from EAVT-sorted datoms (public, `BitVec` format).
+///
+/// Used by V3/V4 checkpoint serialization which persists the dense `BitVec`
+/// format on disk (INV-FERR-029, INV-FERR-076). Internal storage uses
+/// `RoaringBitmap` (bd-qgxjl); this function is the backward-compat path.
+#[must_use]
+pub fn build_live_bitvector_pub(sorted_datoms: &[Datom]) -> BitVec<u64, Lsb0> {
+    let mut live = BitVec::repeat(false, sorted_datoms.len());
+    for position in live_positions_kernel(sorted_datoms) {
         live.set(position as usize, true);
     }
     live
-}
-
-/// Build a LIVE bitvector from EAVT-sorted datoms (public).
-///
-/// Delegates to `build_live_bitvector`. Used by V3 checkpoint deserialization
-/// when loading from non-Positional stores (INV-FERR-029, INV-FERR-076).
-#[must_use]
-pub fn build_live_bitvector_pub(sorted_datoms: &[Datom]) -> BitVec<u64, Lsb0> {
-    build_live_bitvector(sorted_datoms)
 }
 
 /// Proof-friendly LIVE kernel for canonical datoms (INV-FERR-029, INV-FERR-076).
@@ -66,7 +73,7 @@ pub fn live_positions_from_sorted_run_keys_for_test<K: PartialEq>(entries: &[(K,
 ///
 /// Exposes `rebuild_live_incremental` for property-based testing of the
 /// correctness guarantee: `rebuild_live_incremental(c, cs, old, new) ==
-/// build_live_bitvector(c)` for all inputs.
+/// build_live_roaring(c)` for all inputs.
 #[cfg(any(test, feature = "test-utils"))]
 #[must_use]
 pub fn rebuild_live_incremental_for_test(
@@ -74,7 +81,7 @@ pub fn rebuild_live_incremental_for_test(
     chunk_size: usize,
     old_fps: &ChunkFingerprints,
     new_fps: &ChunkFingerprints,
-) -> BitVec<u64, Lsb0> {
+) -> RoaringBitmap {
     rebuild_live_incremental(canonical, chunk_size, old_fps, new_fps)
 }
 
@@ -178,7 +185,7 @@ pub fn rebuild_live_incremental(
     chunk_size: usize,
     old_fps: &ChunkFingerprints,
     new_fps: &ChunkFingerprints,
-) -> BitVec<u64, Lsb0> {
+) -> RoaringBitmap {
     // Phase 4a fallback: if chunk geometry changed, the canonical array
     // was resized. Positions shifted globally. Old LIVE bits cannot be
     // reused. Full rebuild.
@@ -189,7 +196,7 @@ pub fn rebuild_live_incremental(
     // the same chunk space. Different num_chunks implies different
     // canonical lengths (the canonical grew or shrank).
     if old_fps.chunk_size() != chunk_size || old_fps.num_chunks() != new_fps.num_chunks() {
-        return build_live_bitvector(canonical);
+        return build_live_roaring(canonical);
     }
 
     // Identify dirty chunks by fingerprint comparison.
@@ -199,16 +206,16 @@ pub fn rebuild_live_incremental(
     let num_chunks = new_fps.num_chunks();
     if dirty.is_empty() {
         // No changes — rebuild from scratch to guarantee correctness.
-        // (In a future phase, we could return the old bitvector.)
-        return build_live_bitvector(canonical);
+        // (In a future phase, we could return the old bitmap.)
+        return build_live_roaring(canonical);
     }
     if dirty.len() == num_chunks {
-        return build_live_bitvector(canonical);
+        return build_live_roaring(canonical);
     }
 
     // Phase 4b: use dirty flags to rebuild only changed chunks.
     // For now, fall back to full rebuild.
-    build_live_bitvector(canonical)
+    build_live_roaring(canonical)
 }
 
 // Phase 4b: expand_dirty_for_boundaries and same_eav_group will be

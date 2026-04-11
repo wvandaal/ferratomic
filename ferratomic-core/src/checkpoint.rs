@@ -83,7 +83,7 @@ pub fn deserialize_live_first_partial(data: &[u8]) -> Result<PartialStore, Ferra
         partial_data.genesis_node,
         partial_data.schema_pairs.clone(),
         partial_data.live_datoms,
-        live_bits,
+        &live_bits,
     )?;
 
     Ok(PartialStore {
@@ -138,7 +138,7 @@ impl PartialStore {
             self.store.genesis_node(),
             self.schema_pairs,
             merged,
-            live_bits,
+            &live_bits,
         )
     }
 }

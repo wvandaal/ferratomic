@@ -93,7 +93,7 @@ pub fn store_from_checkpoint_data(
     data: ferratomic_checkpoint::CheckpointData,
 ) -> Result<Store, FerraError> {
     match data.live_bits {
-        Some(live_bits) => Store::from_checkpoint_v3(
+        Some(ref live_bits) => Store::from_checkpoint_v3(
             data.epoch,
             data.genesis_node,
             data.schema_pairs,

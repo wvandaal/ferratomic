@@ -11,12 +11,13 @@ use std::sync::OnceLock;
 use bitvec::prelude::{BitVec, Lsb0};
 use ferratom::{Datom, EntityId, TxId};
 use ferratomic_index::{AevtKey, AvetKey, EavtKey, VaetKey};
+use roaring::RoaringBitmap;
 
 use crate::{
     bloom::EntityBloom,
     chunk_fingerprints::{ChunkFingerprints, DEFAULT_CHUNK_SIZE},
     fingerprint::compute_fingerprint,
-    live::build_live_bitvector,
+    live::build_live_roaring,
     mph::Mph,
     perm::{build_permutation, layout_permutation, layout_search},
     search::interpolation_search,
@@ -30,7 +31,7 @@ use crate::{
 ///
 /// Replaces `OrdSet<Datom>` + 4x`OrdMap` with contiguous arrays:
 /// - `canonical`: sorted `Vec<Datom>` (EAVT order). Position = index.
-/// - `live_bits`: `BitVec` where `live_bits[p]` = datom p is live.
+/// - `live_bits`: `RoaringBitmap` where `live_bits.contains(p)` = datom p is live.
 /// - `perm_aevt/vaet/avet`: lazily-built permutation arrays mapping alternate
 ///   sort orders to canonical positions (`OnceLock` for deferred construction).
 /// - `fingerprint`: XOR of per-datom BLAKE3 content hashes (INV-FERR-074).
@@ -49,10 +50,11 @@ use crate::{
 pub struct PositionalStore {
     /// Datoms in canonical (EAVT) sorted order (INV-FERR-076).
     pub(crate) canonical: Vec<Datom>,
-    /// LIVE bitvector: `live_bits[p] = true` iff the datom at position
-    /// p is the latest Assert for its `(entity, attribute, value)` triple
-    /// (INV-FERR-029). 1 bit per datom -- 25 KB at 200K datoms.
-    pub(crate) live_bits: BitVec<u64, Lsb0>,
+    /// LIVE set: `live_bits.contains(p)` iff the datom at position p is
+    /// the latest Assert for its `(entity, attribute, value)` triple
+    /// (INV-FERR-029). Roaring bitmap for 10-100x memory compression
+    /// over dense `BitVec` at scale (bd-qgxjl). ~100 KB at 100M datoms.
+    pub(crate) live_bits: RoaringBitmap,
     /// Permutation: AEVT-order index -> canonical position (INV-FERR-005).
     /// Lazily built on first access via `OnceLock`.
     pub(crate) perm_aevt: OnceLock<Vec<u32>>,
@@ -127,7 +129,7 @@ impl std::fmt::Debug for PositionalStore {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PositionalStore")
             .field("canonical_len", &self.canonical.len())
-            .field("live_bits_len", &self.live_bits.len())
+            .field("live_count", &self.live_bits.len())
             .field("perm_aevt_init", &self.perm_aevt.get().is_some())
             .field("perm_vaet_init", &self.perm_vaet.get().is_some())
             .field("perm_avet_init", &self.perm_avet.get().is_some())
@@ -164,7 +166,7 @@ impl PositionalStore {
 
         // After sort, canonical is immutable. Parallel O(n) passes (bd-a7s1).
         let (live_bits, fingerprint) = rayon::join(
-            || build_live_bitvector(&canonical),
+            || build_live_roaring(&canonical),
             || compute_fingerprint(&canonical),
         );
 
@@ -207,7 +209,7 @@ impl PositionalStore {
 
         // Parallel O(n) passes (bd-a7s1).
         let (live_bits, fingerprint) = rayon::join(
-            || build_live_bitvector(&canonical),
+            || build_live_roaring(&canonical),
             || compute_fingerprint(&canonical),
         );
 
@@ -249,11 +251,10 @@ impl PositionalStore {
             .and_then(|i| u32::try_from(i).ok())
     }
 
-    /// LIVE check: O(1) bit test (INV-FERR-029, INV-FERR-076).
+    /// LIVE check: O(1) Roaring `contains` (INV-FERR-029, INV-FERR-076).
     #[must_use]
     pub fn is_live(&self, position: u32) -> bool {
-        let pos = position as usize;
-        pos < self.live_bits.len() && self.live_bits[pos]
+        self.live_bits.contains(position)
     }
 
     /// Datom at canonical position: O(1) array index (INV-FERR-076).
@@ -270,13 +271,13 @@ impl PositionalStore {
 
     /// Iterator over live datoms only (INV-FERR-029, INV-FERR-076).
     ///
-    /// Returns datoms where `live_bits[p] = true` -- the latest Assert
-    /// for each `(entity, attribute, value)` triple.
+    /// Returns datoms where `live_bits.contains(p)` -- the latest Assert
+    /// for each `(entity, attribute, value)` triple. Roaring iterates
+    /// positions in ascending order, preserving canonical EAVT ordering.
     pub fn live_datoms(&self) -> impl Iterator<Item = &Datom> + '_ {
-        self.canonical
+        self.live_bits
             .iter()
-            .zip(self.live_bits.iter())
-            .filter_map(|(d, live)| if *live { Some(d) } else { None })
+            .filter_map(|pos| self.canonical.get(pos as usize))
     }
 
     /// EAVT lookup: O(log log n) interpolation search on canonical array (INV-FERR-027).
@@ -325,16 +326,20 @@ impl PositionalStore {
         layout_search(perm, &self.canonical, |d| key.cmp_datom(d).reverse())
     }
 
-    /// Length of the LIVE bitvector (INV-FERR-076: equals `len()`).
+    /// Length of the LIVE domain (INV-FERR-076: equals `len()`).
+    ///
+    /// Returns `canonical.len()` — the total number of positions in the
+    /// LIVE domain. With `RoaringBitmap`, this is the canonical length,
+    /// not the number of set bits.
     #[must_use]
     pub fn live_bits_len(&self) -> usize {
-        self.live_bits.len()
+        self.canonical.len()
     }
 
     /// Number of live datoms (INV-FERR-029).
     #[must_use]
     pub fn live_count(&self) -> usize {
-        self.live_bits.count_ones()
+        usize::try_from(self.live_bits.len()).unwrap_or(usize::MAX)
     }
 
     /// XOR homomorphic store fingerprint (INV-FERR-074).
@@ -357,12 +362,22 @@ impl PositionalStore {
             .get_or_init(|| ChunkFingerprints::from_canonical(&self.canonical, DEFAULT_CHUNK_SIZE))
     }
 
-    /// Clone the LIVE bitvector for checkpoint serialization (INV-FERR-076).
+    /// Convert the LIVE set to a `BitVec` for checkpoint serialization
+    /// (INV-FERR-076, INV-FERR-029).
     ///
-    /// V3 checkpoints persist the bitvector to skip recomputation on load.
+    /// V3/V4 checkpoints persist the dense `BitVec` format on disk.
+    /// This converts the internal `RoaringBitmap` to `BitVec` at the
+    /// checkpoint boundary. O(n) where n = `canonical.len()`.
+    ///
+    /// When V4 native Roaring serialization ships (bd-pg85), this
+    /// conversion will be bypassed.
     #[must_use]
     pub fn live_bits_clone(&self) -> BitVec<u64, Lsb0> {
-        self.live_bits.clone()
+        let mut bv = BitVec::repeat(false, self.canonical.len());
+        for pos in &self.live_bits {
+            bv.set(pos as usize, true);
+        }
+        bv
     }
 
     /// Build from pre-sorted datoms and a pre-computed LIVE bitvector.
@@ -374,6 +389,10 @@ impl PositionalStore {
     /// in all builds (debug and release). Permutation arrays are deferred
     /// (`OnceLock::new()`).
     ///
+    /// Internally converts the `BitVec` to a `RoaringBitmap` for in-memory
+    /// storage (bd-qgxjl). The `BitVec` format is preserved for checkpoint
+    /// serialization compatibility via `live_bits_clone()`.
+    ///
     /// # Errors
     ///
     /// Returns `FerraError::InvariantViolation` (INV-FERR-076) if:
@@ -382,7 +401,7 @@ impl PositionalStore {
     /// - `canonical.len()` exceeds `u32::MAX` (position space overflow)
     pub fn from_sorted_with_live(
         canonical: Vec<Datom>,
-        live_bits: BitVec<u64, Lsb0>,
+        live_bits: &BitVec<u64, Lsb0>,
     ) -> Result<Self, ferratom::FerraError> {
         if live_bits.len() != canonical.len() {
             return Err(ferratom::FerraError::InvariantViolation {
@@ -407,12 +426,15 @@ impl PositionalStore {
                 details: "canonical array exceeds u32 position space".to_string(),
             });
         }
-        // Single O(n) pass -- no rayon::join because live_bits is pre-computed.
-        // The fingerprint computation is the only O(n) work here.
+        // Convert BitVec → RoaringBitmap for internal storage (bd-qgxjl).
+        let roaring: RoaringBitmap = live_bits
+            .iter_ones()
+            .filter_map(|pos| u32::try_from(pos).ok())
+            .collect();
         let fingerprint = compute_fingerprint(&canonical);
         Ok(Self {
             canonical,
-            live_bits,
+            live_bits: roaring,
             perm_aevt: OnceLock::new(),
             perm_vaet: OnceLock::new(),
             perm_avet: OnceLock::new(),

@@ -4,7 +4,7 @@ use std::sync::OnceLock;
 
 use ferratom::Datom;
 
-use crate::{fingerprint::compute_fingerprint, live::build_live_bitvector, store::PositionalStore};
+use crate::{fingerprint::compute_fingerprint, live::build_live_roaring, store::PositionalStore};
 
 /// CRDT merge via merge-sort on canonical arrays (INV-FERR-076).
 ///
@@ -25,7 +25,7 @@ pub fn merge_positional(a: &PositionalStore, b: &PositionalStore) -> PositionalS
     let merged = merge_sort_dedup(a.datoms(), b.datoms());
     // Parallel O(n) passes (bd-a7s1).
     let (live_bits, fingerprint) = rayon::join(
-        || build_live_bitvector(&merged),
+        || build_live_roaring(&merged),
         || compute_fingerprint(&merged),
     );
     PositionalStore {

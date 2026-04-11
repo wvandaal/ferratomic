@@ -4,8 +4,8 @@ mod positional_tests {
     use ferratom::{Attribute, Datom, EntityId, Op, TxId, Value};
 
     use crate::live::{
-        build_live_bitvector, live_positions_for_test,
-        live_positions_from_sorted_run_keys_for_test, live_positions_kernel,
+        build_live_roaring, live_positions_for_test, live_positions_from_sorted_run_keys_for_test,
+        live_positions_kernel,
     };
 
     fn proof_entity_id(id: u8) -> EntityId {
@@ -14,10 +14,8 @@ mod positional_tests {
         EntityId::from_bytes(bytes)
     }
 
-    fn canonical_positions(bits: &bitvec::prelude::BitVec<u64, bitvec::prelude::Lsb0>) -> Vec<u32> {
-        bits.iter_ones()
-            .map(|position| u32::try_from(position).unwrap_or(u32::MAX))
-            .collect()
+    fn canonical_positions(bits: &roaring::RoaringBitmap) -> Vec<u32> {
+        bits.iter().collect()
     }
 
     #[test]
@@ -50,7 +48,7 @@ mod positional_tests {
         ];
 
         assert_eq!(
-            canonical_positions(&build_live_bitvector(&canonical)),
+            canonical_positions(&build_live_roaring(&canonical)),
             live_positions_kernel(&canonical),
             "INV-FERR-029: bitvector LIVE representation must reflect kernel live positions"
         );
@@ -91,7 +89,7 @@ mod positional_tests {
         ];
 
         assert_eq!(
-            canonical_positions(&build_live_bitvector(&canonical)),
+            canonical_positions(&build_live_roaring(&canonical)),
             live_positions_kernel(&canonical),
             "INV-FERR-029: bitvector LIVE representation must track each triple independently"
         );
@@ -298,7 +296,7 @@ mod positional_tests {
 
         let datoms = vec![make_datom(1, 0)];
         let wrong_bits = BitVec::<u64, Lsb0>::repeat(false, 5); // length 5 != 1
-        let result = PositionalStore::from_sorted_with_live(datoms, wrong_bits);
+        let result = PositionalStore::from_sorted_with_live(datoms, &wrong_bits);
         assert!(
             result.is_err(),
             "INV-FERR-076: mismatched live_bits length must be rejected"
@@ -314,7 +312,7 @@ mod positional_tests {
         // Intentionally unsorted: datom 2 before datom 1
         let datoms = vec![make_datom(2, 0), make_datom(1, 0)];
         let bits = BitVec::<u64, Lsb0>::repeat(true, 2);
-        let result = PositionalStore::from_sorted_with_live(datoms, bits);
+        let result = PositionalStore::from_sorted_with_live(datoms, &bits);
         assert!(
             result.is_err(),
             "INV-FERR-076: unsorted canonical must be rejected"
@@ -782,7 +780,7 @@ mod incremental_live_tests {
 
     use crate::{
         chunk_fingerprints::ChunkFingerprints,
-        live::{build_live_bitvector, rebuild_live_incremental_for_test},
+        live::{build_live_roaring, rebuild_live_incremental_for_test},
     };
 
     fn proof_entity_id(id: u8) -> EntityId {
@@ -817,7 +815,7 @@ mod incremental_live_tests {
         let old_fps = ChunkFingerprints::from_canonical(&[], 4);
         let new_fps = ChunkFingerprints::from_canonical(&[], 4);
         let result = rebuild_live_incremental_for_test(&[], 4, &old_fps, &new_fps);
-        let expected = build_live_bitvector(&[]);
+        let expected = build_live_roaring(&[]);
         assert_eq!(
             result, expected,
             "INV-FERR-080: empty canonical produces empty LIVE bitvector"
@@ -834,7 +832,7 @@ mod incremental_live_tests {
 
         let fps = ChunkFingerprints::from_canonical(&datoms, 4);
         let result = rebuild_live_incremental_for_test(&datoms, 4, &fps, &fps);
-        let expected = build_live_bitvector(&datoms);
+        let expected = build_live_roaring(&datoms);
         assert_eq!(
             result, expected,
             "INV-FERR-080: identical fingerprints must produce same LIVE as full rebuild"
@@ -858,7 +856,7 @@ mod incremental_live_tests {
         let new_fps = ChunkFingerprints::from_canonical(&new_datoms, 4);
 
         let result = rebuild_live_incremental_for_test(&new_datoms, 4, &old_fps, &new_fps);
-        let expected = build_live_bitvector(&new_datoms);
+        let expected = build_live_roaring(&new_datoms);
         assert_eq!(
             result, expected,
             "INV-FERR-080: length change must fall back to full rebuild"
@@ -884,7 +882,7 @@ mod incremental_live_tests {
 
         let fps = ChunkFingerprints::from_canonical(&datoms, 4);
         let result = rebuild_live_incremental_for_test(&datoms, 4, &fps, &fps);
-        let expected = build_live_bitvector(&datoms);
+        let expected = build_live_roaring(&datoms);
         assert_eq!(
             result, expected,
             "INV-FERR-080: mixed assert/retract must match full rebuild"
@@ -903,7 +901,7 @@ mod incremental_live_tests {
 
         // chunk_size parameter differs from old_fps chunk_size -> fallback
         let result = rebuild_live_incremental_for_test(&datoms, 8, &old_fps, &new_fps);
-        let expected = build_live_bitvector(&datoms);
+        let expected = build_live_roaring(&datoms);
         assert_eq!(
             result, expected,
             "INV-FERR-080: `chunk_size` mismatch must fall back correctly"
@@ -917,7 +915,7 @@ mod incremental_live_tests {
         let fps = ChunkFingerprints::from_canonical(&datoms, 4);
 
         let result = rebuild_live_incremental_for_test(&datoms, 4, &fps, &fps);
-        let expected = build_live_bitvector(&datoms);
+        let expected = build_live_roaring(&datoms);
         assert_eq!(
             result, expected,
             "INV-FERR-080: single datom must produce correct LIVE"
@@ -933,13 +931,13 @@ mod incremental_live_tests {
 
         let fps = ChunkFingerprints::from_canonical(&datoms, 4);
         let result = rebuild_live_incremental_for_test(&datoms, 4, &fps, &fps);
-        let expected = build_live_bitvector(&datoms);
+        let expected = build_live_roaring(&datoms);
         assert_eq!(
             result, expected,
             "INV-FERR-080: all-retract must produce no live bits"
         );
         assert_eq!(
-            result.count_ones(),
+            result.len(),
             0,
             "INV-FERR-080: no datoms should be live when all are retracts"
         );
@@ -963,7 +961,7 @@ mod incremental_live_tests {
 
         let fps = ChunkFingerprints::from_canonical(&datoms, 2);
         let result = rebuild_live_incremental_for_test(&datoms, 2, &fps, &fps);
-        let expected = build_live_bitvector(&datoms);
+        let expected = build_live_roaring(&datoms);
         assert_eq!(
             result, expected,
             "INV-FERR-080: group spanning chunk boundary must be handled correctly"
@@ -974,7 +972,7 @@ mod incremental_live_tests {
     ///
     /// Generates arbitrary sorted, deduplicated datom arrays and verifies
     /// that `rebuild_live_incremental` produces bit-identical results to
-    /// `build_live_bitvector` for every chunk size power of 2 in {1, 2, 4}.
+    /// `build_live_roaring` for every chunk size power of 2 in {1, 2, 4}.
     mod proptests {
         use proptest::prelude::*;
 
@@ -1015,7 +1013,7 @@ mod incremental_live_tests {
                 let incremental = rebuild_live_incremental_for_test(
                     &datoms, chunk_size, &fps, &fps,
                 );
-                let full = build_live_bitvector(&datoms);
+                let full = build_live_roaring(&datoms);
                 prop_assert_eq!(
                     incremental, full,
                     "INV-FERR-080: incremental must be bit-identical to full rebuild"
@@ -1043,7 +1041,7 @@ mod incremental_live_tests {
                 let incremental = rebuild_live_incremental_for_test(
                     &new_datoms, chunk_size, &old_fps, &new_fps,
                 );
-                let full = build_live_bitvector(&new_datoms);
+                let full = build_live_roaring(&new_datoms);
                 prop_assert_eq!(
                     incremental, full,
                     "INV-FERR-080: fallback path must be bit-identical to full rebuild"
