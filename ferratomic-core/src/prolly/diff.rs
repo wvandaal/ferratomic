@@ -10,10 +10,7 @@
 //! `diff(root_V, root_current)` — cost proportional to changes, not
 //! store size.
 
-use std::{
-    cmp::Ordering,
-    collections::{BTreeMap, VecDeque},
-};
+use std::{cmp::Ordering, collections::VecDeque};
 
 use ferratom::error::FerraError;
 
@@ -84,52 +81,77 @@ pub fn diff_exact(
 /// function cancels such pairs and converts cross-chunk value changes
 /// into `Modified` entries.
 fn deduplicate_phantom_entries(entries: Vec<DiffEntry>) -> Vec<DiffEntry> {
-    let mut left_map: BTreeMap<Vec<u8>, Vec<u8>> = BTreeMap::new();
-    let mut right_map: BTreeMap<Vec<u8>, Vec<u8>> = BTreeMap::new();
-    let mut modified: Vec<DiffEntry> = Vec::new();
+    let mut left: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
+    let mut right: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
+    let mut result: Vec<DiffEntry> = Vec::new();
 
     for entry in entries {
         match entry {
-            DiffEntry::LeftOnly { key, value } => {
-                left_map.insert(key, value);
-            }
-            DiffEntry::RightOnly { key, value } => {
-                right_map.insert(key, value);
-            }
-            DiffEntry::Modified { .. } => {
-                modified.push(entry);
-            }
+            DiffEntry::LeftOnly { key, value } => left.push((key, value)),
+            DiffEntry::RightOnly { key, value } => right.push((key, value)),
+            DiffEntry::Modified { .. } => result.push(entry),
         }
     }
 
-    let mut result = modified;
+    // Sort by key — Vec sort is cache-friendly, no tree allocation.
+    left.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+    right.sort_unstable_by(|a, b| a.0.cmp(&b.0));
 
-    // Process LeftOnly: check if the same key appears in RightOnly
-    for (key, left_value) in &left_map {
-        if let Some(right_value) = right_map.remove(key) {
-            if *left_value != right_value {
-                // Key in both trees but value changed (cross-chunk modification)
-                result.push(DiffEntry::Modified {
-                    key: key.clone(),
-                    left_value: left_value.clone(),
-                    right_value,
-                });
-            }
-            // else: same key+value in both trees → phantom diff, cancel
-        } else {
-            result.push(DiffEntry::LeftOnly {
-                key: key.clone(),
-                value: left_value.clone(),
-            });
-        }
-    }
-
-    // Remaining RightOnly entries (not cancelled by any LeftOnly)
-    for (key, value) in right_map {
-        result.push(DiffEntry::RightOnly { key, value });
-    }
-
+    merge_cancel_phantoms(left, right, &mut result);
     result
+}
+
+/// Merge-join two sorted (key, value) lists, cancelling phantom pairs.
+///
+/// Entries with the same key+value in both lists are phantoms (keys that
+/// moved between chunks). Same key but different values → `Modified`.
+fn merge_cancel_phantoms(
+    mut left: Vec<(Vec<u8>, Vec<u8>)>,
+    mut right: Vec<(Vec<u8>, Vec<u8>)>,
+    out: &mut Vec<DiffEntry>,
+) {
+    let mut li = 0;
+    let mut ri = 0;
+
+    while li < left.len() && ri < right.len() {
+        match left[li].0.cmp(&right[ri].0) {
+            Ordering::Less => {
+                let (k, v) = std::mem::take(&mut left[li]);
+                out.push(DiffEntry::LeftOnly { key: k, value: v });
+                li += 1;
+            }
+            Ordering::Greater => {
+                let (k, v) = std::mem::take(&mut right[ri]);
+                out.push(DiffEntry::RightOnly { key: k, value: v });
+                ri += 1;
+            }
+            Ordering::Equal => {
+                let (lk, lv) = std::mem::take(&mut left[li]);
+                let (_rk, rv) = std::mem::take(&mut right[ri]);
+                if lv != rv {
+                    out.push(DiffEntry::Modified {
+                        key: lk,
+                        left_value: lv,
+                        right_value: rv,
+                    });
+                }
+                li += 1;
+                ri += 1;
+            }
+        }
+    }
+    for item in left.into_iter().skip(li) {
+        out.push(DiffEntry::LeftOnly {
+            key: item.0,
+            value: item.1,
+        });
+    }
+    for item in right.into_iter().skip(ri) {
+        out.push(DiffEntry::RightOnly {
+            key: item.0,
+            value: item.1,
+        });
+    }
 }
 
 /// Compute the raw diff between two prolly tree roots.
