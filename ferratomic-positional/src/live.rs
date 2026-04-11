@@ -177,7 +177,7 @@ pub(crate) fn live_positions_kernel(canonical: &[Datom]) -> Vec<u32> {
 ///
 /// # Correctness guarantee
 ///
-/// The returned bitvector is bit-identical to `build_live_bitvector(canonical)`.
+/// The returned bitmap is set-identical to `build_live_roaring(canonical)`.
 /// This is verified by the proptest `test_inv_ferr_080_incremental_equals_full`.
 #[must_use]
 pub fn rebuild_live_incremental(
