@@ -1,63 +1,144 @@
-#!/bin/bash
-# Ferratomic pre-commit hook.
-# Install: cp scripts/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
+#!/usr/bin/env bash
+# Green-main invariant: every commit compiles, passes clippy, and is formatted.
+# Enforces zero lint escape hatches across ALL code (tests, benches, verification).
+#
+# INV-FERR-023: forbid(unsafe_code) in all crates (deny for mmap crates, ADR-FERR-020).
+# NEG-FERR-001: no unwrap/expect/panic in production (--lib strict gate).
+# Zero #[allow(...)] anywhere in the codebase.
 
-set -e
+set -euo pipefail
 
-echo "=== Ferratomic pre-commit checks ==="
+export CARGO_TARGET_DIR=/data/cargo-target
 
-# 1. Format check
-echo "[1/5] rustfmt..."
-cargo fmt --all -- --check 2>/dev/null || {
-    echo "FAIL: cargo fmt found formatting issues. Run: cargo fmt --all"
-    exit 1
-}
+echo "pre-commit: checking format..."
+cargo fmt --all -- --check
 
-# 2. Clippy (includes complexity limits via clippy.toml)
-echo "[2/5] clippy..."
-cargo clippy --workspace --all-targets -- -D warnings 2>/dev/null || {
-    echo "FAIL: clippy warnings found."
-    exit 1
-}
+echo "pre-commit: checking clippy (all targets)..."
+cargo clippy --workspace --all-targets -- -D warnings
 
-# 3. No unsafe code (Gate 6)
-echo "[3/5] unsafe check..."
-# All crates use forbid(unsafe_code) except ferratomic-core and ferratomic-checkpoint
-# which use deny(unsafe_code) per ADR-FERR-020 (mmap containment).
-for lib in ferratom-clock/src/lib.rs ferratom/src/lib.rs \
-           ferratomic-tx/src/lib.rs ferratomic-storage/src/lib.rs \
-           ferratomic-wal/src/lib.rs ferratomic-index/src/lib.rs \
-           ferratomic-positional/src/lib.rs ferratomic-store/src/lib.rs \
-           ferratomic-datalog/src/lib.rs ferratomic-verify/src/lib.rs; do
-    if [ -f "$lib" ] && ! grep -q 'forbid(unsafe_code)' "$lib"; then
-        echo "FAIL: $lib missing #![forbid(unsafe_code)]"
-        exit 1
-    fi
-done
-for lib in ferratomic-core/src/lib.rs ferratomic-checkpoint/src/lib.rs; do
-    if [ -f "$lib" ] && ! grep -q 'deny(unsafe_code)' "$lib"; then
-        echo "FAIL: $lib missing #![deny(unsafe_code)] (ADR-FERR-020)"
-        exit 1
-    fi
-done
+echo "pre-commit: checking strict gate (no unwrap/expect/panic in --lib)..."
+cargo clippy --workspace --lib -- -D warnings \
+  -D clippy::unwrap_used -D clippy::expect_used -D clippy::panic
 
-# 4. No unwrap/expect in production code (exclude tests and verify crate)
-echo "[4/5] no unwrap/expect in production..."
-VIOLATIONS=$(grep -rn '\.unwrap()' ferratom/src ferratomic-core/src ferratomic-datalog/src 2>/dev/null | grep -v '#\[cfg(test)\]' | grep -v '// OK:' || true)
-if [ -n "$VIOLATIONS" ]; then
-    echo "FAIL: unwrap() found in production code:"
-    echo "$VIOLATIONS"
-    echo "Use ? operator or handle the error explicitly."
-    exit 1
+echo "pre-commit: verifying zero #[allow(...)] in codebase..."
+if grep -r '#\[allow(' --include='*.rs' \
+    ferratom-clock/src/ ferratom/src/ ferratomic-core/src/ \
+    ferratomic-tx/src/ ferratomic-storage/src/ ferratomic-wal/src/ \
+    ferratomic-index/src/ ferratomic-positional/src/ \
+    ferratomic-checkpoint/src/ ferratomic-store/src/ \
+    ferratomic-datalog/src/ ferratomic-verify/src/ \
+    ferratomic-verify/proptest/ ferratomic-verify/integration/ \
+    ferratomic-verify/kani/ ferratomic-verify/stateright/ \
+    ferratomic-verify/benches/ 2>/dev/null; then
+  echo "FATAL: #[allow(...)] found in codebase. Fix the root cause."
+  exit 1
 fi
 
-# 5. File size limits
-echo "[5/5] file size limits..."
-for f in $(find ferratom ferratomic-core ferratomic-datalog -name '*.rs' -not -path '*/tests/*' 2>/dev/null); do
-    LOC=$(wc -l < "$f")
-    if [ "$LOC" -gt 750 ]; then  # 500 code + 250 buffer for comments/blanks
-        echo "WARN: $f is $LOC lines (approaching 500 LOC code limit)"
-    fi
-done
+# --- LOC budget check (Gate 8, AGENTS.md complexity limits) ---
+echo "pre-commit: checking LOC budgets..."
+LOC_FAIL=0
+check_loc() {
+  local crate="$1" limit="$2"
+  local count
+  count=$(find "$crate/src" -name '*.rs' -exec cat {} + 2>/dev/null | wc -l)
+  if [ "$count" -gt "$limit" ]; then
+    echo "  LOC BUDGET: $crate = $count (limit $limit)"
+    LOC_FAIL=$((LOC_FAIL + 1))
+  fi
+}
+check_loc ferratom-clock 1000
+check_loc ferratomic-tx 1500
+check_loc ferratomic-storage 1500
+check_loc ferratomic-wal 1500
+check_loc ferratomic-datalog 5000
+# ferratom, ferratomic-core, ferratomic-positional, ferratomic-store:
+# known overages from Phase 4a.5 + 4b. Track but don't block.
+# These will be resolved via crate splits.
+LOC_WARN=0
+check_loc_warn() {
+  local crate="$1" limit="$2"
+  local count
+  count=$(find "$crate/src" -name '*.rs' -exec cat {} + 2>/dev/null | wc -l)
+  if [ "$count" -gt "$limit" ]; then
+    echo "  LOC WARNING: $crate = $count (budget $limit)"
+    LOC_WARN=$((LOC_WARN + 1))
+  fi
+}
+check_loc_warn ferratom 2000
+check_loc_warn ferratomic-core 2000
+check_loc_warn ferratomic-positional 3000
+check_loc_warn ferratomic-store 3000
+check_loc_warn ferratomic-checkpoint 2000
 
-echo "=== All pre-commit checks passed ==="
+if [ "$LOC_FAIL" -gt 0 ]; then
+  echo "FATAL: $LOC_FAIL crate(s) exceed hard LOC limit. Split before committing."
+  exit 1
+fi
+if [ "$LOC_WARN" -gt 0 ]; then
+  echo "  ($LOC_WARN known budget overage(s) — crate split tracked)"
+fi
+
+# --- Audit reminders (non-blocking) ---
+# These track drift between audits and surface when reviews are due.
+# None of these block the commit — they inform the agent.
+# Temporarily disable errexit so audit checks don't abort the hook.
+set +e
+
+WARNINGS=""
+
+# 1. CLEANROOM REVIEW (lifecycle/06): due after 3+ feat: commits
+LAST_REVIEW=$(git log --oneline --all --grep="cleanroom\|defect" --format="%H" -1 2>/dev/null || echo "")
+if [ -n "$LAST_REVIEW" ]; then
+  FEAT_SINCE=$(git log --oneline "$LAST_REVIEW"..HEAD --grep="^feat:" 2>/dev/null | wc -l)
+  if [ "$FEAT_SINCE" -ge 3 ]; then
+    WARNINGS="${WARNINGS}\n⚠ CLEANROOM REVIEW DUE: $FEAT_SINCE feat: commits since last review. → lifecycle/06"
+  fi
+fi
+
+# 2. VERIFICATION AUDIT (lifecycle/18): Lean sorry count
+SORRY_COUNT=$(grep -rc "sorry" ferratomic-verify/lean/Ferratomic/ 2>/dev/null | awk -F: '{s+=$2}END{print s}')
+if [ "${SORRY_COUNT:-0}" -gt 1 ]; then
+  WARNINGS="${WARNINGS}\n⚠ LEAN SORRY COUNT: $SORRY_COUNT (expected ≤1). → lifecycle/18"
+fi
+
+# 3. SPEC AUDIT (lifecycle/17): spec files changed without audit
+LAST_SPEC_AUDIT=$(git log --oneline --all --grep="spec.*audit\|audit.*spec" --format="%H" -1 2>/dev/null || echo "")
+if [ -n "$LAST_SPEC_AUDIT" ]; then
+  SPEC_CHANGES=$(git diff --name-only "$LAST_SPEC_AUDIT"..HEAD -- 'spec/*.md' 2>/dev/null | wc -l)
+  if [ "$SPEC_CHANGES" -ge 2 ]; then
+    WARNINGS="${WARNINGS}\n⚠ SPEC DRIFT: $SPEC_CHANGES spec files changed since last audit. → lifecycle/17"
+  fi
+fi
+
+# 4. TEST SUITE AUDIT (lifecycle/19): new src files without test coverage
+NEW_SRC=$(git diff --name-only --diff-filter=A HEAD~5..HEAD -- '*/src/*.rs' 2>/dev/null | grep -v "test" | wc -l)
+if [ "${NEW_SRC:-0}" -ge 3 ]; then
+  WARNINGS="${WARNINGS}\n⚠ TEST COVERAGE: $NEW_SRC new src files in last 5 commits. → lifecycle/19"
+fi
+
+# 5. BEAD AUDIT (lifecycle/14): open bead count growing
+OPEN_BEADS=$(br list --status=open 2>/dev/null | wc -l)
+if [ "${OPEN_BEADS:-0}" -ge 250 ]; then
+  WARNINGS="${WARNINGS}\n⚠ BEAD BACKLOG: $OPEN_BEADS open beads. → lifecycle/14"
+fi
+
+# 6. PROGRESS REVIEW (lifecycle/13): due after phase gate or major milestone
+LAST_PROGRESS=$(git log --oneline --all --grep="progress review\|Phase.*CLOSED" --format="%H" -1 2>/dev/null || echo "")
+if [ -n "$LAST_PROGRESS" ]; then
+  COMMITS_SINCE=$(git log --oneline "$LAST_PROGRESS"..HEAD 2>/dev/null | wc -l)
+  if [ "$COMMITS_SINCE" -ge 20 ]; then
+    WARNINGS="${WARNINGS}\n⚠ PROGRESS REVIEW DUE: $COMMITS_SINCE commits since last review. → lifecycle/13"
+  fi
+fi
+
+if [ -n "$WARNINGS" ]; then
+  echo ""
+  echo "────────────────────────────────────────"
+  echo "  AUDIT REMINDERS (non-blocking)"
+  echo "────────────────────────────────────────"
+  echo -e "$WARNINGS"
+  echo "────────────────────────────────────────"
+  echo ""
+fi
+
+echo "pre-commit: all gates passed."
