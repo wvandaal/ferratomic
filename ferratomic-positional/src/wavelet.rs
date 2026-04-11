@@ -45,7 +45,11 @@ pub trait WaveletBackend: Send + Sync {
 
     /// Count occurrences of `symbol` in `[0..position)`.
     ///
-    /// Returns `None` if `position > len()`.
+    /// Returns `None` if `position > len()` OR if the backend cannot
+    /// resolve the symbol (e.g., `qwt` returns `None` for symbols not
+    /// present in the construction input; `vers-vecs` returns `Some(0)`).
+    /// Callers should treat `None` as "unknown" and `Some(0)` as "zero
+    /// occurrences" — both are valid for absent symbols.
     fn rank(&self, symbol: u8, position: usize) -> Option<usize>;
 
     /// Position of the `occurrence`-th instance of `symbol` (0-indexed).
@@ -191,8 +195,43 @@ mod tests {
             }
         }
 
-        // L5: sum of all ranks at n = n (partition property)
+        // L2: complement — rank(c, i) + rank(c, n-i) = rank(c, n)
+        // (only testable when rank returns Some for out-of-range symbols)
         let n = data.len();
+        for &c in &[1u8, 3, 5] {
+            if let (Some(r_full), Some(r_half)) = (wm.rank(c, n), wm.rank(c, n / 2)) {
+                let r_rest = wm.rank(c, n).unwrap_or(0) - wm.rank(c, n / 2).unwrap_or(0);
+                let r_second_half = n
+                    .checked_sub(n / 2)
+                    .and_then(|_| {
+                        // rank in [n/2..n) = rank(c, n) - rank(c, n/2)
+                        Some(r_full - r_half)
+                    })
+                    .unwrap_or(0);
+                assert_eq!(
+                    r_half + r_second_half,
+                    r_full,
+                    "L2: rank({c}, {}) + rank_rest = rank({c}, {n})",
+                    n / 2,
+                );
+                assert_eq!(r_rest, r_second_half, "L2 consistency");
+            }
+        }
+
+        // L4: access(i) = c iff rank(c, i+1) - rank(c, i) = 1
+        for pos in 0..data.len() {
+            let c = wm.access(pos).expect("valid pos for L4");
+            let r_before = wm.rank(c, pos).unwrap_or(0);
+            let r_after = wm.rank(c, pos + 1).unwrap_or(0);
+            assert_eq!(
+                r_after - r_before,
+                1,
+                "L4: rank({c}, {}) - rank({c}, {pos}) must be 1",
+                pos + 1,
+            );
+        }
+
+        // L5: sum of all ranks at n = n (partition property)
         let mut total = 0usize;
         for c in 0u8..=255 {
             if let Some(r) = wm.rank(c, n) {
@@ -218,6 +257,13 @@ mod tests {
             assert_eq!(wm2.rank(sym, wide.len()), Some(1));
             assert_eq!(wm2.select(sym, 0), Some(sym as usize));
         }
+
+        // Empty input
+        let empty = B::build(&[]);
+        assert_eq!(empty.len(), 0, "empty: len must be 0");
+        assert!(empty.is_empty(), "empty: is_empty must be true");
+        assert_eq!(empty.access(0), None, "empty: access(0) must be None");
+        assert_eq!(empty.select(0, 0), None, "empty: select must be None");
     }
 
     #[cfg(feature = "wavelet-qwt")]
