@@ -170,6 +170,29 @@ impl Datom {
         *hasher.finalize().as_bytes()
     }
 
+    /// Stream signing-relevant fields into a hasher (entity + attribute + value + op).
+    ///
+    /// Excludes the `TxId` field — covered separately in the signing message
+    /// via `tx_id_canonical_bytes`. This avoids the pre-stamp/post-stamp
+    /// mismatch (DEFECT-025-003) and eliminates the `canonical_bytes()`
+    /// allocation in the signing hot path.
+    pub fn hash_signing_fields(&self, hasher: &mut blake3::Hasher) {
+        // Entity: 32 raw bytes
+        hasher.update(self.entity.as_bytes());
+        // Attribute: u16-le length + UTF-8 (INV-FERR-086 format)
+        let attr_bytes = self.attribute.as_str().as_bytes();
+        let attr_len = attr_byte_len_u16(attr_bytes.len());
+        hasher.update(&attr_len.to_le_bytes());
+        hasher.update(attr_bytes);
+        // Value: 0x01..0x0B tags (INV-FERR-086 format)
+        canonical_value_hash(&self.value, hasher);
+        // Op: 0x00 Assert, 0x01 Retract
+        hasher.update(&[match self.op {
+            Op::Assert => 0x00,
+            Op::Retract => 0x01,
+        }]);
+    }
+
     /// Canonical byte serialization per `INV-FERR-086`.
     ///
     /// Deterministic, self-delimiting, cross-implementation-reproducible.

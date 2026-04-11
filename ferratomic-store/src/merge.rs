@@ -151,6 +151,36 @@ pub fn merge(a: &Store, b: &Store) -> Result<Store, ferratom::FerraError> {
     Ok(Store::from_merge(a, b))
 }
 
+/// Filter remote datoms against local set. Returns (accepted, transferred, filtered, present).
+fn filter_remote(
+    local: &Store,
+    remote: &Store,
+    filter: &DatomFilter,
+) -> (Vec<Datom>, usize, usize, usize) {
+    let local_set: std::collections::BTreeSet<&Datom> = local.datoms().collect();
+    let mut transferred = 0usize;
+    let mut filtered_out = 0usize;
+    let mut already_present = 0usize;
+    let accepted: Vec<Datom> = remote
+        .datoms()
+        .filter(|d| {
+            if filter.matches(d) {
+                if local_set.contains(d) {
+                    already_present += 1;
+                } else {
+                    transferred += 1;
+                }
+                true
+            } else {
+                filtered_out += 1;
+                false
+            }
+        })
+        .cloned()
+        .collect();
+    (accepted, transferred, filtered_out, already_present)
+}
+
 /// Selective merge: union local datoms with filtered remote datoms.
 ///
 /// INV-FERR-039: `filter(remote) ⊆ full_merge`, `local ⊆ result`.
@@ -175,46 +205,20 @@ pub fn selective_merge(
     source: &str,
 ) -> Result<(Store, MergeReceipt), FerraError> {
     let start = std::time::Instant::now();
+    let (accepted, transferred, filtered_out, already_present) =
+        filter_remote(local, remote, filter);
 
-    // Filter remote datoms. BTreeSet for O(log n) containment checks.
-    let mut transferred = 0usize;
-    let mut filtered_out = 0usize;
-    let mut already_present = 0usize;
-
-    let local_set: std::collections::BTreeSet<&Datom> = local.datoms().collect();
-    let accepted_remote: Vec<Datom> = remote
-        .datoms()
-        .filter(|d| {
-            if filter.matches(d) {
-                if local_set.contains(d) {
-                    already_present += 1;
-                } else {
-                    transferred += 1;
-                }
-                true
-            } else {
-                filtered_out += 1;
-                false
-            }
-        })
-        .cloned()
-        .collect();
-
-    // Build merged datom set: all local + accepted remote.
-    let mut merged_datoms: Vec<Datom> = local.datoms().cloned().collect();
-    merged_datoms.extend(accepted_remote);
-    merged_datoms.sort_unstable();
-    merged_datoms.dedup();
-
+    // O(n+m) merge on pre-sorted arrays.
+    let mut sorted_remote = accepted;
+    sorted_remote.sort_unstable();
+    sorted_remote.dedup();
+    let local_slice: Vec<Datom> = local.datoms().cloned().collect();
+    let merged_datoms = merge_sort_dedup(&local_slice, &sorted_remote);
     let positional = PositionalStore::from_sorted_canonical(merged_datoms);
 
-    // Schema: union of both (same as full merge).
     let schema_merge = merge_schemas(&local.schema, &remote.schema);
     let epoch = local.epoch.max(remote.epoch);
     let genesis_node = std::cmp::min(local.genesis_node, remote.genesis_node);
-    // DEFECT-001: rebuild live_causal from actual merged datoms, NOT from
-    // unfiltered remote. merge_causal(&local, &remote) would include entries
-    // for datoms that were filtered out, violating INV-FERR-029.
     let live_causal = crate::query::build_live_causal(positional.datoms().iter());
     let live_set = crate::query::derive_live_set(&live_causal);
 

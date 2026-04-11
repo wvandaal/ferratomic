@@ -48,22 +48,10 @@ pub fn signing_message(components: &SigningComponents<'_>, signer_pk: &[u8; 32])
 
     let mut hasher = blake3::Hasher::new();
 
-    // User datoms: sorted, canonical bytes EXCLUDING per-datom TxId.
-    //
-    // DEFECT-025-003: canonical_bytes() includes the datom's TxId field,
-    // but at signing time datoms carry placeholder TxId(0,0,0). The real
-    // TxId is only assigned by stamp_datoms() inside Store::transact,
-    // AFTER signing. Verification uses stored (post-stamp) datoms, so
-    // including per-datom TxId would make the message unreproducible.
-    //
-    // The TxId is covered separately via tx_id_canonical_bytes below.
-    // Layout: entity(32) + attr(var) + value(var) + tx(28) + op(1)
-    // We hash [..len-29] (entity+attr+value) + [len-1..] (op).
+    // User datoms: sorted, streaming hash of (entity + attr + value + op).
+    // TxId excluded — covered separately below. Zero intermediate allocation.
     for d in &user {
-        let cb = d.canonical_bytes();
-        let len = cb.len();
-        hasher.update(&cb[..len - 29]); // entity + attribute + value
-        hasher.update(&cb[len - 1..]); // op byte
+        d.hash_signing_fields(&mut hasher);
     }
 
     // TxId: canonical 28-byte format (INV-FERR-086)

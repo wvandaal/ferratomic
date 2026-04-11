@@ -9,7 +9,7 @@
 use std::sync::{atomic::Ordering, Arc};
 
 use ed25519_dalek::SigningKey;
-use ferratom::{Datom, FerraError, ProvenanceType};
+use ferratom::{tx_id_canonical_bytes, Datom, FerraError, ProvenanceType};
 
 use super::{Database, Ready};
 use crate::{
@@ -127,7 +127,11 @@ impl Database<Ready> {
         let mut new_store = Store::clone(&current);
 
         // INV-FERR-051: sign with pre-transaction fingerprint + predecessors.
-        let preds: Vec<ferratom::EntityId> = Vec::new(); // D19: predecessor EntityIds from frontier (Phase 4c)
+        // D19: convert frontier TxIds to predecessor EntityIds.
+        let preds: Vec<ferratom::EntityId> = frontier_snap
+            .iter()
+            .map(|(_, pred_tx)| ferratom::EntityId::from_content(&tx_id_canonical_bytes(*pred_tx)))
+            .collect();
         let components = SigningComponents {
             datoms: transaction.datoms(),
             tx_id,

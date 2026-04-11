@@ -134,9 +134,17 @@ impl ObserverBroadcast {
     ) {
         let current_epoch = store.epoch();
         if current_epoch > 0 {
-            let datoms: Vec<Datom> = store.datoms().cloned().collect();
-            let filtered = apply_filter(filter.as_ref(), &datoms);
-            observer.on_catchup(0, &filtered);
+            match &filter {
+                None => {
+                    let datoms: Vec<Datom> = store.datoms().cloned().collect();
+                    observer.on_catchup(0, &datoms);
+                }
+                Some(f) => {
+                    let filtered: Vec<Datom> =
+                        store.datoms().filter(|d| f.matches(d)).cloned().collect();
+                    observer.on_catchup(0, &filtered);
+                }
+            }
         }
 
         self.observers.push(RegisteredObserver {
@@ -169,27 +177,33 @@ impl ObserverBroadcast {
             if registered.last_seen_epoch + 1 < epoch {
                 let catchup = buffered_delta_since(&self.recent, registered.last_seen_epoch)
                     .unwrap_or_else(|| full_store_catchup(store));
-                let filtered = apply_filter(registered.filter.as_ref(), &catchup);
-                registered
-                    .observer
-                    .on_catchup(registered.last_seen_epoch, &filtered);
+                // Catchup is already owned — filter in place if needed.
+                match &registered.filter {
+                    None => registered
+                        .observer
+                        .on_catchup(registered.last_seen_epoch, &catchup),
+                    Some(f) => {
+                        let filtered: Vec<Datom> =
+                            catchup.into_iter().filter(|d| f.matches(d)).collect();
+                        registered
+                            .observer
+                            .on_catchup(registered.last_seen_epoch, &filtered);
+                    }
+                }
             } else {
-                let filtered = apply_filter(registered.filter.as_ref(), datoms);
-                registered.observer.on_commit(epoch, &filtered);
+                // Live delivery: unfiltered passes slice directly (zero clone).
+                match &registered.filter {
+                    None => registered.observer.on_commit(epoch, datoms),
+                    Some(f) => {
+                        let filtered: Vec<Datom> =
+                            datoms.iter().filter(|d| f.matches(d)).cloned().collect();
+                        registered.observer.on_commit(epoch, &filtered);
+                    }
+                }
             }
 
             registered.last_seen_epoch = epoch;
         }
-    }
-}
-
-/// Apply an optional `DatomFilter` to a datom slice.
-///
-/// `None` = unfiltered (returns all datoms). `Some(f)` = filtered.
-fn apply_filter(filter: Option<&DatomFilter>, datoms: &[Datom]) -> Vec<Datom> {
-    match filter {
-        None => datoms.to_vec(),
-        Some(f) => datoms.iter().filter(|d| f.matches(d)).cloned().collect(),
     }
 }
 
