@@ -9,7 +9,7 @@ use ferratomic_db::prolly::{
     boundary::DEFAULT_PATTERN_WIDTH,
     build::build_prolly_tree,
     chunk::MemoryChunkStore,
-    diff::{diff, DiffEntry},
+    diff::{diff, diff_exact, DiffEntry},
     read::read_prolly_tree,
     snapshot::{create_manifest, resolve_manifest, RootSet},
     transfer::{ChunkTransfer, RecursiveTransfer},
@@ -127,6 +127,47 @@ proptest! {
             prop_assert!(!diff_entries.is_empty(),
                 "INV-FERR-047: different roots must produce non-empty diff");
         }
+    }
+
+    /// INV-FERR-047: diff_exact produces EXACTLY the symmetric difference.
+    /// No phantom entries, no false positives.
+    #[test]
+    fn prolly_diff_exact_correctness(
+        base in arb_kvs(100),
+        changes in arb_kvs(30),
+    ) {
+        let store = MemoryChunkStore::new();
+        let root1 = build_prolly_tree(&base, &store, DEFAULT_PATTERN_WIDTH)
+            .expect("build base");
+
+        let mut modified = base.clone();
+        for (k, v) in &changes {
+            modified.insert(k.clone(), v.clone());
+        }
+        let root2 = build_prolly_tree(&modified, &store, DEFAULT_PATTERN_WIDTH)
+            .expect("build modified");
+
+        let diff_entries = diff_exact(&root1, &root2, &store)
+            .expect("diff_exact must succeed");
+
+        // Compute expected symmetric difference
+        let mut expected_count = 0usize;
+        for (k, v) in &base {
+            if let Some(mv) = modified.get(k) {
+                if mv != v {
+                    expected_count += 1; // Modified
+                }
+            }
+        }
+        for k in modified.keys() {
+            if !base.contains_key(k) {
+                expected_count += 1; // RightOnly
+            }
+        }
+
+        prop_assert_eq!(diff_entries.len(), expected_count,
+            "INV-FERR-047: diff_exact should produce exactly {} entries, got {}",
+            expected_count, diff_entries.len());
     }
 
     /// INV-FERR-047: diff of identical trees is empty (O(1) fast path).

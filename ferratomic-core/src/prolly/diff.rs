@@ -10,7 +10,10 @@
 //! `diff(root_V, root_current)` — cost proportional to changes, not
 //! store size.
 
-use std::{cmp::Ordering, collections::VecDeque};
+use std::{
+    cmp::Ordering,
+    collections::{BTreeMap, VecDeque},
+};
 
 use ferratom::error::FerraError;
 
@@ -50,13 +53,94 @@ pub enum DiffEntry {
     },
 }
 
-/// Compute the diff between two prolly tree roots.
+/// Compute the exact diff between two prolly tree roots.
+///
+/// `INV-FERR-047`: Returns exactly `KV1 symmetric_diff KV2` — no
+/// missed changes, no phantom entries. Post-processes the raw diff
+/// to cancel entries that moved between chunks due to boundary shifts.
+///
+/// This is the correct entry point for federation and snapshot diffing.
+/// Use [`diff`] for the raw lazy iterator when phantom entries are
+/// acceptable (e.g., streaming large diffs where post-processing is
+/// too expensive).
+///
+/// # Errors
+///
+/// Returns `FerraError` if chunk store operations fail.
+pub fn diff_exact(
+    root1: &Hash,
+    root2: &Hash,
+    chunk_store: &dyn ChunkStore,
+) -> Result<Vec<DiffEntry>, FerraError> {
+    let raw: Vec<DiffEntry> = diff(root1, root2, chunk_store).collect::<Result<_, _>>()?;
+    Ok(deduplicate_phantom_entries(raw))
+}
+
+/// Cancel phantom diff entries caused by chunk boundary shifts.
+///
+/// When chunk boundaries differ between two trees, the raw diff may
+/// contain `LeftOnly` + `RightOnly` pairs for keys that exist in both trees
+/// with identical values (they merely moved between chunks). This
+/// function cancels such pairs and converts cross-chunk value changes
+/// into `Modified` entries.
+fn deduplicate_phantom_entries(entries: Vec<DiffEntry>) -> Vec<DiffEntry> {
+    let mut left_map: BTreeMap<Vec<u8>, Vec<u8>> = BTreeMap::new();
+    let mut right_map: BTreeMap<Vec<u8>, Vec<u8>> = BTreeMap::new();
+    let mut modified: Vec<DiffEntry> = Vec::new();
+
+    for entry in entries {
+        match entry {
+            DiffEntry::LeftOnly { key, value } => {
+                left_map.insert(key, value);
+            }
+            DiffEntry::RightOnly { key, value } => {
+                right_map.insert(key, value);
+            }
+            DiffEntry::Modified { .. } => {
+                modified.push(entry);
+            }
+        }
+    }
+
+    let mut result = modified;
+
+    // Process LeftOnly: check if the same key appears in RightOnly
+    for (key, left_value) in &left_map {
+        if let Some(right_value) = right_map.remove(key) {
+            if *left_value != right_value {
+                // Key in both trees but value changed (cross-chunk modification)
+                result.push(DiffEntry::Modified {
+                    key: key.clone(),
+                    left_value: left_value.clone(),
+                    right_value,
+                });
+            }
+            // else: same key+value in both trees → phantom diff, cancel
+        } else {
+            result.push(DiffEntry::LeftOnly {
+                key: key.clone(),
+                value: left_value.clone(),
+            });
+        }
+    }
+
+    // Remaining RightOnly entries (not cancelled by any LeftOnly)
+    for (key, value) in right_map {
+        result.push(DiffEntry::RightOnly { key, value });
+    }
+
+    result
+}
+
+/// Compute the raw diff between two prolly tree roots.
 ///
 /// Returns a lazy iterator over [`DiffEntry`] items. If the roots are
 /// equal, the iterator yields nothing (O(1) fast path).
 ///
-/// `INV-FERR-047`: The diff produces exactly `KV1 symmetric_diff KV2`.
-/// No changes are missed. No false changes are reported.
+/// **Note**: The raw diff may contain phantom entries when chunk
+/// boundaries shift between trees. Use [`diff_exact`] for the exact
+/// symmetric difference. The raw iterator is useful for streaming
+/// large diffs where O(d) post-processing is acceptable.
 ///
 /// # Root parameter scope
 ///
