@@ -235,3 +235,179 @@ mod sucds_tests {
         }
     }
 }
+
+// =========================================================================
+// vers-vecs — Zero-Dep Succinct Data Structures (bd-xck9t evaluation)
+// =========================================================================
+
+mod vers_tests {
+    use vers_vecs::WaveletMatrix;
+
+    fn build_vers(data: &[u64], bits: u16) -> WaveletMatrix {
+        WaveletMatrix::from_slice(data, bits)
+    }
+
+    #[test]
+    fn test_vers_construction_and_access() {
+        let data: Vec<u64> = vec![3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5];
+        let wm = build_vers(&data, 4); // 4 bits covers max value 9
+
+        for (i, &expected) in data.iter().enumerate() {
+            let actual = wm.get_u64(i);
+            assert_eq!(
+                actual,
+                Some(expected),
+                "vers get_u64({i}) should be {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_vers_rank() {
+        let data: Vec<u64> = vec![3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5];
+        let wm = build_vers(&data, 4);
+
+        // rank_u64(position, symbol) = count of symbol in [0..position)
+        assert_eq!(
+            wm.rank_u64(0, 1),
+            Some(0),
+            "rank_u64(0, 1): no 1s before pos 0"
+        );
+        assert_eq!(
+            wm.rank_u64(2, 1),
+            Some(1),
+            "rank_u64(2, 1): one 1 in [0..2)"
+        );
+        assert_eq!(
+            wm.rank_u64(4, 1),
+            Some(2),
+            "rank_u64(4, 1): two 1s in [0..4)"
+        );
+        assert_eq!(
+            wm.rank_u64(data.len(), 1),
+            Some(2),
+            "rank_u64(len, 1): two 1s total"
+        );
+        assert_eq!(
+            wm.rank_u64(data.len(), 5),
+            Some(3),
+            "rank_u64(len, 5): three 5s total"
+        );
+        // Symbol 7 never appears
+        assert_eq!(
+            wm.rank_u64(data.len(), 7),
+            Some(0),
+            "rank_u64(len, 7): no 7s"
+        );
+    }
+
+    #[test]
+    fn test_vers_select() {
+        let data: Vec<u64> = vec![3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5];
+        let wm = build_vers(&data, 4);
+
+        // select_u64(occurrence, symbol)
+        assert_eq!(
+            wm.select_u64(0, 1),
+            Some(1),
+            "select_u64(0, 1): first 1 at pos 1"
+        );
+        assert_eq!(
+            wm.select_u64(1, 1),
+            Some(3),
+            "select_u64(1, 1): second 1 at pos 3"
+        );
+        assert_eq!(wm.select_u64(2, 1), None, "select_u64(2, 1): no third 1");
+        assert_eq!(
+            wm.select_u64(0, 5),
+            Some(4),
+            "select_u64(0, 5): first 5 at pos 4"
+        );
+        assert_eq!(
+            wm.select_u64(2, 5),
+            Some(10),
+            "select_u64(2, 5): third 5 at pos 10"
+        );
+    }
+
+    #[test]
+    fn test_vers_rank_select_inverse() {
+        // Spec/09 §Wavelet law L3: select(c, rank(c, i+1)-1) == i
+        let data: Vec<u64> = vec![3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5];
+        let wm = build_vers(&data, 4);
+
+        for pos in 0..data.len() {
+            let sym = wm.get_u64(pos).expect("valid position");
+            let r = wm.rank_u64(pos + 1, sym).expect("valid rank");
+            if r > 0 {
+                let s = wm.select_u64(r - 1, sym).expect("valid select");
+                assert_eq!(
+                    s, pos,
+                    "L3: select_u64(rank_u64({sym}, {pos}+1)-1, {sym}) should equal {pos}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_vers_large_alphabet() {
+        let data: Vec<u64> = (0..100).collect();
+        let wm = build_vers(&data, 7); // 7 bits covers 0..127
+
+        for sym in 0u64..100 {
+            assert_eq!(
+                wm.rank_u64(data.len(), sym),
+                Some(1),
+                "rank_u64({sym}, len) should be 1"
+            );
+            assert_eq!(
+                wm.select_u64(0, sym),
+                Some(sym as usize),
+                "select_u64(0, {sym}) should be {sym}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_vers_1k_scale() {
+        let data: Vec<u64> = (0u64..1000).map(|i| i % 50).collect();
+        let wm = build_vers(&data, 6); // 6 bits covers 0..63
+
+        for sym in 0u64..50 {
+            assert_eq!(
+                wm.rank_u64(data.len(), sym),
+                Some(20),
+                "1K: rank_u64({sym}, len) should be 20"
+            );
+        }
+    }
+
+    #[test]
+    fn test_vers_out_of_alphabet_returns_zero() {
+        // Unlike qwt which returns None for out-of-alphabet symbols,
+        // vers-vecs returns Some(0) — treating them as valid but absent.
+        let data: Vec<u64> = vec![1, 2, 3];
+        let wm = build_vers(&data, 4); // 4 bits, alphabet up to 15
+
+        assert_eq!(
+            wm.rank_u64(data.len(), 7),
+            Some(0),
+            "vers: out-of-alphabet symbol returns Some(0)"
+        );
+    }
+
+    #[test]
+    fn test_vers_range_rank() {
+        // vers-vecs unique feature: rank over arbitrary ranges
+        let data: Vec<u64> = vec![3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5];
+        let wm = build_vers(&data, 4);
+
+        // rank_range_u64(2..8, 1) = count of 1s in positions [2..8)
+        // Positions 2..8: [4, 1, 5, 9, 2, 6] — one 1 at position 3
+        assert_eq!(
+            wm.rank_range_u64(2..8, 1),
+            Some(1),
+            "rank_range_u64(2..8, 1): one 1 in range"
+        );
+    }
+}

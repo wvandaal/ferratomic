@@ -25,6 +25,7 @@ rand = "0.8"
 serde_json = { workspace = true }
 qwt = "0.3"
 sucds = "0.8"
+vers-vecs = "1.9"
 
 [features]
 # Tiered testing per spec/09 §Verification Tier Structure:
