@@ -15,6 +15,7 @@
 #![warn(clippy::pedantic)]
 
 pub mod adjacency;
+pub mod ans;
 mod bloom;
 pub mod chunk_fingerprints;
 pub mod codec;

@@ -12,6 +12,7 @@ ferratomic-index = { path = "../ferratomic-index" }
 bitvec = { workspace = true }
 blake3 = { workspace = true }
 rayon = "1"
+ans = "0.1"
 roaring = "0.11"
 qwt = { version = "0.3", optional = true }
 vers-vecs = { version = "1.9", optional = true }
