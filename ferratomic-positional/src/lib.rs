@@ -29,6 +29,7 @@ mod perm_accessors;
 mod search;
 pub mod store;
 pub mod succinct;
+pub mod wavelet;
 
 #[cfg(test)]
 mod tests;

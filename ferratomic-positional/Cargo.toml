@@ -13,9 +13,13 @@ bitvec = { workspace = true }
 blake3 = { workspace = true }
 rayon = "1"
 roaring = "0.11"
+qwt = { version = "0.3", optional = true }
+vers-vecs = { version = "1.9", optional = true }
 
 [features]
 test-utils = []
+wavelet-qwt = ["qwt"]
+wavelet-vers = ["vers-vecs"]
 
 [dev-dependencies]
 ferratom = { path = "../ferratom", features = ["test-utils"] }
