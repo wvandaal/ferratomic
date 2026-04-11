@@ -5520,6 +5520,77 @@ hash; this ADR places it in the signing message.
 
 ---
 
+### ADR-FERR-037: Signing Message Excludes Per-Datom TxId
+
+**Decision**: The signing message hashes each user datom's (entity, attribute,
+value, op) fields WITHOUT the per-datom TxId. The transaction's TxId is covered
+separately via `tx_id_canonical_bytes(tx_id)`.
+
+**Context**: At signing time in `Database::transact_signed`, datoms carry the
+placeholder TxId(0,0,0) from the Transaction builder. The real TxId is assigned
+by `stamp_datoms()` inside `Store::transact`, AFTER signing. If the signing
+message included per-datom TxId, verification would require reconstructing
+placeholder TxIds from stored (post-stamp) datoms — fragile and undocumented.
+
+**Consequence**: `Datom::hash_signing_fields()` streams (entity + attribute +
+value + op) into a BLAKE3 hasher, skipping the TxId field. Zero intermediate
+allocation. The signing message format is:
+`blake3(hash_signing_fields(d1) ∥ ... ∥ hash_signing_fields(dN) ∥ tx_id_canonical_bytes ∥ sorted_predecessor_entity_ids ∥ store_fingerprint ∥ signer_pk)`.
+
+**Source**: Session 025 cleanroom review (DEFECT-025-003, CRITICAL).
+
+---
+
+### ADR-FERR-038: Two-Transaction Identity Bootstrap
+
+**Decision**: `Database::genesis_with_identity` uses TWO signed transactions:
+(1) schema definition (installs `store/public-key` and `store/created`
+attributes via db/ident + db/valueType + db/cardinality), then (2) value
+assertion (asserts the public key bytes and creation timestamp).
+
+**Context**: `Transaction::commit(&schema)` validates ALL datoms against the
+CURRENT schema. In a single-transaction approach, the `store/public-key`
+attribute doesn't exist in the schema when `commit()` runs — it would only
+be installed by schema evolution during `Store::transact`. Splitting into
+two transactions ensures each `commit()` validates against the correct schema.
+
+**Consequence**: `genesis_with_identity` advances the epoch by 2 (not 1).
+Both transactions are self-signed with the same key. The identity is
+established by tx 2 (the value assertion), not tx 1 (the schema definition).
+`commit_unchecked()` exists but is test-only (`#[cfg(test)]`) — using it
+in production would bypass schema validation (NEG-FERR-001 spirit).
+
+**Source**: Session 025 implementation. Schema validation at the commit
+boundary is a Tier 1 safety guarantee that cannot be bypassed for convenience.
+
+---
+
+### ADR-FERR-039: Merge Receipt as Struct (Deferred Datom Emission)
+
+**Decision**: `selective_merge` returns `(Store, MergeReceipt)` where
+`MergeReceipt` is a Rust struct — NOT datoms in the store. Receipt datom
+emission is deferred to the Database layer.
+
+**Context**: INV-FERR-062 specifies receipt datoms (`merge/source`,
+`merge/filter`, `merge/transferred`, `merge/timestamp`) queryable in
+the store. However, emitting datoms requires a `TxId` (from HLC tick
+under the Database write lock), predecessors (from the frontier), and
+provenance. `selective_merge` operates at the `Store` layer which has
+no access to HLC or frontier. Forcing `selective_merge` to take
+`&Database` would couple the algebra layer to the MVCC facade.
+
+**Consequence**: The caller (`Database::selective_merge` in Phase 4c)
+is responsible for transacting receipt datoms via `TransactContext`.
+The `MergeReceipt` struct captures all information needed: source,
+filter description, transferred/filtered/present counts, duration.
+Phase 4c will define `Database::selective_merge` that wraps
+`Store::selective_merge` + receipt datom emission.
+
+**Source**: Session 025 implementation. Layer separation (Store = algebra,
+Database = MVCC facade) is an architectural invariant from ADR-FERR-003.
+
+---
+
 ### INV-FERR-060: Store Identity Persistence
 
 **Traces to**: ADR-FERR-027, INV-FERR-051, INV-FERR-040 (provenance preservation),

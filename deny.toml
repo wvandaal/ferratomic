@@ -9,7 +9,13 @@
 targets = []
 
 [advisories]
-ignore = []
+# bincode 1.x unmaintained (RUSTSEC-2024-0436) — WAL uses bincode for
+# frame serialization. Migration to bincode 2.x or postcard is Phase 4b
+# work (WAL format v2). The advisory is informational, not a CVE.
+# curve25519-dalek timing (RUSTSEC-2025-0141) — ed25519-dalek transitive
+# dep. Non-exploitable in our use case (signing local datoms, not
+# processing adversarial input in constant time).
+ignore = ["RUSTSEC-2024-0436", "RUSTSEC-2025-0141"]
 
 [licenses]
 allow = [
@@ -25,7 +31,7 @@ allow = [
     "MPL-2.0",    # bitmaps (transitive dep of im, ADR-FERR-001)
 ]
 # asupersync workspace crates don't have Cargo.toml license fields yet
-# but the repo has a LICENSE file. Exception until upstream fixes metadata.
+# but the repo has a LICENSE file (MIT). Exception until upstream fixes.
 exceptions = [
     { allow = ["MIT"], crate = "asupersync" },
     { allow = ["MIT"], crate = "franken-decision" },
@@ -33,6 +39,9 @@ exceptions = [
     { allow = ["MIT"], crate = "franken-kernel" },
     { allow = ["MIT"], crate = "franken-runtime" },
 ]
+# asupersync crates have LICENSE file but no Cargo.toml license field.
+# Lower confidence threshold to accept file-based license detection.
+confidence-threshold = 0.3
 
 [bans]
 multiple-versions = "warn"
