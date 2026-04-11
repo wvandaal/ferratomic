@@ -23,6 +23,8 @@ tempfile = "3"
 tokio = { workspace = true }
 rand = "0.8"
 serde_json = { workspace = true }
+qwt = "0.3"
+sucds = "0.8"
 
 [features]
 # Tiered testing per spec/09 §Verification Tier Structure:
@@ -145,6 +147,10 @@ path = "integration/test_bootstrap.rs"
 [[test]]
 name = "integration_federation_e2e"
 path = "integration/test_federation_e2e.rs"
+
+[[test]]
+name = "integration_wavelet_lib"
+path = "integration/test_wavelet_lib.rs"
 
 # --- Kani bounded model checking harnesses (kani/) ---
 
