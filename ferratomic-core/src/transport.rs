@@ -120,7 +120,7 @@ impl Transport for LocalTransport {
     fn frontier<'a>(
         &'a self,
     ) -> Pin<Box<dyn Future<Output = Result<Frontier, FerraError>> + Send + 'a>> {
-        Box::pin(std::future::ready(Ok(self.db.frontier())))
+        Box::pin(std::future::ready(self.db.frontier()))
     }
 
     fn ping<'a>(

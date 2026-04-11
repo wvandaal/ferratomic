@@ -42,7 +42,7 @@ use std::{
 };
 
 use arc_swap::ArcSwap;
-use ferratom::{FerraError, HybridClock, Schema};
+use ferratom::{FerraError, Frontier, HybridClock, Schema};
 
 use crate::{
     observer::{ObserverBroadcast, DEFAULT_OBSERVER_BUFFER},
@@ -215,6 +215,11 @@ pub struct Database<S = Ready> {
     /// Ticked under the write lock so `TxId` ordering matches commit order.
     clock: Mutex<HybridClock>,
 
+    /// INV-FERR-061: Causal frontier — per-node latest `TxId`.
+    /// Advanced after each successful transact. Used to populate
+    /// `TransactContext.frontier` for predecessor metadata emission.
+    frontier: Mutex<Frontier>,
+
     /// Typestate marker. Zero-size, erased at compile time.
     _state: PhantomData<S>,
 }
@@ -241,6 +246,7 @@ impl Database<Opening> {
             ),
             transaction_count: AtomicU64::new(0),
             clock: Mutex::new(HybridClock::new(node)),
+            frontier: Mutex::new(Frontier::new()),
             _state: PhantomData,
         }
     }
@@ -260,6 +266,7 @@ impl Database<Opening> {
             write_limiter: self.write_limiter,
             transaction_count: self.transaction_count,
             clock: self.clock,
+            frontier: self.frontier,
             _state: PhantomData,
         }
     }
@@ -368,12 +375,21 @@ impl Database<Ready> {
 
     /// Causal frontier (INV-FERR-061).
     ///
-    /// Returns an empty frontier until frontier tracking is wired into
-    /// the transact path. Phase 4a.5 uses this as a placeholder; Phase 4c
-    /// will maintain the frontier incrementally via `Frontier::advance`.
-    #[must_use]
-    pub fn frontier(&self) -> ferratom::Frontier {
-        ferratom::Frontier::new()
+    /// Returns the per-node latest `TxId` map. Advanced after each
+    /// successful `transact` or `transact_signed`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `FerraError::InvariantViolation` if the frontier mutex
+    /// is poisoned.
+    pub fn frontier(&self) -> Result<Frontier, FerraError> {
+        self.frontier
+            .lock()
+            .map(|f| f.clone())
+            .map_err(|_| FerraError::InvariantViolation {
+                invariant: "INV-FERR-061".to_string(),
+                details: "frontier mutex poisoned".to_string(),
+            })
     }
 
     /// Access the current epoch.

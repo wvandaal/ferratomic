@@ -53,25 +53,30 @@ impl Database<Ready> {
         // INV-FERR-007: serialize writes + INV-FERR-015: tick HLC.
         let (guard, tx_id) = self.acquire_write_lock_and_tick()?;
 
+        // INV-FERR-061: snapshot frontier BEFORE this transaction.
+        let frontier_snap = self.frontier()?;
+
         // Step 1: Apply transaction to a cloned store with HLC-derived TxId.
-        // D18: Build TransactContext with store fingerprint for signing message.
         let current = self.current.load();
         let fp = current.fingerprint().copied().unwrap_or([0u8; 32]);
         let mut new_store = Store::clone(&current);
         let ctx = TransactContext {
             tx_id,
-            frontier: None, // Phase 4a.5: frontier tracking added by Database::transact_signed
+            frontier: Some(&frontier_snap),
             signing: None,
             provenance: ProvenanceType::Observed,
             store_fingerprint: fp,
         };
         let receipt = new_store.transact(transaction, &ctx)?;
 
-        // Step 2: INV-FERR-008: WAL before publish (zero-clone: borrow from receipt).
+        // Step 2: INV-FERR-008: WAL before publish.
         self.write_wal(receipt.epoch(), receipt.datoms())?;
 
         // Step 3: Atomic swap.
         self.publish_and_check(new_store);
+
+        // INV-FERR-061: advance frontier with this transaction's TxId.
+        self.advance_frontier(tx_id)?;
 
         // INV-FERR-005: release-mode bijection canary.
         #[cfg(feature = "release_bijection_check")]
@@ -114,13 +119,15 @@ impl Database<Ready> {
 
         let (guard, tx_id) = self.acquire_write_lock_and_tick()?;
 
+        // INV-FERR-061: snapshot frontier BEFORE this transaction.
+        let frontier_snap = self.frontier()?;
+
         let current = self.current.load();
         let fp = current.fingerprint().copied().unwrap_or([0u8; 32]);
         let mut new_store = Store::clone(&current);
 
-        // INV-FERR-051: sign with pre-transaction fingerprint.
-        // Predecessors: empty for now (frontier tracking deferred).
-        let preds: Vec<ferratom::EntityId> = Vec::new();
+        // INV-FERR-051: sign with pre-transaction fingerprint + predecessors.
+        let preds: Vec<ferratom::EntityId> = Vec::new(); // D19: predecessor EntityIds from frontier (Phase 4c)
         let components = SigningComponents {
             datoms: transaction.datoms(),
             tx_id,
@@ -131,7 +138,7 @@ impl Database<Ready> {
 
         let ctx = TransactContext {
             tx_id,
-            frontier: None,
+            frontier: Some(&frontier_snap),
             signing: Some((sig, signer)),
             provenance: ProvenanceType::Observed,
             store_fingerprint: fp,
@@ -140,6 +147,9 @@ impl Database<Ready> {
 
         self.write_wal(receipt.epoch(), receipt.datoms())?;
         self.publish_and_check(new_store);
+
+        // INV-FERR-061: advance frontier.
+        self.advance_frontier(tx_id)?;
 
         #[cfg(feature = "release_bijection_check")]
         self.verify_bijection_canary()?;
@@ -285,6 +295,19 @@ impl Database<Ready> {
         };
 
         Ok((guard, tx_id))
+    }
+
+    /// INV-FERR-061: Advance the causal frontier after a successful transaction.
+    fn advance_frontier(&self, tx_id: ferratom::TxId) -> Result<(), FerraError> {
+        let mut frontier = self
+            .frontier
+            .lock()
+            .map_err(|_| FerraError::InvariantViolation {
+                invariant: "INV-FERR-061".to_string(),
+                details: "frontier mutex poisoned".to_string(),
+            })?;
+        frontier.advance(tx_id.node(), tx_id);
+        Ok(())
     }
 
     /// Write stamped datoms to the WAL and fsync before publish.
