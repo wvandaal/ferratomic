@@ -2391,9 +2391,11 @@ INV-FERR-063 (provenance lattice), ADR-FERR-021 (signature storage), ADR-FERR-02
 
 > **Phase 4a.5 staging note**: Phase 4a.5 implements Ed25519 signing WITHOUT
 > Merkle proof binding (INV-FERR-052 needs prolly tree from Phase 4b).
-> Signing message = `blake3(sorted_canonical_user_datoms ∥ tx_id_canonical
-> ∥ sorted_predecessor_entity_ids ∥ store_fingerprint ∥ signer_public_key)`.
-> All byte representations use INV-FERR-086 canonical format.
+> Signing message = `blake3(hash_signing_fields(d1) ∥ ... ∥ hash_signing_fields(dN)
+> ∥ tx_id_canonical_bytes ∥ sorted_predecessor_entity_ids ∥ store_fingerprint
+> ∥ signer_public_key)`. Per-datom hashing uses `hash_signing_fields()` which
+> streams (entity + attr + value + op) WITHOUT TxId into the hasher
+> (ADR-FERR-037). TxId is covered separately. Zero intermediate allocation.
 > Metadata datoms (`:tx/signature`, `:tx/signer`, `:tx/predecessor`,
 > `:tx/provenance`, `:tx/time`, `:tx/origin`, `:tx/derivation-source`) are
 > EXCLUDED from the signing message per ADR-FERR-021. Only user-asserted
@@ -5650,53 +5652,57 @@ you can verify "this signature matches this key" but not "this key belongs to
 this store." The identity transaction closes this gap, enabling agents to
 verify remote stores' identities during federation.
 
-The identity transaction is self-bootstrapping: it defines the `:store/public-key`
-attribute via schema-as-data evolution (C3) in the same transaction that uses it.
-This works because `evolve_schema()` processes all datoms before validation.
+The identity bootstrap uses two signed transactions (ADR-FERR-038):
+(1) defines `:store/public-key` and `:store/created` attributes via
+schema-as-data evolution (C3), then (2) asserts the public key bytes
+and creation timestamp using the newly-installed attributes. Both
+transactions are signed with the declared key. The two-transaction
+pattern is required because `Transaction::commit()` validates all datoms
+against the current schema, and the new attributes are not installed
+until schema evolution runs during `Store::transact`.
 
 #### Level 2 (Implementation Contract)
 ```rust
 /// Create a signed store with verifiable identity (INV-FERR-060).
 ///
-/// The first transaction is the identity assertion — a self-signed certificate.
-/// Self-bootstrapping: the identity tx defines store/public-key via
-/// schema-as-data evolution and signs with the declared key.
+/// ADR-FERR-038: Two signed transactions — schema definition (tx 1)
+/// then value assertion (tx 2). Both self-signed.
 pub fn genesis_with_identity(signing_key: &SigningKey) -> Result<Database, FerraError> {
     let db = Database::genesis();
     let pubkey = signing_key.verifying_key();
 
-    // NodeId: derived via BLAKE3 hash of the public key, then truncated to 16 bytes.
-    // This is consistent with EntityId derivation (both use BLAKE3 first), avoiding
-    // the raw-truncation pitfall where two keys sharing a 16-byte prefix collide.
-    // The hash ensures uniform distribution regardless of key structure.
+    // D8: NodeId = BLAKE3(pubkey)[..16] for uniform distribution.
     let node_hash = blake3::hash(pubkey.as_bytes());
-    let node = NodeId::from_bytes(node_hash.as_bytes()[..16].try_into()?);
+    let node = NodeId::from_bytes(node_hash.as_bytes()[..16]);
 
-    // EntityId: full 32-byte BLAKE3 hash of the public key (INV-FERR-012).
+    // Tx 1: define schema attributes (uses only genesis-schema attrs).
+    let schema_tx = build_identity_schema_tx(node, &db.schema())?;
+    db.transact_signed(schema_tx, signing_key)?;
+
+    // Tx 2: assert identity values (store/public-key now in schema).
+    let value_tx = build_identity_value_tx(node, &pubkey, &db.schema())?;
+    db.transact_signed(value_tx, signing_key)?;
+    Ok(db)
+}
+
+fn build_identity_schema_tx(node: NodeId, schema: &Schema)
+    -> Result<Transaction<Committed>, FerraError> {
+    let tx = Transaction::new(node);
+    let tx = define_schema_attr(tx, "store/public-key", "db.type/bytes");
+    let tx = define_schema_attr(tx, "store/created", "db.type/instant");
+    tx.commit(schema).map_err(FerraError::from)
+}
+
+fn build_identity_value_tx(node: NodeId, pubkey: &VerifyingKey, schema: &Schema)
+    -> Result<Transaction<Committed>, FerraError> {
     let store_entity = EntityId::from_content(pubkey.as_bytes());
-    let schema_entity_pk = EntityId::from_content(b"store/public-key");
-    let schema_entity_cr = EntityId::from_content(b"store/created");
-
-    let tx = Transaction::new(node)
-        // Define store/public-key attribute (schema-as-data, C3)
-        .assert_datom(schema_entity_pk, Attribute::from("db/ident"),
-                     Value::Keyword("store/public-key".into()))
-        .assert_datom(schema_entity_pk, Attribute::from("db/valueType"),
-                     Value::Keyword("db.type/bytes".into()))
-        .assert_datom(schema_entity_pk, Attribute::from("db/cardinality"),
-                     Value::Keyword("db.cardinality/one".into()))
-        // Define store/created attribute
-        .assert_datom(schema_entity_cr, Attribute::from("db/ident"),
-                     Value::Keyword("store/created".into()))
-        .assert_datom(schema_entity_cr, Attribute::from("db/valueType"),
-                     Value::Keyword("db.type/instant".into()))
-        .assert_datom(schema_entity_cr, Attribute::from("db/cardinality"),
-                     Value::Keyword("db.cardinality/one".into()))
-        // Assert the store's public key and creation time
+    Transaction::new(node)
         .assert_datom(store_entity, Attribute::from("store/public-key"),
-                     Value::Bytes(pubkey.as_bytes().into()))
+                     Value::Bytes(pubkey.as_bytes().as_slice().into()))
         .assert_datom(store_entity, Attribute::from("store/created"),
-                     Value::Instant(now_millis()));
+                     Value::Instant(now_millis()))
+        .commit(schema).map_err(FerraError::from)
+}
 
     // Commit validates against schema (schema-as-data attrs are processed first)
     let committed = tx.commit(&db.schema())?;
@@ -6094,83 +6100,66 @@ Preservation: receipt datoms are ordinary datoms.
 ```
 
 #### Level 1 (State Invariant)
-Every selective merge operation produces queryable receipt datoms that record
+Every selective merge operation produces a `MergeReceipt` that records
 what was merged, from where, with what filter, and how many datoms transferred.
-Federation history is queryable: "when did I last merge with store X? What
-filter did I use? How many datoms came across?"
 
-Receipt datoms participate in the causal chain — they have TxIds and
-predecessors. The merge event is part of the auditable history. For incremental
-federation ("only transfer what's new since my last merge"), the receipt's
-timestamp and source identity provide the synchronization point.
+ADR-FERR-039: The receipt is a Rust struct at the Store layer. Receipt datom
+emission (as queryable `merge/*` datoms in the store) is the responsibility
+of the Database layer (Phase 4c), which has access to the HLC for TxId
+assignment and the frontier for predecessor tracking. This separation
+preserves the Store = algebra / Database = MVCC facade architecture.
+
+Phase 4c will define `Database::selective_merge` that wraps
+`Store::selective_merge` + receipt datom emission via `TransactContext`.
 
 Without merge receipts, federation is fire-and-forget: you know the current
 state but not how you got there. With receipts, the entire federation history
-is reconstructible from the store.
+is reconstructible.
 
 #### Level 2 (Implementation Contract)
 ```rust
-/// Perform selective merge and emit receipt datoms (INV-FERR-062).
+/// Selective merge at the Store layer (INV-FERR-039 + INV-FERR-062).
 ///
-/// The receipt is a proper transaction (gets TxId, predecessors, signing)
-/// rather than raw inserts — FINDING-017: raw insert bypasses causal chain.
-///
-/// # Parameters
-/// - `db`: The local Database instance (needed for `transact` to produce
-///   TxId and predecessor datoms — a `Store` alone cannot do this).
-/// - `remote`: The remote store to merge from.
-/// - `filter`: Which remote datoms to accept (positive-only per ADR-FERR-022).
-/// - `source_id`: Human-readable identifier for the remote source.
+/// Returns (merged_store, receipt). Receipt datom emission deferred
+/// to Database layer per ADR-FERR-039.
 pub fn selective_merge(
-    db: &Database,
+    local: &Store,
     remote: &Store,
     filter: &DatomFilter,
-    source_id: &str,
-) -> Result<MergeReceipt, FerraError> {
-    let local = db.snapshot();
-    let remote_filtered: Vec<Datom> = remote.datoms()
-        .filter(|d| filter.matches(d))
-        .cloned()
-        .collect();
+    source: &str,
+) -> Result<(Store, MergeReceipt), FerraError> {
+    let (accepted, transferred, filtered_out, already_present) =
+        filter_remote(local, remote, filter);
 
-    let already_present = remote_filtered.iter()
-        .filter(|d| local.datoms().contains(d))
-        .count();
-    let transferred = remote_filtered.len() - already_present;
+    // O(n+m) merge via merge_sort_dedup on pre-sorted arrays.
+    let mut sorted_remote = accepted;
+    sorted_remote.sort_unstable();
+    sorted_remote.dedup();
+    let local_slice: Vec<Datom> = local.datoms().cloned().collect();
+    let merged = merge_sort_dedup(&local_slice, &sorted_remote);
+    let positional = PositionalStore::from_sorted_canonical(merged);
 
-    // Apply filtered datoms to local store via proper transact path
-    for datom in &remote_filtered {
-        if !local.datoms().contains(datom) {
-            let tx = Transaction::new(db.node())
-                .assert_raw_datom(datom.clone())
-                .commit(&db.schema())?;
-            db.transact(tx)?;
-        }
-    }
+    // Rebuild live_causal from actual merged datoms (not unfiltered remote).
+    let live_causal = build_live_causal(positional.datoms().iter());
+    // ... construct Store + MergeReceipt ...
 
-    // Emit receipt as a proper transaction (INV-FERR-062: all 4 fields required).
-    // Entity ID derived from (source + timestamp) for uniqueness — BLAKE3 hash
-    // eliminates the millisecond-collision risk of format!("merge-{millis}").
-    let now = now_millis();
-    let merge_key = format!("{source_id}-{now}");
-    let merge_entity = EntityId::from_content(merge_key.as_bytes());
+    Ok((merged_store, MergeReceipt {
+        source: source.to_string(),
+        filter_description: filter.serialize(),
+        transferred, filtered_out, already_present,
+        duration: start.elapsed(),
+    }))
+}
 
-    let receipt_tx = Transaction::new(db.node())
-        .assert_datom(merge_entity, Attribute::from("merge/source"),
-            Value::String(source_id.into()))
-        .assert_datom(merge_entity, Attribute::from("merge/filter"),
-            Value::String(filter.serialize()))
-        .assert_datom(merge_entity, Attribute::from("merge/transferred"),
-            Value::Long(transferred as i64))
-        .assert_datom(merge_entity, Attribute::from("merge/timestamp"),
-            Value::Instant(now))
-        .commit(&db.schema())?;
-    db.transact(receipt_tx)?;
-
-    Ok(MergeReceipt {
-        datoms_transferred: transferred,
-        datoms_already_present: already_present,
-        datoms_filtered_out: remote.datom_count() - remote_filtered.len(),
+/// MergeReceipt: documents what was transferred (INV-FERR-062).
+pub struct MergeReceipt {
+    pub source: String,
+    pub filter_description: String,
+    pub transferred: usize,
+    pub filtered_out: usize,
+    pub already_present: usize,
+    pub duration: Duration,
+}
     })
 }
 
