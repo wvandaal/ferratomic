@@ -115,6 +115,10 @@ path = "proptest/refinement.rs"
 name = "proptest_federation"
 path = "proptest/federation_properties.rs"
 
+[[test]]
+name = "proptest_prolly"
+path = "proptest/prolly_properties.rs"
+
 # --- Integration test suites (integration/) ---
 
 [[test]]
